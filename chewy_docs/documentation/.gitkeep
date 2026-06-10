@@ -1,0 +1,4 @@
+# This folder will contain Chewy Robotics documentation (PDFs, DOCX, MD files)
+# 
+# Add your company docs here, then run:
+#   python3 -m argos_src.knowledge.build_faiss chewy_docs

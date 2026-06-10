@@ -1,0 +1,289 @@
+import base64
+import json
+import sys
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from argos_src.robot_api.factory import DEFAULT_ROBOT_TRANSPORT, create_robot_client
+from argos_src.robot_api.fake import FakeRobotClient
+from argos_src.robot_api.zenoh import ZenohRobotClient
+from argos_src.robot_bridge.protocol import (
+    OP_BATTERY_EVENT,
+    OP_GO2_ACTION,
+    OP_MOVE_VELOCITY,
+    OP_PUBLISH_VELOCITY,
+    OP_STOP_MOTION,
+    build_event,
+    decode_message,
+    encode_message,
+    event_key,
+    response_key,
+)
+
+
+class _Subscriber:
+    def __init__(self, session, key, callback):
+        self.session = session
+        self.key = key
+        self.callback = callback
+        self.undeclared = False
+
+    def undeclare(self):
+        self.undeclared = True
+        self.session.subscribers.pop(self.key, None)
+
+
+class _FakeZenohSession:
+    def __init__(self):
+        self.puts = []
+        self.subscribers = {}
+        self.declared_subscribers = []
+        self.responses = {}
+
+    def declare_subscriber(self, key, callback):
+        subscriber = _Subscriber(self, key, callback)
+        self.subscribers[key] = subscriber
+        self.declared_subscribers.append(key)
+        return subscriber
+
+    def put(self, key, payload):
+        self.puts.append((key, payload))
+        message = decode_message(payload)
+        if message.get("type") != "request":
+            return
+        request_id = message["id"]
+        result = self.responses.get(message["op"], {})
+        response = {
+            "id": request_id,
+            "type": "response",
+            "ok": True,
+            "result": result,
+            "error": None,
+            "ts": 1.0,
+        }
+        if f"/request/{request_id}" in key:
+            response_subscriber_key = key.rsplit("/request/", 1)[0] + f"/response/{request_id}"
+        else:
+            response_subscriber_key = response_key("test/robot", request_id)
+        subscriber = self.subscribers.get(response_subscriber_key)
+        if subscriber is not None:
+            subscriber.callback(SimpleNamespace(payload=encode_message(response)))
+
+    def emit_event(self, key, message):
+        subscriber = self.subscribers.get(key)
+        if subscriber is not None:
+            subscriber.callback(SimpleNamespace(payload=encode_message(message)))
+
+
+def _last_request(session):
+    _key, payload = session.puts[-1]
+    return decode_message(payload)
+
+
+def test_factory_defaults_to_zenoh(monkeypatch):
+    created = {}
+
+    class _FakeZenohModule:
+        class Config:
+            def insert_json5(self, *_args):
+                return None
+
+        @staticmethod
+        def open(_config):
+            created["opened"] = True
+            return _FakeZenohSession()
+
+    monkeypatch.delenv("ARGOS_ROBOT_TRANSPORT", raising=False)
+    monkeypatch.setitem(sys.modules, "zenoh", _FakeZenohModule)
+
+    client = create_robot_client()
+    client.start()
+
+    assert DEFAULT_ROBOT_TRANSPORT == "zenoh"
+    assert isinstance(client, ZenohRobotClient)
+    assert created["opened"] is True
+
+
+def test_factory_keeps_fake_for_tests():
+    client = create_robot_client(transport="fake")
+
+    assert isinstance(client, FakeRobotClient)
+
+
+def test_factory_passes_zenoh_routing_options():
+    client = create_robot_client(
+        transport="zenoh",
+        key_prefix="pair/robots/puffle",
+        connect_endpoints=["tcp/127.0.0.1:7447"],
+    )
+
+    assert isinstance(client, ZenohRobotClient)
+    assert client.key_prefix == "pair/robots/puffle"
+    assert client._connect_endpoints == ("tcp/127.0.0.1:7447",)
+
+
+def test_zenoh_defaults_to_puffle_pair_namespace():
+    session = _FakeZenohSession()
+    client = ZenohRobotClient(session=session)
+
+    assert client.key_prefix == "pair/robots/puffle"
+
+
+def test_factory_rejects_ros2_transport():
+    with pytest.raises(ValueError, match="no longer supported"):
+        create_robot_client(transport="ros2")
+
+
+def test_zenoh_transport_reports_missing_python_package(monkeypatch):
+    monkeypatch.setitem(sys.modules, "zenoh", None)
+    client = ZenohRobotClient(key_prefix="test/robot")
+
+    with pytest.raises(RuntimeError, match="pip install eclipse-zenoh"):
+        client.start()
+
+
+def test_go2_action_uses_capability_contract():
+    session = _FakeZenohSession()
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+
+    client.perform_go2_action(
+        api_id=1003,
+        parameter={"data": True},
+        priority=2,
+    )
+
+    request = _last_request(session)
+    assert request["type"] == "request"
+    assert request["op"] == OP_GO2_ACTION
+    assert request["args"] == {
+        "api_id": 1003,
+        "parameter": {"data": True},
+        "topic": "rt/api/sport/request",
+        "priority": 2,
+    }
+    assert session.puts[-1][0] == f"test/robot/request/{request['id']}"
+
+
+def test_puffle_pair_namespace_uses_provider_request_response_keys():
+    session = _FakeZenohSession()
+    client = ZenohRobotClient(key_prefix="pair/robots/puffle", session=session)
+
+    client.perform_go2_action(api_id=1003)
+
+    request = _last_request(session)
+    assert session.puts[-1][0] == f"pair/robots/puffle/request/{request['id']}"
+    assert (
+        f"pair/robots/puffle/response/{request['id']}"
+        in session.declared_subscribers
+    )
+
+
+def test_motion_calls_use_capability_contract():
+    session = _FakeZenohSession()
+    session.responses[OP_MOVE_VELOCITY] = {"duration": 0.4}
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+
+    duration = client.move_velocity(linear_x=0.2, angular_z=0.1, duration=0.4)
+    client.publish_velocity(angular_z=-0.25)
+
+    move_request = decode_message(session.puts[-2][1])
+    publish_request = decode_message(session.puts[-1][1])
+    assert duration == 0.4
+    assert move_request["op"] == OP_MOVE_VELOCITY
+    assert move_request["args"]["linear_x"] == 0.2
+    assert move_request["args"]["angular_z"] == 0.1
+    assert publish_request["op"] == OP_PUBLISH_VELOCITY
+    assert publish_request["args"]["angular_z"] == -0.25
+
+
+def test_zero_velocity_uses_motion_stop_capability():
+    session = _FakeZenohSession()
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+
+    client.publish_velocity()
+
+    request = _last_request(session)
+    assert request["op"] == OP_STOP_MOTION
+    assert request["args"] == {}
+
+
+def test_transform_and_intrinsics_decode_plain_results():
+    session = _FakeZenohSession()
+    session.responses["tf.transform"] = {
+        "translation": [1.0, 2.0, 3.0],
+        "rotation": [0.0, 0.0, 0.5, 0.5],
+        "stamp_s": 12.5,
+    }
+    session.responses["camera.intrinsics"] = {
+        "fx": 1.0,
+        "fy": 2.0,
+        "cx": 3.0,
+        "cy": 4.0,
+        "width": 640,
+        "height": 480,
+    }
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+
+    transform = client.get_transform("odom", "base_link")
+    intrinsics = client.get_latest_intrinsics("/camera/info")
+
+    assert transform.translation == (1.0, 2.0, 3.0)
+    assert transform.rotation == (0.0, 0.0, 0.5, 0.5)
+    assert transform.stamp_s == 12.5
+    assert intrinsics.width == 640
+    assert intrinsics.height == 480
+    transform_request = decode_message(session.puts[-2][1])
+    assert transform_request["args"]["timeout"] == 0.05
+
+
+def test_image_snapshot_decodes_raw_array_payload():
+    image = np.arange(12, dtype=np.uint8).reshape(2, 2, 3)
+    session = _FakeZenohSession()
+    session.responses["camera.latest_image"] = {
+        "topic": "/camera",
+        "image": {
+            "encoding": "raw",
+            "dtype": "uint8",
+            "shape": [2, 2, 3],
+            "data_b64": base64.b64encode(image.tobytes()).decode("ascii"),
+        },
+    }
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+
+    frame = client.get_latest_image("/camera")
+
+    assert frame is not None
+    assert frame.topic == "/camera"
+    np.testing.assert_array_equal(frame.image, image)
+
+
+def test_battery_events_update_subscribers():
+    session = _FakeZenohSession()
+    client = ZenohRobotClient(key_prefix="test/robot", session=session)
+    snapshots = []
+
+    unsubscribe = client.subscribe_battery(snapshots.append)
+    session.emit_event(
+        event_key("test/robot"),
+        build_event(
+            op=OP_BATTERY_EVENT,
+            data={
+                "percentage": 0.72,
+                "current": -1.1,
+                "power_supply_status": 2,
+            },
+        ),
+    )
+    unsubscribe()
+
+    assert len(snapshots) == 1
+    assert snapshots[0].percentage == 0.72
+    assert snapshots[0].current == -1.1
+    assert snapshots[0].power_supply_status == 2
+
+
+def test_protocol_rejects_non_object_payload():
+    with pytest.raises(ValueError):
+        decode_message(json.dumps(["not", "an", "object"]))

@@ -1,0 +1,11 @@
+# Manual face-model add-on for the Argos Poetry environment.
+# Install after:
+#   cd ~/rai
+#   poetry install
+#   source setup_shell.sh
+#
+# facenet-pytorch 2.6.0 declares torch<2.3, while Argos uses a newer
+# torch/torchvision stack. Install the face model manually without dependency
+# resolution and rely on the already-installed Argos Poetry environment.
+
+facenet-pytorch==2.6.0

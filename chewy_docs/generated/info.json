@@ -1,0 +1,29 @@
+{
+    "rules": [
+        "Adopt robots only when their total cost is better than or competitive with human labor for defined tasks.",
+        "Deploy robots when they meet defined performance benchmarks on Chewy-specific tasks (picking, packing, truck loading).",
+        "Require open data formats and documented metrics for dataset publication.",
+        "Prioritize non-exclusive vendor relationships to avoid lock-in.",
+        "Build systems in a modular, interoperable way to support fleet heterogeneity (robots from multiple vendors)."
+    ],
+    "capabilities": [
+        "Multi-modal perception: vision, tactile (especially in 2026), proprioceptive sensing, potentially language.",
+        "Physical manipulation of rigid and deformable objects, especially heavy, flexible bags.",
+        "Locomotion through environments modeled on Chewy's fulfillment centers (PickMod, pack stations, truck loading).",
+        "Teleoperation, scripted, and autonomous control modes; ability to operate under human or AI control.",
+        "Fleet-level communication and coordination: robots can share learned behaviors, environment changes, and synchronize for safety or efficiency.",
+        "Digital twin and simulation fidelity sufficient for robust sim-to-real transfer (training in simulation, deploying on real robots).",
+        "Integration with warehouse management systems and maintenance systems via a Robot Management System (RMS) that handles task allocation, path planning, maintenance schedules, and safety protocols."
+    ],
+    "behaviors": [
+        "Pick: Move through a PickMod environment, identify, grasp, lift, and transport items (including deformable bags) to specified locations.",
+        "Pack: Physically manipulate items with dexterity required for packing (may use two-handed or tactile manipulation).",
+        "Truck Load: Lift and stack heavy or cumbersome items into trucks, demonstrating strength and spatial judgment.",
+        "Share knowledge with fleet peers instantly (e.g., grip strategies, obstacle changes).",
+        "React in real-time to hazards or emergent situations using fleet-wide safety protocols (e.g., emergency stops, coordinated responses).",
+        "Adapt tasks based on platform capabilities; i.e., RMS assigns tasks to robots best suited for them based on dexterity, strength, or mobility.",
+        "Self-monitoring and peer-monitoring for predictive maintenance, charging, and workload management."
+    ],
+    "description": "Chewy's robot embodiment strategy is to enable and influence the development, selection, and operation of humanoid (and some mobile) robots capable of safely and effectively executing key warehouse tasks (picking, packing, truck loading) involving both rigid and deformable objects, with an emphasis on multi-modal sensing and fleet-level orchestration. Embodiment is oriented toward robots with near-human degrees of freedom, strength, and dexterity, scalable to heterogeneous fleets, integrating tactile sensing, and leveraging AI models fine-tuned on Chewy-specific physical and simulated data. The approach emphasizes open datasets, simulation fidelity, reproducible benchmarks, and modular orchestration via a Robot Management System.It looks like you wanted me to describe an image, but I don't see any image attached. Please upload the image, and I’ll be happy to describe the robot for you!",
+    "images": []
+}

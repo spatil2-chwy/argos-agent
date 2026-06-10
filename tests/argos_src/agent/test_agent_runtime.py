@@ -1,0 +1,2345 @@
+import logging
+from collections import deque
+import importlib
+import queue
+from types import SimpleNamespace
+import threading
+import time
+import sys
+import types
+
+from argos_src.agent.runtime_context import (
+    format_people_context,
+)
+from argos_src.speaker_recognition.models import (
+    SpeakerRecognitionPolicy,
+    SpeakerResolutionResult,
+    VoiceEnrollmentResult,
+)
+
+_TEMP_STUBS = set()
+
+if "sounddevice" not in sys.modules:
+    sys.modules["sounddevice"] = types.SimpleNamespace(
+        InputStream=object,
+        OutputStream=object,
+        CallbackFlags=object,
+    )
+    _TEMP_STUBS.add("sounddevice")
+if "websocket" not in sys.modules:
+    sys.modules["websocket"] = types.SimpleNamespace(
+        WebSocket=object,
+        WebSocketConnectionClosedException=RuntimeError,
+        create_connection=lambda *args, **kwargs: object(),
+    )
+    _TEMP_STUBS.add("websocket")
+if "argos_src.audio" not in sys.modules:
+    audio_mod = types.ModuleType("argos_src.audio")
+    audio_mod.OpenWakeWord = lambda *args, **kwargs: SimpleNamespace(threshold=0.5)
+    audio_mod.SileroVAD = lambda *args, **kwargs: (lambda audio, ctx: (False, {}))
+    sys.modules["argos_src.audio"] = audio_mod
+    _TEMP_STUBS.add("argos_src.audio")
+if "argos_src.agent.factory" not in sys.modules:
+    factory_mod = types.ModuleType("argos_src.agent.factory")
+    factory_mod.create_ros2_agent = None
+    sys.modules["argos_src.agent.factory"] = factory_mod
+    _TEMP_STUBS.add("argos_src.agent.factory")
+
+realtime_mod = importlib.import_module("argos_src.agent.agent_runtime")
+for _name in _TEMP_STUBS:
+    sys.modules.pop(_name, None)
+
+
+class _FakeLatency:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, *args, **kwargs):
+        self.events.append(dict(kwargs))
+        return None
+
+    def timing(self, metric, duration_s, **kwargs):
+        event = dict(kwargs)
+        event["metric"] = metric
+        event["duration_s"] = duration_s
+        self.events.append(event)
+        return None
+
+
+class _FakeEngagement:
+    def __init__(self):
+        self.human_inputs = []
+        self.output_started = []
+        self.done = []
+        self.playback_events = []
+
+    def on_human_input(self, req_id):
+        self.human_inputs.append(req_id)
+
+    def on_agent_output_started(self, req_id, *, stream_id=None):
+        self.output_started.append((req_id, stream_id))
+
+    def on_agent_done(self, *, has_reply, req_id):
+        self.done.append((req_id, has_reply))
+
+    def on_playback_event(self, event, req_id, *, stream_id=None):
+        self.playback_events.append((event, req_id, stream_id))
+
+    def snapshot(self):
+        return SimpleNamespace(
+            state="idle",
+            req_id="",
+            entered_at=0.0,
+            expires_at=None,
+            nav_active=False,
+            nav_source="",
+            nav_interruptible=True,
+            nav_passive_listen_allowed=True,
+        )
+
+
+class _ImmediateExecutor:
+    def submit(self, fn):
+        fn()
+
+
+class _FakeConnector:
+    def __init__(self):
+        self.messages = []
+
+    def send_message(self, message, target=None, msg_type=None):
+        self.messages.append((message, target, msg_type))
+
+
+class _FakeTool:
+    name = "fake_tool"
+    description = "fake"
+
+    def invoke(self, arguments):
+        return {"success": True, "arguments": arguments}
+
+
+class _FakeGestureRuntime:
+    def __init__(self):
+        self.recording_active = []
+        self.shutdown_calls = 0
+
+    def set_recording_active(self, active):
+        self.recording_active.append(bool(active))
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+
+class _FakeOwnerTurnController:
+    def __init__(self):
+        self.requests = []
+        self.cancellations = []
+
+    def request_turn(self, *, person_id, req_id="", owner_source=""):
+        self.requests.append(
+            {
+                "person_id": person_id,
+                "req_id": req_id,
+                "owner_source": owner_source,
+            }
+        )
+        return True
+
+    def cancel_request(self, *, req_id, reason=""):
+        self.cancellations.append({"req_id": req_id, "reason": reason})
+
+
+class _FakeFaceService:
+    def __init__(self, *, persons=None, snapshot=None):
+        self._persons = list(persons or [])
+        self._snapshot = dict(snapshot or {})
+
+    def get_cached_persons(self):
+        return list(self._persons)
+
+    def get_presence_snapshot(self):
+        return dict(self._snapshot)
+
+    def get_primary_face_person_id(self):
+        if len(self._persons) != 1 or int(self._snapshot.get("unknown_count", 0) or 0) != 0:
+            return None
+        return str(getattr(self._persons[0], "person_id", "") or "") or None
+
+
+class _FakeSpeakerService:
+    def __init__(self, *, policy=None, enrollment_results=None, references=None):
+        self.policy = policy or SpeakerRecognitionPolicy()
+        self._enrollment_results = deque(enrollment_results or [])
+        self._references = set(references or [])
+        self.calls = []
+        self.trim_calls = []
+        self.resolve_calls = []
+
+    def has_reference(self, person_id):
+        return str(person_id or "").strip() in self._references
+
+    def trim_turn_audio(self, audio_pcm16, *, vad=None):
+        self.trim_calls.append({"audio_pcm16": audio_pcm16, "vad": vad})
+        return audio_pcm16
+
+    def resolve_turn_owner(
+        self,
+        *,
+        audio_pcm16,
+        primary_face_person_id,
+        visible_face_person_ids,
+    ):
+        self.resolve_calls.append(
+            {
+                "audio_pcm16": audio_pcm16,
+                "primary_face_person_id": primary_face_person_id,
+                "visible_face_person_ids": tuple(visible_face_person_ids or ()),
+            }
+        )
+        owner_id = str(primary_face_person_id or "").strip() or None
+        visible_ids = {
+            str(person_id or "").strip()
+            for person_id in (visible_face_person_ids or ())
+            if str(person_id or "").strip()
+        }
+        return SpeakerResolutionResult(
+            audio_speaker_id=None,
+            top_score=0.0,
+            runner_up_score=0.0,
+            margin=0.0,
+            speaker_visible=bool(owner_id and (owner_id in visible_ids or not visible_ids)),
+            owner_id=owner_id,
+            owner_source="face" if owner_id else "unknown",
+            owner_confidence=0.0,
+        )
+
+    def try_store_reference(self, *, person_id, audio_pcm16, attempt_kind):
+        self.calls.append(
+            {
+                "person_id": person_id,
+                "audio_pcm16": audio_pcm16,
+                "attempt_kind": attempt_kind,
+            }
+        )
+        if self._enrollment_results:
+            result = self._enrollment_results.popleft()
+        else:
+            result = VoiceEnrollmentResult(
+                saved=False,
+                reason="reject_too_short",
+                person_id=str(person_id or "").strip(),
+                attempt_kind=attempt_kind,
+            )
+        if result.saved:
+            self._references.add(str(person_id or "").strip())
+        return result
+
+
+def _make_agent():
+    agent = realtime_mod.RealtimeRobotAgent.__new__(realtime_mod.RealtimeRobotAgent)
+    agent.logger = logging.getLogger("test.argos.agent_runtime")
+    agent.realtime_profile = SimpleNamespace(
+        prompt_file="static_interaction_prompt.md",
+        model="gpt-realtime-1.5",
+        input_sample_rate=24000,
+        output_sample_rate=24000,
+        silence_grace_period=0.1,
+        max_output_tokens=None,
+        audio_output_speed=0.9,
+        voice="cedar",
+        transcription_model="gpt-4o-mini-transcribe",
+        noise_reduction="near_field",
+        language="en",
+    )
+    agent._stop_event = threading.Event()
+    agent._turn_lock = threading.RLock()
+    agent._recording_lock = threading.RLock()
+    agent._audio_send_queue = queue.Queue()
+    agent._turn_queue = queue.Queue()
+    agent._tool_queue = queue.Queue()
+    agent._playback_buffer = realtime_mod.PlaybackBuffer()
+    agent._played_output_frames = 0
+    agent._playback_req_id = ""
+    agent._playback_stream_id = ""
+    agent._playback_item_id = ""
+    agent._active_turn = None
+    agent._turns_by_req_id = {}
+    agent._response_id_to_req_id = {}
+    agent._item_id_to_req_id = {}
+    agent._call_id_to_req_id = {}
+    agent._pending_function_args = {}
+    agent._pending_response_turn_req_ids = deque()
+    agent._pending_audio_turn_req_ids = deque()
+    agent._pending_audio_item_ids = deque()
+    agent._pending_local_created_items = deque()
+    agent._history_item_order = deque()
+    agent._known_history_item_ids = set()
+    agent._history_item_owner_req_id = {}
+    agent._ignored_voice_commands = deque()
+    agent._latency = _FakeLatency()
+    agent._tool_latency = _FakeLatency()
+    agent.engagement = _FakeEngagement()
+    agent.gesture_runtime = _FakeGestureRuntime()
+    agent.owner_turn_controller = None
+    agent.ros2_connector = _FakeConnector()
+    agent._tool_registry = {"fake_tool": _FakeTool()}
+    agent._tool_schemas = []
+    agent.base_system_prompt = "You are Puffle."
+    agent._last_tool_name = None
+    agent._last_tool_summary = None
+    agent._robot_posture = "standing"
+    agent._stand_tool_name = "stand"
+    agent._supports_navigation = False
+    agent._current_office_location = ""
+    agent.face_service = None
+    agent.speaker_service = None
+    agent.battery_cache = None
+    agent.location_store = None
+    agent._preference_segments = realtime_mod._PreferenceSegmentCoordinator()
+    agent._pending_preference_segment_ids = set()
+    agent._pending_lock = threading.Lock()
+    agent._preference_idle_flush_lock = threading.Lock()
+    agent._preference_idle_flush_timer = None
+    agent._preference_idle_flush_delay_sec = 0.05
+    agent._preference_executor = _ImmediateExecutor()
+    agent.preference_extraction_enabled = True
+    agent.preference_extractor = None
+    agent._session_id = ""
+    agent._session_estimated_cost_usd = 0.0
+    agent._ws = object()
+    agent._ws_lock = threading.Lock()
+    agent.coalescer = None
+    agent._vad = None
+    sent = []
+
+    def _send_event(payload):
+        sent.append(payload)
+
+    agent._send_event = _send_event
+    agent._sent_events = sent
+    agent._get_current_primary_face_person_id = lambda: "person-1"
+    agent._current_primary_face_person_id = None
+    agent._current_visible_face_person_ids = ()
+    agent._current_turn_audio_chunks = []
+    agent._pending_voice_enrollments = {}
+    agent._voice_enrollment_lock = threading.Lock()
+    return agent
+
+
+def _make_turn(req_id: str, **kwargs):
+    audio_speaker_id = kwargs.pop("audio_speaker_id", None)
+    return realtime_mod.QueuedTurn(
+        kind=kwargs.pop("kind", "audio"),
+        req_id=req_id,
+        speech_end_perf_s=kwargs.pop("speech_end_perf_s", 1.0),
+        speech_end_unix_s=kwargs.pop("speech_end_unix_s", 2.0),
+        transcript_perf_s=kwargs.pop("transcript_perf_s", 3.0),
+        primary_face_person_id=kwargs.pop("primary_face_person_id", "person-1"),
+        owner_id=kwargs.pop("owner_id", audio_speaker_id or "person-1"),
+        audio_speaker_id=audio_speaker_id,
+        context_snapshot=kwargs.pop(
+            "context_snapshot",
+            realtime_mod.FrozenTurnContext(
+                primary_face_person_id=kwargs.pop("context_primary_face_person_id", "person-1"),
+                owner_id=audio_speaker_id or "person-1",
+                audio_speaker_id=audio_speaker_id,
+            ),
+        ),
+        **kwargs,
+    )
+
+
+def test_build_turn_instructions_includes_current_office_location_block():
+    agent = _make_agent()
+    agent._current_office_location = "BOS1"
+
+    instructions = agent._build_turn_instructions(_make_turn("rt-office"))
+
+    assert "[CURRENT OFFICE LOCATION] BOS1" in instructions
+
+
+def test_build_turn_instructions_includes_memory_context_blocks():
+    agent = _make_agent()
+    turn = _make_turn(
+        "rt-memory-block",
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            memory_context_blocks=("[OFFICE CONTEXT]\n- Free snacks today.",),
+        ),
+    )
+
+    instructions = agent._build_turn_instructions(turn)
+
+    assert "[OFFICE CONTEXT]" in instructions
+    assert "Free snacks today." in instructions
+
+
+def test_send_event_stops_runtime_when_websocket_is_already_closed():
+    agent = _make_agent()
+
+    class _ClosedSocket:
+        def send(self, _payload):
+            raise RuntimeError("socket is already closed.")
+
+    agent._send_event = realtime_mod.RealtimeAgentStateMixin._send_event.__get__(
+        agent,
+        realtime_mod.RealtimeRobotAgent,
+    )
+    agent._ws = _ClosedSocket()
+    agent._stop_event.clear()
+
+    agent._send_event({"type": "response.create"})
+
+    assert agent._stop_event.is_set()
+    assert agent._ws is None
+
+
+def test_handle_server_event_routes_output_text_delta_through_dispatch():
+    agent = _make_agent()
+    calls = []
+
+    def _handle_output_text_delta(event):
+        calls.append(event)
+
+    agent._handle_output_text_delta = _handle_output_text_delta
+
+    agent._handle_server_event({"type": "response.output_text.delta", "delta": "hello"})
+
+    assert calls == [{"type": "response.output_text.delta", "delta": "hello"}]
+
+
+def test_superseded_turn_is_canceled_and_old_audio_is_ignored():
+    agent = _make_agent()
+    old_turn = _make_turn("rt-old")
+    old_turn.response_id = "resp-old"
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._active_turn = old_turn
+    agent._bind_response_id(old_turn, old_turn.response_id)
+
+    new_turn = _make_turn("rt-new")
+    agent._supersede_unanswered_turn(new_turn)
+
+    assert old_turn.phase == realtime_mod.TURN_PHASE_SUPERSEDED
+    assert old_turn.response_finished.is_set()
+    assert old_turn.playback_finished.is_set()
+    assert any(evt["type"] == "response.cancel" for evt in agent._sent_events)
+
+    before = agent._playback_buffer.buffered_frames()
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": "resp-old",
+            "item_id": "asst-old",
+            "delta": "AQI=",
+        }
+    )
+    assert agent._playback_buffer.buffered_frames() == before
+
+
+def test_response_watchdog_cancels_stalled_turn():
+    agent = _make_agent()
+    turn = _make_turn("rt-stall")
+    turn.phase = realtime_mod.TURN_PHASE_RESPONSE_REQUESTED
+    turn.response_requested_at = time.time() - 10.0
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    old_timeout = realtime_mod.RESPONSE_STALL_TIMEOUT_SEC
+    try:
+        realtime_mod.RESPONSE_STALL_TIMEOUT_SEC = 0.1
+        watchdog = threading.Thread(target=agent._watchdog_loop, daemon=True)
+        watchdog.start()
+        time.sleep(0.35)
+        agent._stop_event.set()
+        watchdog.join(timeout=1.0)
+    finally:
+        realtime_mod.RESPONSE_STALL_TIMEOUT_SEC = old_timeout
+
+    assert turn.phase == realtime_mod.TURN_PHASE_CANCELED
+    assert turn.response_finished.is_set()
+    assert turn.playback_finished.is_set()
+
+
+def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
+    agent = _make_agent()
+    owner_turn = _FakeOwnerTurnController()
+    agent.owner_turn_controller = owner_turn
+    turn = _make_turn("rt-tools")
+    turn.pending_tool_calls = 2
+    turn.pending_call_ids = {"call-1", "call-2"}
+    agent._turns_by_req_id[turn.req_id] = turn
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+
+    agent._execute_tool_call(
+        realtime_mod.PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-1",
+            tool_name="fake_tool",
+            arguments_json='{"a": 1}',
+        )
+    )
+    assert turn.pending_tool_calls == 1
+    assert followups == []
+    assert owner_turn.cancellations == []
+
+    agent._execute_tool_call(
+        realtime_mod.PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-2",
+            tool_name="fake_tool",
+            arguments_json='{"b": 2}',
+        )
+    )
+    assert turn.pending_tool_calls == 0
+    assert followups == [turn.req_id]
+    assert owner_turn.cancellations == []
+
+def test_recording_hooks_update_gesture_runtime(monkeypatch):
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(realtime_mod.threading, "Thread", _NoopThread)
+    agent = _make_agent()
+
+    agent._start_recording_locked(now_s=10.0)
+    agent._finalize_recording_locked(now_s=11.0)
+
+    assert agent.gesture_runtime.recording_active == [True, False]
+
+
+def test_audio_face_uses_only_strict_primary_face_id():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService(
+        policy=SpeakerRecognitionPolicy(query_match_threshold=0.60)
+    )
+
+    result = agent._face_owner_resolution(
+        primary_face_person_id=None,
+    )
+
+    assert result.owner_id is None
+    assert result.owner_source == "unknown"
+
+    result = agent._face_owner_resolution(
+        primary_face_person_id="person-1",
+    )
+
+    assert result.owner_id == "person-1"
+    assert result.owner_source == "face"
+
+
+def test_input_transcription_binds_to_exact_audio_turn_by_item_id():
+    agent = _make_agent()
+    turn = _make_turn("rt-audio")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._pending_audio_turn_req_ids.append(turn.req_id)
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "user-item-1",
+            "transcript": "hello there",
+        }
+    )
+
+    assert turn.user_item_id == "user-item-1"
+    assert turn.user_transcript == "hello there"
+    assert agent._item_id_to_req_id["user-item-1"] == turn.req_id
+
+
+def test_input_audio_buffer_committed_can_arrive_before_turn_registration():
+    agent = _make_agent()
+
+    agent._handle_input_audio_buffer_committed(
+        {
+            "type": "input_audio_buffer.committed",
+            "item_id": "early-user-item",
+        }
+    )
+    turn = _make_turn("rt-audio-early-item")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_pending_audio_turn(turn)
+
+    assert turn.user_item_id == "early-user-item"
+    assert agent._item_id_to_req_id["early-user-item"] == turn.req_id
+    assert list(agent._pending_audio_turn_req_ids) == []
+
+
+def test_input_transcription_failed_is_logged_for_bound_turn():
+    agent = _make_agent()
+    warnings = []
+    agent.logger = SimpleNamespace(
+        warning=lambda *args: warnings.append(args),
+        debug=lambda *args: None,
+    )
+    turn = _make_turn("rt-transcribe-failed")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_item_id_to_turn(turn, "failed-user-item")
+
+    agent._handle_input_transcription_failed(
+        {
+            "type": "conversation.item.input_audio_transcription.failed",
+            "item_id": "failed-user-item",
+            "error": {
+                "type": "transcription_error",
+                "code": "audio_unintelligible",
+                "message": "not enough signal",
+            },
+        }
+    )
+
+    assert warnings == [
+        (
+            "Input transcription failed req_id=%s item_id=%s type=%s code=%s message=%s",
+            "rt-transcribe-failed",
+            "failed-user-item",
+            "transcription_error",
+            "audio_unintelligible",
+            "not enough signal",
+        )
+    ]
+
+
+def test_input_transcription_logs_usage_cost():
+    agent = _make_agent()
+    turn = _make_turn("rt-transcribe")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._pending_audio_turn_req_ids.append(turn.req_id)
+    agent._session_id = "sess-123"
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "user-item-2",
+            "transcript": "hello there",
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 20,
+                "total_tokens": 140,
+                "input_token_details": {"audio_tokens": 120},
+                "output_token_details": {"text_tokens": 20},
+            },
+        }
+    )
+
+    usage_event = next(
+        evt for evt in agent._latency.events if evt.get("event") == "transcription_usage"
+    )
+    assert usage_event["req_id"] == turn.req_id
+    assert usage_event["session_id"] == "sess-123"
+    assert usage_event["model"] == "gpt-4o-mini-transcribe"
+    assert usage_event["input_audio_tokens"] == 120
+    assert usage_event["output_text_tokens"] == 20
+    assert usage_event["estimated_cost_usd"] == 0.00025
+    assert usage_event["session_total_cost_usd"] == 0.00025
+
+
+def test_output_audio_and_transcript_resolve_by_response_and_item_id():
+    agent = _make_agent()
+    turn = _make_turn("rt-output")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, "resp-1")
+
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": "resp-1",
+            "item_id": "asst-1",
+            "delta": "AQI=",
+        }
+    )
+    agent._handle_output_transcript_delta(
+        {
+            "type": "response.output_audio_transcript.delta",
+            "response_id": "resp-1",
+            "item_id": "asst-1",
+            "delta": "hi",
+        }
+    )
+
+    assert turn.audio_started is True
+    assert turn.phase == realtime_mod.TURN_PHASE_PLAYING
+    assert turn.assistant_item_id == "asst-1"
+    assert turn.assistant_transcript == "hi"
+    assert agent.engagement.output_started == [(turn.req_id, "resp-1")]
+
+
+def test_owner_turn_is_requested_when_audio_turn_commits():
+    agent = _make_agent()
+    owner_turn = _FakeOwnerTurnController()
+    agent.owner_turn_controller = owner_turn
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-7",
+        visible_face_person_ids=("person-7",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+    )
+
+    assert len(owner_turn.requests) == 1
+    assert owner_turn.requests[0]["person_id"] == "person-7"
+    assert owner_turn.requests[0]["req_id"].startswith("rt-")
+    assert owner_turn.requests[0]["owner_source"] == "face"
+
+
+def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService()
+    agent._vad = object()
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-7",
+        visible_face_person_ids=("person-7",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+    )
+
+    assert len(agent.speaker_service.trim_calls) == 1
+    assert agent.speaker_service.trim_calls[0]["vad"] is None
+
+
+def test_output_audio_does_not_request_duplicate_owner_turn():
+    agent = _make_agent()
+    owner_turn = _FakeOwnerTurnController()
+    agent.owner_turn_controller = owner_turn
+    turn = _make_turn("rt-owner-audio", owner_id="person-7", owner_source="speaker")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, "resp-owner")
+
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": "resp-owner",
+            "item_id": "asst-owner",
+            "delta": "AQI=",
+        }
+    )
+
+    assert owner_turn.requests == []
+
+
+def test_function_call_cancels_queued_owner_turn():
+    agent = _make_agent()
+    owner_turn = _FakeOwnerTurnController()
+    agent.owner_turn_controller = owner_turn
+    turn = _make_turn("rt-owner-cancel")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, "resp-cancel")
+
+    agent._handle_function_call_done(
+        {
+            "type": "response.function_call_arguments.done",
+            "response_id": "resp-cancel",
+            "item_id": "func-1",
+            "call_id": "call-1",
+            "name": "move_robot",
+            "arguments": "{}",
+        }
+    )
+
+    assert owner_turn.cancellations == [
+        {"req_id": "rt-owner-cancel", "reason": "tool:move_robot"}
+    ]
+
+
+def test_first_audio_latency_is_not_logged_for_text_turns():
+    agent = _make_agent()
+    turn = _make_turn(
+        "evt-first-audio-text",
+        kind="text",
+        speech_end_perf_s=0.0,
+        speech_end_unix_s=time.time(),
+    )
+    turn.response_id = "resp-text-first-audio"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": turn.response_id,
+            "item_id": "asst-text-first-audio",
+            "delta": "AQI=",
+        }
+    )
+
+    assert not any(
+        evt.get("metric") == "first_audio_latency_s"
+        for evt in agent._latency.events
+    )
+
+
+def test_unknown_output_audio_does_not_bind_pending_turn():
+    agent = _make_agent()
+    turn = _make_turn("rt-pending")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._pending_response_turn_req_ids.append(turn.req_id)
+
+    before = agent._playback_buffer.buffered_frames()
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": "resp-stale",
+            "item_id": "asst-stale",
+            "delta": "AQI=",
+        }
+    )
+
+    assert agent._playback_buffer.buffered_frames() == before
+    assert "resp-stale" not in agent._response_id_to_req_id
+    assert turn.audio_started is False
+
+
+def test_completed_response_without_audio_retries_once_and_deletes_silent_item():
+    agent = _make_agent()
+    turn = _make_turn("rt-silent-retry")
+    turn.response_id = "resp-silent-1"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-silent-1",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-silent-1",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "hello"}],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert turn.no_audio_retry_count == 1
+    assert turn.response_finished.is_set() is False
+    assert turn.playback_finished.is_set() is False
+    assert followups == [turn.req_id]
+    assert turn.response_id == ""
+    assert turn.assistant_transcript == ""
+    assert "resp-silent-1" not in agent._response_id_to_req_id
+    delete_events = [evt for evt in agent._sent_events if evt["type"] == "conversation.item.delete"]
+    assert delete_events == [{"type": "conversation.item.delete", "item_id": "asst-silent-1"}]
+
+
+def test_completed_response_without_audio_after_retry_is_canceled_without_fake_playback_stop():
+    agent = _make_agent()
+    turn = _make_turn("rt-silent-fail")
+    turn.response_id = "resp-silent-2"
+    turn.no_audio_retry_count = realtime_mod.NO_AUDIO_RESPONSE_RETRY_LIMIT
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-silent-2",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-silent-2",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "still silent"}],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert turn.phase == realtime_mod.TURN_PHASE_CANCELED
+    assert turn.finalized_reason == "response_completed_without_audio"
+    assert turn.response_finished.is_set()
+    assert turn.playback_finished.is_set()
+    assert agent.engagement.done == [(turn.req_id, False)]
+    assert agent.ros2_connector.messages == []
+
+
+def test_response_done_logs_cache_usage_details():
+    agent = _make_agent()
+    turn = _make_turn("rt-usage")
+    turn.response_id = "resp-usage"
+    turn.audio_started = True
+    turn.audio_started_at = time.time()
+    agent._session_id = "sess-usage"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-usage",
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 40,
+                    "total_tokens": 240,
+                    "input_token_details": {
+                        "text_tokens": 190,
+                        "audio_tokens": 10,
+                        "image_tokens": 0,
+                        "cached_tokens": 120,
+                        "cached_tokens_details": {
+                            "audio_tokens": 10,
+                            "text_tokens": 110,
+                            "image_tokens": 0,
+                        },
+                    },
+                    "output_token_details": {
+                        "text_tokens": 8,
+                        "audio_tokens": 32,
+                    },
+                },
+                "output": [
+                    {
+                        "id": "asst-usage",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ],
+            },
+        }
+    )
+
+    usage_event = next(
+        evt for evt in agent._latency.events if evt.get("event") == "response_usage"
+    )
+    assert usage_event["req_id"] == turn.req_id
+    assert usage_event["session_id"] == "sess-usage"
+    assert usage_event["input_tokens"] == 200
+    assert usage_event["cached_tokens"] == 120
+    assert usage_event["uncached_input_tokens"] == 80
+    assert usage_event["cache_hit_ratio"] == 0.6
+    assert usage_event["cached_audio_tokens"] == 10
+    assert usage_event["cached_text_tokens"] == 110
+    assert usage_event["input_text_tokens"] == 190
+    assert usage_event["input_audio_tokens"] == 10
+    assert usage_event["output_text_tokens"] == 8
+    assert usage_event["output_audio_tokens"] == 32
+    assert usage_event["estimated_cost_usd"] == 0.002544
+    assert usage_event["estimated_cached_savings_usd"] == 0.000712
+    assert usage_event["session_total_cost_usd"] == 0.002544
+
+
+def test_incomplete_response_with_audio_finishes_playback_instead_of_canceling():
+    agent = _make_agent()
+    turn = _make_turn("rt-incomplete-audio")
+    turn.response_id = "resp-incomplete"
+    turn.audio_started = True
+    turn.audio_started_at = time.time()
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-incomplete",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [
+                    {
+                        "id": "asst-incomplete",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "complete reply."}],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert turn.phase != realtime_mod.TURN_PHASE_CANCELED
+    assert turn.response_finished.is_set()
+    assert turn.playback_finished.wait(timeout=0.2)
+    assert agent.engagement.done == [(turn.req_id, True)]
+
+
+def test_truncated_incomplete_audio_reply_requests_one_continuation():
+    agent = _make_agent()
+    turn = _make_turn("rt-incomplete-continue")
+    turn.response_id = "resp-incomplete-continue"
+    turn.audio_started = True
+    turn.audio_started_at = time.time()
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-incomplete-continue",
+                "status": "incomplete",
+                "output": [
+                    {
+                        "id": "asst-incomplete-continue",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "cut off mid sentence"}],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert turn.incomplete_audio_continuation_count == 1
+    assert turn.response_id == ""
+    assert turn.response_finished.is_set() is False
+    assert followups == [turn.req_id]
+
+
+def test_completed_output_item_arms_playback_completion_before_response_done():
+    agent = _make_agent()
+    turn = _make_turn("rt-item-done")
+    turn.response_id = "resp-item-done"
+    turn.audio_started = True
+    turn.audio_started_at = time.time()
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_output_item_done(
+        {
+            "type": "response.output_item.done",
+            "response_id": "resp-item-done",
+            "item": {
+                "id": "asst-item-done",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+            },
+        }
+    )
+
+    assert turn.playback_completion_armed is True
+    assert agent.engagement.done == [(turn.req_id, True)]
+    assert turn.playback_finished.wait(timeout=0.1) is False
+    assert not any(event[0] == "playback_completed" for event in agent.engagement.playback_events)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-item-done",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-item-done",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert agent.engagement.done == [(turn.req_id, True)]
+    assert turn.response_finished.is_set()
+    assert turn.playback_finished.wait(timeout=0.2)
+    assert agent.engagement.playback_events[-1][0] == "playback_completed"
+
+
+def test_terminated_turn_is_removed_from_pending_response_queue():
+    agent = _make_agent()
+    old_turn = _make_turn("rt-old-pending")
+    new_turn = _make_turn("rt-new-pending")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
+
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel",
+        send_cancel=False,
+    )
+
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+
+    resolved = agent._consume_pending_response_turn("resp-new")
+    assert resolved is new_turn
+    assert new_turn.response_id == "resp-new"
+    assert agent._response_id_to_req_id["resp-new"] == new_turn.req_id
+
+
+def test_response_request_omits_output_budget_when_uncapped():
+    agent = _make_agent()
+    turn = _make_turn("rt-request")
+
+    request = agent._build_response_request(turn)
+
+    assert "max_output_tokens" not in request
+    assert request["output_modalities"] == ["audio"]
+    assert "modalities" not in request
+
+
+def test_response_request_starts_with_base_prompt_before_dynamic_context():
+    agent = _make_agent()
+    agent.base_system_prompt = "STATIC RULES"
+    agent._current_office_location = "BOS3"
+    turn = _make_turn("rt-request-order")
+
+    request = agent._build_response_request(turn)
+
+    instructions = request["instructions"]
+    assert instructions.startswith("STATIC RULES\n\n")
+    assert "[CURRENT TIME]" in instructions
+    assert instructions.index("STATIC RULES") < instructions.index("[CURRENT TIME]")
+
+
+def test_playback_watchdog_does_not_fire_while_playback_progress_is_recent():
+    agent = _make_agent()
+    turn = _make_turn("rt-playback-progress")
+    turn.phase = realtime_mod.TURN_PHASE_PLAYING
+    turn.audio_started = True
+    turn.audio_started_at = time.time() - 10.0
+    turn.last_playback_progress_at = time.time()
+    turn.response_finished.set()
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    watchdog = threading.Thread(target=agent._watchdog_loop, daemon=True)
+    watchdog.start()
+    time.sleep(0.35)
+    agent._stop_event.set()
+    watchdog.join(timeout=1.0)
+
+    assert turn.finalized is False
+    assert turn.playback_finished.is_set() is False
+
+
+def test_playback_watchdog_forces_completion_instead_of_canceling():
+    agent = _make_agent()
+    turn = _make_turn("rt-playback-stall")
+    turn.phase = realtime_mod.TURN_PHASE_PLAYING
+    turn.audio_started = True
+    turn.response_id = "resp-stall"
+    turn.audio_started_at = time.time() - 10.0
+    turn.last_playback_progress_at = time.time() - 10.0
+    turn.response_finished.set()
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._playback_req_id = turn.req_id
+    agent._playback_stream_id = turn.response_id
+
+    old_timeout = realtime_mod.PLAYBACK_STALL_TIMEOUT_SEC
+    try:
+        realtime_mod.PLAYBACK_STALL_TIMEOUT_SEC = 0.1
+        watchdog = threading.Thread(target=agent._watchdog_loop, daemon=True)
+        watchdog.start()
+        time.sleep(0.35)
+        agent._stop_event.set()
+        watchdog.join(timeout=1.0)
+    finally:
+        realtime_mod.PLAYBACK_STALL_TIMEOUT_SEC = old_timeout
+
+    assert turn.phase == realtime_mod.TURN_PHASE_PLAYING
+    assert turn.finalized is False
+    assert turn.playback_finished.is_set()
+    assert agent.engagement.playback_events[-1][0] == "playback_stopped"
+
+
+def test_interrupt_current_response_truncates_played_audio():
+    agent = _make_agent()
+    turn = _make_turn("rt-interrupt")
+    turn.response_id = "resp-interrupt"
+    turn.assistant_item_id = "asst-interrupt"
+    turn.audio_started = True
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._active_turn = turn
+    agent._playback_req_id = turn.req_id
+    agent._playback_item_id = turn.assistant_item_id
+    agent._played_output_frames = 2400
+
+    agent.interrupt_current_response(reason="voice_command")
+
+    sent_types = [evt["type"] for evt in agent._sent_events]
+    assert "response.cancel" in sent_types
+    assert "conversation.item.truncate" in sent_types
+    truncate_event = next(evt for evt in agent._sent_events if evt["type"] == "conversation.item.truncate")
+    assert truncate_event["item_id"] == "asst-interrupt"
+    assert truncate_event["audio_end_ms"] > 0
+
+
+def test_self_published_stop_voice_command_is_ignored():
+    agent = _make_agent()
+    turn = _make_turn("rt-voice-self")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._active_turn = turn
+
+    agent.note_local_voice_command("stop")
+    agent._on_voice_command(SimpleNamespace(data="stop"))
+
+    assert turn.finalized is False
+    assert agent._sent_events == []
+
+
+def test_external_stop_voice_command_interrupts_active_turn():
+    agent = _make_agent()
+    turn = _make_turn("rt-voice-external")
+    turn.response_id = "resp-external"
+    turn.assistant_item_id = "asst-external"
+    turn.audio_started = True
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._active_turn = turn
+    agent._playback_req_id = turn.req_id
+    agent._playback_item_id = turn.assistant_item_id
+    agent._played_output_frames = 1200
+
+    agent._on_voice_command(SimpleNamespace(data="stop"))
+
+    assert turn.phase == realtime_mod.TURN_PHASE_CANCELED
+    sent_types = [evt["type"] for evt in agent._sent_events]
+    assert "response.cancel" in sent_types
+    assert "conversation.item.truncate" in sent_types
+
+
+def test_configure_session_uses_realtime_ga_shape():
+    agent = _make_agent()
+
+    agent._configure_session()
+
+    update_event = next(evt for evt in agent._sent_events if evt["type"] == "session.update")
+    session = update_event["session"]
+    assert session["type"] == "realtime"
+    assert session["model"] == "gpt-realtime-1.5"
+    assert session["output_modalities"] == ["audio"]
+    assert session["audio"]["input"]["format"] == {
+        "type": "audio/pcm",
+        "rate": 24000,
+    }
+    assert session["audio"]["input"]["turn_detection"] is None
+    assert session["audio"]["input"]["noise_reduction"] == {"type": "near_field"}
+    assert session["audio"]["input"]["transcription"] == {
+        "model": "gpt-4o-mini-transcribe",
+        "language": "en",
+    }
+    assert session["audio"]["output"]["format"] == {
+        "type": "audio/pcm",
+        "rate": 24000,
+    }
+    assert session["audio"]["output"]["voice"] == "cedar"
+    assert session["audio"]["output"]["speed"] == 0.9
+    assert "input_audio_format" not in session
+    assert "modalities" not in session
+    assert "temperature" not in session
+
+
+def test_preference_turn_uses_captured_speaker_and_transcripts():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn("rt-pref", audio_speaker_id="person-9")
+    turn.user_transcript = "my dog is luna"
+    turn.assistant_transcript = "luna sounds adorable"
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="speaker_change")
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert seen[0].turns[0].user_text == "my dog is luna"
+    assert seen[0].turns[0].assistant_text == "luna sounds adorable"
+
+
+def test_preference_turn_is_claimed_once_when_called_concurrently():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn("rt-pref-race", audio_speaker_id="person-9")
+    turn.user_transcript = "my dog is luna"
+    turn.assistant_transcript = "luna sounds adorable"
+    barrier = threading.Barrier(2)
+
+    def note_turn():
+        barrier.wait(timeout=1.0)
+        agent._maybe_note_preference_turn(turn)
+
+    threads = [threading.Thread(target=note_turn) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1.0)
+
+    agent.flush_preference_segments(reason="speaker_change")
+
+    assert len(seen) == 1
+    assert [item.turn_id for item in seen[0].turns] == ["rt-pref-race"]
+
+
+def test_idle_preference_flush_is_debounced():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn("rt-pref-idle", audio_speaker_id="person-9")
+    turn.user_transcript = "my dog is luna"
+    turn.assistant_transcript = "luna sounds adorable"
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="idle")
+
+    assert seen == []
+    time.sleep(0.08)
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+
+
+def test_same_speaker_resume_cancels_idle_preference_flush():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    first_turn = _make_turn("rt-pref-resume-1", audio_speaker_id="person-9")
+    first_turn.user_transcript = "my dog is luna"
+    first_turn.assistant_transcript = "luna sounds adorable"
+
+    agent._maybe_note_preference_turn(first_turn)
+    agent.flush_preference_segments(reason="idle")
+    time.sleep(0.01)
+    agent._start_recording_locked(now_s=10.0)
+    time.sleep(0.08)
+
+    assert seen == []
+
+    second_turn = _make_turn("rt-pref-resume-2", audio_speaker_id="person-9")
+    second_turn.user_transcript = "she likes fetch"
+    second_turn.assistant_transcript = "fetch is a great game"
+    agent._maybe_note_preference_turn(second_turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert [item.turn_id for item in seen[0].turns] == [
+        "rt-pref-resume-1",
+        "rt-pref-resume-2",
+    ]
+
+
+def test_unattributed_turn_flushes_active_preference_segment():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    first_turn = _make_turn("rt-pref-known", audio_speaker_id="person-9")
+    first_turn.user_transcript = "my dog is luna"
+    first_turn.assistant_transcript = "luna sounds adorable"
+    agent._maybe_note_preference_turn(first_turn)
+
+    second_turn = _make_turn("rt-pref-unknown", audio_speaker_id=None)
+    second_turn.user_transcript = "hello again"
+    second_turn.assistant_transcript = "hi there"
+    agent._maybe_note_preference_turn(second_turn)
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+
+
+def test_missing_owner_turn_flushes_previous_preference_segment_without_claiming_turn():
+    agent = _make_agent()
+    log_messages = []
+    agent.logger = SimpleNamespace(
+        info=lambda message, *args: log_messages.append(message % args),
+        debug=lambda *_args, **_kwargs: None,
+        exception=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+    )
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    first_turn = _make_turn("rt-pref-known-before-unknown", audio_speaker_id="person-9")
+    first_turn.user_transcript = "my dog is luna"
+    first_turn.assistant_transcript = "luna sounds adorable"
+    agent._maybe_note_preference_turn(first_turn)
+
+    unknown_turn = _make_turn(
+        "rt-pref-owner-missing",
+        owner_id=None,
+        audio_speaker_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id=None,
+            audio_speaker_id=None,
+        ),
+    )
+    unknown_turn.user_transcript = "hello again"
+    unknown_turn.assistant_transcript = "hi there"
+    agent._maybe_note_preference_turn(unknown_turn)
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert unknown_turn.preference_noted is False
+    assert any(
+        "Preference extraction skipped unattributed turn" in message
+        for message in log_messages
+    )
+    assert all("Preference extraction waiting" not in message for message in log_messages)
+
+
+def test_active_recording_survives_admission_closing_mid_capture():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent.realtime_profile.wake_window_sec = 5.0
+    agent.realtime_profile.admission = SimpleNamespace(
+        block_during_speaking=True,
+        open_on_face_presence=True,
+        open_on_interaction_states=("alert", "cooldown"),
+        open_on_wake_window=True,
+    )
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._wake_window_until = 0.0
+    agent._recording_active = False
+    agent._recording_started_at = 0.0
+    agent._last_voice_at = 0.0
+    agent._current_turn_vad_positive_blocks = 0
+    agent._face_gate = SimpleNamespace(is_face_present=lambda: False)
+    agent._vad = lambda *_args, **_kwargs: (True, {})
+    agent._wake_word = lambda *_args, **_kwargs: (False, {})
+
+    states = deque(["cooldown", "idle"])
+
+    class _Engagement:
+        def snapshot(self):
+            return SimpleNamespace(
+                state=states.popleft() if states else "idle",
+                req_id="",
+                entered_at=0.0,
+                expires_at=None,
+                nav_active=False,
+                nav_source="",
+                nav_interruptible=True,
+                nav_passive_listen_allowed=True,
+            )
+
+    agent.engagement = _Engagement()
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+
+    agent._capture_callback(chunk, 1600, None, None)
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert agent._recording_active is True
+    assert len(agent._current_turn_audio_chunks) == 2
+    assert agent._current_turn_vad_positive_blocks == 2
+
+
+def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    known_turn = _make_turn("rt-pref-known-before-missing", audio_speaker_id="person-9")
+    known_turn.user_transcript = "my dog is luna"
+    known_turn.assistant_transcript = "luna sounds adorable"
+    agent._maybe_note_preference_turn(known_turn)
+
+    missing_owner_turn = _make_turn(
+        "rt-pref-owner-still-missing",
+        owner_id=None,
+        audio_speaker_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id=None,
+            audio_speaker_id=None,
+        ),
+    )
+    missing_owner_turn.user_transcript = "hello again"
+    missing_owner_turn.assistant_transcript = "hi there"
+    agent._maybe_note_preference_turn(missing_owner_turn)
+
+    next_known_turn = _make_turn("rt-pref-next-known", audio_speaker_id="person-10")
+    next_known_turn.user_transcript = "my cat is milo"
+    next_known_turn.assistant_transcript = "milo sounds sweet"
+    agent._maybe_note_preference_turn(next_known_turn)
+
+    agent._maybe_note_preference_turn(missing_owner_turn)
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert missing_owner_turn.preference_noted is False
+    assert missing_owner_turn.preference_unattributed_flushed is True
+
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 2
+    assert seen[1].person_id == "person-10"
+
+
+def test_internal_text_turn_uses_system_role_message():
+    agent = _make_agent()
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+    agent._wait_for_turn_settled = (
+        lambda turn: (turn.response_finished.set(), turn.playback_finished.set())
+    )
+    turn = _make_turn(
+        "evt-system",
+        kind="text",
+        input_text="NAV_EVENT: target reached",
+        source_is_internal=True,
+    )
+
+    agent._run_turn(turn)
+
+    create_event = next(
+        evt for evt in agent._sent_events if evt["type"] == "conversation.item.create"
+    )
+    assert create_event["item"]["role"] == "system"
+    assert followups == [turn.req_id]
+
+
+def test_external_text_turn_resolves_single_visible_owner_for_live_chat_memory():
+    agent = _make_agent()
+    person = SimpleNamespace(
+        person_id="person-9",
+        name="Alex",
+        interaction_count=1,
+        confidence=0.9,
+        bbox_area=100,
+        timestamp=1.0,
+        memory_profile_lines=(),
+        preferred_language="",
+        potential_followups=(),
+    )
+    agent.face_service = _FakeFaceService(
+        persons=[person],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    agent._send_response_create = lambda queued_turn: None
+    agent._wait_for_turn_settled = (
+        lambda turn: (
+            setattr(turn, "assistant_transcript", "nice"),
+            turn.response_finished.set(),
+            turn.playback_finished.set(),
+        )
+    )
+
+    agent.enqueue_internal_event(
+        "[PENDING EVENTS]\n- NAV_EVENT: reached desk\n[HUMAN INPUT]\nmy dog is luna",
+        metadata={"req_id": "text-pref"},
+    )
+    turn = agent._turn_queue.get_nowait()
+    agent._run_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert turn.owner_id == "person-9"
+    assert turn.context_snapshot.owner_id == "person-9"
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert seen[0].turns[0].user_text == "my dog is luna"
+
+
+def test_external_text_turn_does_not_use_face_owner_with_multiple_visible_people():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    first_turn = _make_turn("rt-pref-known", audio_speaker_id="person-9")
+    first_turn.user_transcript = "my dog is luna"
+    first_turn.assistant_transcript = "luna sounds adorable"
+    agent._maybe_note_preference_turn(first_turn)
+
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(person_id="person-9"),
+            SimpleNamespace(person_id="person-10"),
+        ],
+        snapshot={"recognized_count": 2, "unknown_count": 0},
+    )
+
+    agent.enqueue_internal_event("hello", metadata={"req_id": "text-ambiguous"})
+    turn = agent._turn_queue.get_nowait()
+    turn.user_transcript = turn.input_text
+    turn.assistant_transcript = "hi"
+    agent._maybe_note_preference_turn(turn)
+
+    assert turn.owner_id is None
+    agent.flush_preference_segments(reason="shutdown")
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert [item.turn_id for item in seen[0].turns] == ["rt-pref-known"]
+
+
+def test_capture_turn_context_enriches_memory_only_for_owner():
+    agent = _make_agent()
+    calls = []
+
+    class _MemoryCompiler:
+        def person_context(self, person_id, **_kwargs):
+            calls.append(person_id)
+            return SimpleNamespace(
+                profile_lines=(f"memory for {person_id}",),
+                followup_lines=(f"followup for {person_id}",),
+                preferred_language=f"language-{person_id}",
+            )
+
+        def site_blocks(self, *_args, **_kwargs):
+            return ()
+
+    agent.memory_context_compiler = _MemoryCompiler()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                interaction_count=2,
+                confidence=0.93,
+                bbox_area=20,
+                timestamp=100.0,
+                directory_profile_lines=("title: Engineer",),
+                memory_profile_lines=(),
+                potential_followups=(),
+                preferred_language="",
+                visible=True,
+            ),
+            SimpleNamespace(
+                person_id="person-2",
+                name="Bob",
+                interaction_count=1,
+                confidence=0.91,
+                bbox_area=15,
+                timestamp=100.0,
+                directory_profile_lines=("title: PM",),
+                memory_profile_lines=(),
+                potential_followups=(),
+                preferred_language="",
+                visible=True,
+            ),
+        ],
+        snapshot={"recognized_count": 2, "unknown_count": 0},
+    )
+
+    context = agent._capture_turn_context(
+        primary_face_person_id="person-1",
+        owner_id="person-2",
+        owner_source="audio",
+        speaker_visible=True,
+    )
+
+    assert calls == ["person-2"]
+    alice, bob = context.persons
+    assert alice.directory_profile_lines == ("title: Engineer",)
+    assert alice.memory_profile_lines == ()
+    assert alice.potential_followups == ()
+    assert bob.directory_profile_lines == ("title: PM",)
+    assert bob.memory_profile_lines == ("memory for person-2",)
+    assert bob.potential_followups == ("followup for person-2",)
+    assert bob.preferred_language == "language-person-2"
+
+
+def test_audio_turn_pending_internal_text_uses_system_role_message():
+    agent = _make_agent()
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+    agent._wait_for_turn_settled = (
+        lambda turn: (turn.response_finished.set(), turn.playback_finished.set())
+    )
+    turn = _make_turn(
+        "rt-audio-system",
+        kind="audio",
+        pending_internal_text="[PENDING EVENTS]\n- BATTERY_EVENT: charging complete",
+    )
+
+    agent._run_turn(turn)
+
+    create_event = next(
+        evt for evt in agent._sent_events if evt["type"] == "conversation.item.create"
+    )
+    assert create_event["item"]["role"] == "system"
+    assert followups == [turn.req_id]
+
+
+def test_people_context_reports_audio_face_mismatch():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+        SimpleNamespace(
+            person_id="person-2",
+            name="Bob",
+            bbox_area=15.0,
+            interaction_count=1,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 2,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice", "Bob"],
+        },
+        audio_speaker_id="person-2",
+        owner_id="person-2",
+        owner_source="audio",
+        speaker_visible=True,
+    )
+
+    assert "- Bob (met once before) [talking to you]" in rendered
+    assert "Current speaker voice matches Bob." in rendered
+    assert "primary visible person" not in rendered
+
+
+def test_people_context_includes_directory_profile_lines():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            directory_profile_lines=(
+                "title: AI Technologist II (Analyst)",
+                "manager: Dan Burns",
+                "tenure: 0 year(s), 3 month(s), 5 day(s)",
+            ),
+            memory_profile_lines=("preferred name: sash",),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice"],
+        },
+        audio_speaker_id="person-1",
+        owner_id="person-1",
+        owner_source="audio_face_agree",
+        speaker_visible=True,
+    )
+
+    assert (
+        "Directory: title: AI Technologist II (Analyst); manager: Dan Burns; "
+        "tenure: 0 year(s), 3 month(s), 5 day(s)"
+    ) in rendered
+    assert "- Alice (met 2 times) [talking to you]" in rendered
+    assert "About: preferred name: sash" in rendered
+
+
+def test_people_context_includes_directory_only_for_visible_non_owner_people():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            directory_profile_lines=("title: Robotics Engineer",),
+            memory_profile_lines=("pet: Luna is her dog.",),
+            potential_followups=("Ask about the Cape Cod trip.",),
+            preferred_language="",
+        ),
+        SimpleNamespace(
+            person_id="person-2",
+            name="Bob",
+            bbox_area=15.0,
+            interaction_count=1,
+            directory_profile_lines=("title: Product Manager",),
+            memory_profile_lines=("preferred name: Bobby",),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 2,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice", "Bob"],
+        },
+        audio_speaker_id="person-2",
+        owner_id="person-2",
+        owner_source="audio",
+        speaker_visible=True,
+    )
+
+    assert "- Alice (met 2 times)" in rendered
+    assert "Directory: title: Robotics Engineer" in rendered
+    assert "About: pet: Luna is her dog." not in rendered
+    assert "Potential Followups: Ask about the Cape Cod trip." not in rendered
+    assert "- Bob (met once before) [talking to you]" in rendered
+    assert "Directory: title: Product Manager" in rendered
+    assert "About: preferred name: Bobby" in rendered
+
+
+def test_people_context_reports_audio_face_agreement():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice"],
+        },
+        audio_speaker_id="person-1",
+        owner_id="person-1",
+        owner_source="audio_face_agree",
+        speaker_visible=True,
+    )
+
+    assert "- Alice (met 2 times) [talking to you]" in rendered
+    assert "Current speaker voice matches Alice." in rendered
+    assert "primary visible person" not in rendered
+
+
+def test_people_context_reports_offscreen_audio_speaker():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+        SimpleNamespace(
+            person_id="person-2",
+            name="Bob",
+            bbox_area=15.0,
+            interaction_count=1,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+        },
+        audio_speaker_id="person-2",
+        owner_id="person-2",
+        owner_source="audio",
+        speaker_visible=False,
+    )
+
+    assert "Current speaker voice matches Bob, but Bob is not visible right now." in rendered
+    assert "Attribute this turn to Bob, not Alice." not in rendered
+
+
+def test_people_context_reports_unresolved_speaker():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            memory_profile_lines=(),
+            potential_followups=(),
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+        },
+        audio_speaker_id=None,
+        owner_id=None,
+        owner_source="unknown",
+        speaker_visible=False,
+    )
+
+    assert "Current speaker is not safely identified." in rendered
+
+
+def test_people_context_emits_preferred_language_directive():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            memory_profile_lines=("preferred language: Spanish",),
+            potential_followups=(),
+            preferred_language="Spanish",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+        },
+        audio_speaker_id="person-1",
+        owner_id="person-1",
+        owner_source="audio_face_agree",
+        speaker_visible=True,
+    )
+
+    assert "Prioritize talking in this language to this user: Spanish." in rendered
+
+
+def test_tool_side_effect_arms_pending_voice_enrollment():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService()
+
+    agent._maybe_handle_tool_side_effects(
+        "enroll_visible_person",
+        {"success": True, "person_id": "person-7"},
+    )
+
+    assert "person-7" in agent._pending_voice_enrollments
+
+
+def test_voice_reference_capture_arms_one_prompt_after_two_quality_failures():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService(
+        policy=SpeakerRecognitionPolicy(explicit_prompt_after_silent_failures=2),
+        enrollment_results=[
+            VoiceEnrollmentResult(
+                saved=False,
+                reason="reject_too_short",
+                person_id="person-1",
+                attempt_kind="silent",
+            ),
+            VoiceEnrollmentResult(
+                saved=False,
+                reason="reject_too_quiet",
+                person_id="person-1",
+                attempt_kind="silent",
+            ),
+        ],
+    )
+    agent._arm_pending_voice_enrollment("person-1")
+    turn = _make_turn(
+        "rt-voice-enroll",
+        primary_face_person_id="person-1",
+        input_audio_pcm16=b"\x01\x00" * 1600,
+        trimmed_input_audio_pcm16=b"\x01\x00" * 1600,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id="person-1",
+            face_snapshot={"recognized_count": 1, "unknown_count": 0},
+        ),
+    )
+    turn.user_transcript = "hello my name is alice and i build robots today"
+
+    agent._maybe_capture_voice_reference(turn)
+    pending = agent._pending_voice_enrollments["person-1"]
+    assert pending.silent_failures == 1
+    assert pending.explicit_prompt_armed is False
+
+    agent._maybe_capture_voice_reference(turn)
+    pending = agent._pending_voice_enrollments["person-1"]
+    assert pending.silent_failures == 2
+    assert pending.explicit_prompt_armed is True
+
+    prompt_note = agent._consume_voice_enrollment_prompt_note(turn)
+    assert "[VOICE ENROLLMENT]" in prompt_note
+    assert agent._consume_voice_enrollment_prompt_note(turn) == ""
+
+
+def test_build_turn_instructions_uses_people_context_without_extra_speaker_block():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService()
+    turn = _make_turn(
+        "rt-guidance-enabled",
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            audio_speaker_id="person-2",
+            owner_id="person-2",
+            owner_source="audio",
+            speaker_visible=False,
+            face_snapshot={
+                "recognized_count": 1,
+                "unknown_count": 0,
+                "primary_face_kind": "recognized",
+                "primary_face_name": "Alice",
+            },
+        ),
+    )
+
+    rendered = agent._build_turn_instructions(turn)
+
+    assert "[PEOPLE IN VIEW]" in rendered
+    assert "Current speaker is not safely identified." in rendered
+
+
+def test_post_enrollment_voice_reference_save_clears_pending_state_and_supports_memory():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    agent.speaker_service = _FakeSpeakerService(
+        enrollment_results=[
+            VoiceEnrollmentResult(
+                saved=True,
+                reason="saved",
+                person_id="person-1",
+                attempt_kind="silent",
+            )
+        ]
+    )
+    agent._maybe_handle_tool_side_effects(
+        "enroll_visible_person",
+        {"success": True, "person_id": "person-1"},
+    )
+    turn = _make_turn(
+        "rt-post-enroll",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        input_audio_pcm16=b"\x10\x00" * 32000,
+        trimmed_input_audio_pcm16=b"\x10\x00" * 32000,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id="person-1",
+            face_snapshot={"recognized_count": 1, "unknown_count": 0},
+        ),
+    )
+    turn.user_transcript = "hello my name is alice and i work on robot perception systems"
+    turn.assistant_transcript = "nice to meet you"
+
+    agent._maybe_capture_voice_reference(turn)
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert "person-1" not in agent._pending_voice_enrollments
+    assert agent.speaker_service.has_reference("person-1") is True
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+
+
+def test_post_enrollment_voice_reference_save_does_not_require_transcript():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService(
+        enrollment_results=[
+            VoiceEnrollmentResult(
+                saved=True,
+                reason="saved",
+                person_id="person-1",
+                attempt_kind="silent",
+            )
+        ]
+    )
+    agent._maybe_handle_tool_side_effects(
+        "enroll_visible_person",
+        {"success": True, "person_id": "person-1"},
+    )
+    turn = _make_turn(
+        "rt-post-enroll-no-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        input_audio_pcm16=b"\x10\x00" * 32000,
+        trimmed_input_audio_pcm16=b"\x10\x00" * 32000,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id="person-1",
+            face_snapshot={"recognized_count": 1, "unknown_count": 0},
+        ),
+    )
+
+    agent._maybe_capture_voice_reference(turn)
+
+    assert "person-1" not in agent._pending_voice_enrollments
+    assert agent.speaker_service.has_reference("person-1") is True
+    assert "transcript" not in agent.speaker_service.calls[0]
+
+
+def test_voice_reference_capture_recovers_from_live_face_cache_when_frozen_primary_missing():
+    agent = _make_agent()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                bbox_area=42,
+            )
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+    agent.speaker_service = _FakeSpeakerService(
+        enrollment_results=[
+            VoiceEnrollmentResult(
+                saved=True,
+                reason="saved",
+                person_id="person-1",
+                attempt_kind="silent",
+            )
+        ]
+    )
+    agent._maybe_handle_tool_side_effects(
+        "enroll_visible_person",
+        {"success": True, "person_id": "person-1"},
+    )
+    turn = _make_turn(
+        "rt-live-face-recover",
+        primary_face_person_id=None,
+        owner_id=None,
+        input_audio_pcm16=b"\x10\x00" * 32000,
+        trimmed_input_audio_pcm16=b"\x10\x00" * 32000,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id=None,
+            owner_id=None,
+            face_snapshot={"recognized_count": 0, "unknown_count": 0},
+        ),
+    )
+    turn.user_transcript = "hello my name is alice and i work on robot perception systems"
+
+    agent._maybe_capture_voice_reference(turn)
+
+    assert "person-1" not in agent._pending_voice_enrollments
+    assert agent.speaker_service.has_reference("person-1") is True
+
+
+def test_input_transcription_completed_does_not_retry_voice_enrollment_for_finalized_turn():
+    agent = _make_agent()
+    agent.speaker_service = _FakeSpeakerService(
+        enrollment_results=[
+            VoiceEnrollmentResult(
+                saved=True,
+                reason="saved",
+                person_id="person-1",
+                attempt_kind="silent",
+            )
+        ]
+    )
+    agent._maybe_handle_tool_side_effects(
+        "enroll_visible_person",
+        {"success": True, "person_id": "person-1"},
+    )
+    turn = _make_turn(
+        "rt-enroll-late-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        input_audio_pcm16=b"\x10\x00" * 32000,
+        trimmed_input_audio_pcm16=b"\x10\x00" * 32000,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id="person-1",
+            face_snapshot={"recognized_count": 1, "unknown_count": 0},
+        ),
+    )
+    turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_item_id_to_turn(turn, "user-item-enroll")
+    turn.user_item_id = "user-item-enroll"
+    agent._maybe_capture_voice_reference(turn)
+    assert "person-1" not in agent._pending_voice_enrollments
+    assert agent.speaker_service.has_reference("person-1") is True
+    assert len(agent.speaker_service.calls) == 1
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "user-item-enroll",
+            "transcript": "hello my name is alice and i build robots today",
+        }
+    )
+
+    assert turn.user_transcript == "hello my name is alice and i build robots today"
+    assert "person-1" not in agent._pending_voice_enrollments
+    assert agent.speaker_service.has_reference("person-1") is True
+    assert len(agent.speaker_service.calls) == 1
+
+
+def test_late_input_transcription_adds_finalized_audio_turn_to_preference_segment():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-late-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    turn.assistant_transcript = "Mochi sounds sweet."
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_item_id_to_turn(turn, "user-item-pref")
+    turn.user_item_id = "user-item-pref"
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+    assert seen == []
+    assert turn.preference_noted is False
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "user-item-pref",
+            "transcript": "my dog is named mochi",
+        }
+    )
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+    assert seen[0].turns[0].user_text == "my dog is named mochi"
+    assert seen[0].turns[0].assistant_text == "Mochi sounds sweet."
+
+
+def test_late_input_transcription_can_bind_finalized_pending_audio_turn():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-unbound-late-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    turn.finalized = True
+    turn.assistant_transcript = "Got it, Mochi."
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._pending_audio_turn_req_ids.append(turn.req_id)
+
+    agent._maybe_note_preference_turn(turn)
+    assert turn.preference_noted is False
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "late-user-item-pref",
+            "transcript": "my dog is named mochi",
+        }
+    )
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert turn.user_item_id == "late-user-item-pref"
+    assert agent._item_id_to_req_id["late-user-item-pref"] == turn.req_id
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+
+
+def test_preference_turn_without_owner_id_writes_nothing():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-none",
+        owner_id=None,
+        audio_speaker_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id=None,
+            audio_speaker_id=None,
+        ),
+    )
+    turn.user_transcript = "hello there"
+    turn.assistant_transcript = "hi"
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert seen == []
+    assert turn.preference_noted is False
+
+
+def test_preference_turn_missing_owner_can_be_retried_after_resolution():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-owner-late",
+        owner_id=None,
+        audio_speaker_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            primary_face_person_id="person-1",
+            owner_id=None,
+            audio_speaker_id=None,
+        ),
+    )
+    turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    turn.user_transcript = "my dog is luna"
+    turn.assistant_transcript = "Luna sounds sweet."
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    agent._maybe_note_preference_turn(turn)
+    assert turn.preference_noted is False
+
+    turn.owner_id = "person-1"
+    turn.context_snapshot.owner_id = "person-1"
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+    assert seen[0].turns[0].user_text == "my dog is luna"

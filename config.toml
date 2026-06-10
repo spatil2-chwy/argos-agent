@@ -1,0 +1,70 @@
+[vendor]
+simple_model = "openai"
+complex_model = "openai"
+embeddings_model = "openai"
+
+[aws]
+simple_model = "anthropic.claude-3-haiku-20240307-v1:0"
+complex_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+embeddings_model = "amazon.titan-embed-text-v1"
+region_name = "us-east-1"
+
+[openai]
+simple_model = "gpt-4.1"
+complex_model = "gpt-4.1"
+embeddings_model = "text-embedding-3-small"
+base_url = "https://api.openai.com/v1/"
+
+[ollama]
+simple_model = "llama3.2"
+complex_model = "llama3.1:70b"
+embeddings_model = "llama3.2"
+base_url = "http://localhost:11434"
+
+[tracing]
+project = "argos"
+
+[tracing.langfuse]
+use_langfuse = false
+host = "http://localhost:3000"
+
+[tracing.langsmith]
+use_langsmith = false
+host = "https://api.smith.langchain.com"
+
+[asr]
+# Audio input device
+recording_device_name = "pulse"
+
+# Transcription model: "LocalWhisper" or "OpenAIWhisper"
+transcription_model = "OpenAIWhisper"
+
+# Language for transcription
+language = "en"
+
+# Voice Activity Detection (VAD)
+vad_model = "SileroVAD"
+vad_threshold = 0.8
+silence_grace_period = 0.3
+
+# Wake word (optional)
+use_wake_word = false
+wake_word_model = ""
+wake_word_threshold = 0.5
+wake_word_model_name = ""
+
+# Local Whisper settings (only used if transcription_model = "LocalWhisper")
+transcription_model_name = "tiny"
+
+# OpenAI Whisper settings (only used if transcription_model = "OpenAIWhisper")
+openai_whisper_model = "whisper-1"
+
+[tts]
+# TTS vendor: "KokoroTTS" or "OpenAITTS"
+vendor = "OpenAITTS"
+
+# OpenAI TTS settings (only used if vendor = "OpenAITTS")
+openai_voice = "fable"
+
+# Speaker device (use "pulse" for PulseAudio default, or a specific device name)
+speaker_device_name = "pulse"

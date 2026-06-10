@@ -1,0 +1,52 @@
+[tool.poetry]
+name = "argos_runtime"
+version = "0.1.0"
+description = "Standalone Poetry environment for the Argos realtime runtime."
+readme = "README.md"
+authors = ["RobotecAI"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10, <3.13"
+torch = { version = "2.7.1", source = "pytorch-cu128" }
+torchvision = { version = "0.22.1", source = "pytorch-cu128" }
+torchaudio = { version = "2.7.1", source = "pytorch-cu128" }
+pytest = "^8.2.0"
+pytest-timeout = "^2.3.1"
+pytest-cov = "^7.0.0"
+PyYAML = "^6.0.2"
+tomli = "^2.0.1"
+rapidfuzz = "^3.13.0"
+snowflake-connector-python = "^4.4.0"
+websocket-client = "^1.8.0"
+eclipse-zenoh = ">=1.0,<2.0"
+chromadb = "0.4.24"
+posthog = ">=2.4,<6"
+onnxruntime = ">=1.20.1,<1.24"
+speechbrain = ">=1.0.0,<2.0.0"
+sounddevice = "^0.4.7"
+requests = "^2.32.2"
+pillow = "^11.0.0"
+opencv-python-headless = ">=4.10,<4.12"
+langchain-core = "^0.3"
+langchain-community = "*"
+langchain-openai = "*"
+faiss-cpu = "*"
+pypdf = "^5.4.0"
+docx2txt = "*"
+openwakeword = { git = "https://github.com/maciejmajek/openWakeWord.git", branch = "chore/remove-tflite-backend" }
+coloredlogs = "^15.0.1"
+
+# Face embedding remains a manual add-on for now: facenet-pytorch 2.6.0
+# advertises older torch/torchvision bounds than the Blackwell-capable stack
+# used by Argos. Install it manually with --no-deps after Poetry resolves the
+# runtime torch/torchvision pair.
+
+[[tool.poetry.source]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
