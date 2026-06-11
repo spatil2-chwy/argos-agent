@@ -26,8 +26,6 @@ There is no separate ASR process and no separate TTS process in the supported pa
 
 - `run_profile.py`
   Supported single-process launcher.
-- `run_agent.py`
-  Direct realtime runtime entrypoint.
 - `argos_src/agent/factory.py`
   Wires face runtime, nav state, battery cache, tools, bridges, coalescer, and engagement state.
 - `argos_src/agent/agent_runtime.py`

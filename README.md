@@ -19,7 +19,6 @@ Canonical operator guide: `docs/launch.md`
 ```text
 .
 ├── run_profile.py
-├── run_agent.py
 ├── pyproject.toml
 ├── poetry.lock
 ├── docs/

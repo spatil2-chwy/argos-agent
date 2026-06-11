@@ -90,15 +90,11 @@ If startup succeeds, you should see the runtime print:
 
 ## Simplest Mental Model
 
-Use `run_profile.py` when you want the normal supported path.
-
-Use `run_agent.py` only if you specifically want to run the realtime runtime entrypoint directly:
+Use `run_profile.py` for the Argos realtime runtime:
 
 ```bash
-python3 run_agent.py --profile static_interaction
+python3 run_profile.py --profile static_interaction
 ```
-
-In practice, `run_profile.py` is the easier operator command.
 
 ## First Bring-Up Checklist
 
