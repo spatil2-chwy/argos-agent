@@ -28,49 +28,49 @@ Face and speaker embeddings use ChromaDB. Social memory lives in
 | `argos_src/identity/manage_identity.py` | Operator CLI for listing, showing, and deleting identities plus linked embeddings. |
 | `argos_src/memory/store.py` | SQLite-backed source-aware memory items for people and sites. |
 | `argos_src/memory/manage_memory.py` | Operator CLI for inspecting person/site memory items. |
-| `argos_src/embedding_stores/face_store.py` | Face embedding collection keyed by `person_id`. |
-| `argos_src/embedding_stores/speaker_store.py` | Speaker reference collection keyed by `person_id`. |
+| `argos_src/identity/embeddings/face_store.py` | Face embedding collection keyed by `person_id`. |
+| `argos_src/identity/embeddings/speaker_store.py` | Speaker reference collection keyed by `person_id`. |
 | `argos_src/face_recognition/store.py` | Face recognition store that wires face embeddings to identity rows. |
 | `argos_src/speaker_recognition/manage_voice.py` | Operator CLI for listing and showing speaker references. |
 
 ## Operator Commands
 
-From `argos_src`:
+From the repo root:
 
 ```bash
-python3 identity/manage_identity.py --list
-python3 identity/manage_identity.py --show "Your Name"
-python3 identity/manage_identity.py --delete "Your Name"
-python3 identity/manage_identity.py --delete person_your_name_20260505_123456 -y
+python3 -m argos_src.identity.manage_identity --list
+python3 -m argos_src.identity.manage_identity --show "Your Name"
+python3 -m argos_src.identity.manage_identity --delete "Your Name"
+python3 -m argos_src.identity.manage_identity --delete person_your_name_20260505_123456 -y
 ```
 
 Inspect memory separately:
 
 ```bash
-python3 memory/manage_memory.py --person "Your Name"
-python3 memory/manage_memory.py --site BOS3
-python3 memory/manage_memory.py --person "Your Name" --site BOS3 --prompt
-python3 memory/manage_memory.py --person person_your_name_20260505_123456 --all --json
+python3 -m argos_src.memory.manage_memory --person "Your Name"
+python3 -m argos_src.memory.manage_memory --site BOS3
+python3 -m argos_src.memory.manage_memory --person "Your Name" --site BOS3 --prompt
+python3 -m argos_src.memory.manage_memory --person person_your_name_20260505_123456 --all --json
 ```
 
 ## Fresh Local Reset
 
 After the identity/memory split, old local identity databases that still contain
-social-memory columns are not supported. For a clean local reset from `argos_src`,
-remove the identity DB, both embedding DB directories, and the memory DB:
+social-memory columns are not supported. For a clean local reset from the repo
+root, remove the identity DB, both embedding DB directories, and the memory DB:
 
 ```bash
-rm -rf identity/db/identity.sqlite3 face_recognition/db speaker_recognition/db memory/db
+rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory
 ```
 
 The next runtime/enrollment run recreates the current schemas:
 
-- `identity/db/identity.sqlite3`: identity-only SQLite
-- `face_recognition/db`: ChromaDB face embeddings
-- `speaker_recognition/db`: ChromaDB speaker embeddings
-- `memory/db/memory.sqlite3`: source-aware memory SQLite
+- `var/identity/identity.sqlite3`: identity-only SQLite
+- `var/face_recognition`: ChromaDB face embeddings
+- `var/speaker_recognition`: ChromaDB speaker embeddings
+- `var/memory/memory.sqlite3`: source-aware memory SQLite
 
-`identity/manage_identity.py --delete` removes:
+`argos_src.identity.manage_identity --delete` removes:
 
 - the identity row and aliases
 - the face embedding, if present

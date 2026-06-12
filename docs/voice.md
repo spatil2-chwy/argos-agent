@@ -2,9 +2,9 @@
 
 Talk to your Go2 robot with the Argos realtime speech runtime: direct microphone audio in, direct speaker audio out, same-session transcription for observability/memory, and realtime tool calling in one persistent session.
 
-Use [launch.md](/home/spatil2/rai/docs/launch.md) for setup and bring-up.
-Use [observability.md](/home/spatil2/rai/docs/observability.md) for latency debugging.
-Use [speaker_recognition.md](/home/spatil2/rai/docs/speaker_recognition.md) for speaker ownership and voice enrollment details.
+Use [launch.md](/home/spatil2/argos-agent/docs/launch.md) for setup and bring-up.
+Use [observability.md](/home/spatil2/argos-agent/docs/observability.md) for latency debugging.
+Use [speaker_recognition.md](/home/spatil2/argos-agent/docs/speaker_recognition.md) for speaker ownership and voice enrollment details.
 
 ## Example
 

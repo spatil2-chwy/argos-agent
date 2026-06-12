@@ -11,9 +11,9 @@ from argos_src.speaker_recognition.models import SpeakerRecognitionPolicy
 
 
 def _load_service_module(monkeypatch):
-    store_mod = types.ModuleType("argos_src.embedding_stores.speaker_store")
+    store_mod = types.ModuleType("argos_src.identity.embeddings.speaker_store")
     store_mod.SpeakerEmbeddingStore = object
-    monkeypatch.setitem(sys.modules, "argos_src.embedding_stores.speaker_store", store_mod)
+    monkeypatch.setitem(sys.modules, "argos_src.identity.embeddings.speaker_store", store_mod)
 
     module_name = "test_argos_speaker_recognition_service_module"
     module_path = (

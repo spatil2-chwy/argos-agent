@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("chromadb")
 
-from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 from argos_src.speaker_recognition.manage_voice import (
     list_voice_references,
     show_voice_reference,

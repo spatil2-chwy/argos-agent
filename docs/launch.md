@@ -27,7 +27,7 @@ That starts one process which owns:
 Prepare the Argos environment:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 poetry install
 source setup_shell.sh
 python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
@@ -36,7 +36,7 @@ python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
 You also need:
 
 - `OPENAI_API_KEY` exported in the shell that will run Argos
-- the dedicated Argos Poetry environment installed with `cd ~/rai && poetry install`
+- the dedicated Argos Poetry environment installed with `cd ~/argos-agent && poetry install`
 - working microphone and speaker devices on the host machine
 
 `setup_shell.sh` is the canonical Argos activation path. It activates the
@@ -57,7 +57,7 @@ packages intact.
 If you have not prepared the environment yet:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 poetry install
 source setup_shell.sh
 python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
@@ -74,7 +74,7 @@ configured robot transport.
 Terminal 2: Argos realtime runtime
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 source setup_shell.sh
 export OPENAI_API_KEY=...
 export ARGOS_ROBOT_TRANSPORT=zenoh
@@ -154,7 +154,7 @@ The supported live launcher does not currently expose `--input-device` or `--out
 
 If you need to change audio devices, edit the retained profile:
 
-[static_interaction.yaml](/home/spatil2/rai/argos_src/config/profiles/static_interaction.yaml)
+[static_interaction.yaml](/home/spatil2/argos-agent/config/profiles/static_interaction.yaml)
 
 The relevant fields are:
 
@@ -172,10 +172,10 @@ For a supported sanity path, start the normal runtime and use the latency logs i
 parallel:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 export OPENAI_API_KEY=...
 python3 run_profile.py --profile static_interaction
-python3 observability/latency_tail.py --follow --component realtime
+python3 -m argos_src.observability.latency_tail --follow --component realtime
 ```
 
 That is still the best way to separate whether a failure is:
@@ -197,11 +197,11 @@ when you want to delete a person completely.
 Manage identities and linked embeddings:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 source setup_shell.sh
-python3 identity/manage_identity.py --list
-python3 identity/manage_identity.py --show "Your Name"
-python3 identity/manage_identity.py --delete "Your Name"
+python3 -m argos_src.identity.manage_identity --list
+python3 -m argos_src.identity.manage_identity --show "Your Name"
+python3 -m argos_src.identity.manage_identity --delete "Your Name"
 ```
 
 The identity CLI accepts either:
@@ -209,7 +209,7 @@ The identity CLI accepts either:
 - a human name / alias from the identity store, or
 - a raw `person_id`
 
-Use [speaker_recognition.md](/home/spatil2/rai/docs/speaker_recognition.md) if
+Use [speaker_recognition.md](/home/spatil2/argos-agent/docs/speaker_recognition.md) if
 you need to inspect saved voice-reference metadata.
 
 ## Camera Preview
@@ -224,7 +224,7 @@ If you are moving from the old identity-owned memory schema to the current
 identity/memory split, reset local runtime storage once before smoke testing:
 
 ```bash
-rm -rf identity/db/identity.sqlite3 face_recognition/db speaker_recognition/db memory/db
+rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory
 ```
 
 After bring-up, these are the highest-value manual checks:
@@ -234,7 +234,7 @@ After bring-up, these are the highest-value manual checks:
 3. Internal-event turn: trigger a nav or battery event and confirm the robot still responds naturally.
 4. Tool call: ask for something that should call a known tool, like a trick or visual inspection.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.
-6. Preference extraction: have a short recognized-speaker conversation, then inspect memory later with `python3 memory/manage_memory.py --person "Your Name"`.
+6. Preference extraction: have a short recognized-speaker conversation, then inspect memory later with `python3 -m argos_src.memory.manage_memory --person "Your Name"`.
 
 ## Targeted Regression Tests
 
@@ -258,8 +258,8 @@ Latency logs are written to `logs/latency.log`.
 Useful helpers:
 
 ```bash
-python3 argos_src/observability/latency_tail.py --follow
-python3 argos_src/observability/latency_report.py
+python3 -m argos_src.observability.latency_tail --follow
+python3 -m argos_src.observability.latency_report
 ```
 
 The current runtime emits realtime-oriented events such as:
@@ -269,7 +269,7 @@ The current runtime emits realtime-oriented events such as:
 - `response_create`
 - `first_audio_latency_s`
 
-See [observability.md](/home/spatil2/rai/docs/observability.md) for details.
+See [observability.md](/home/spatil2/argos-agent/docs/observability.md) for details.
 
 Two important runtime notes:
 
@@ -326,7 +326,7 @@ my_kb/
 Build one knowledge base:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 python3 -m argos_src.knowledge.build_faiss chewy_docs
 ```
 

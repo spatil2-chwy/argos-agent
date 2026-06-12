@@ -10,7 +10,7 @@ from typing import Any, Type
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from argos_src.llm.factory import get_embeddings_model
+from argos_src.integrations.openai_models import get_embeddings_model
 from argos_src.tools.base import BaseTool
 
 

@@ -6,5 +6,5 @@ from pathlib import Path
 
 
 DEFAULT_MEMORY_DB_PATH = (
-    Path(__file__).resolve().parents[1] / "memory" / "db" / "memory.sqlite3"
+    Path(__file__).resolve().parents[2] / "var" / "memory" / "memory.sqlite3"
 )

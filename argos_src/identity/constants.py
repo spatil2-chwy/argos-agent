@@ -7,5 +7,5 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_IDENTITY_DB_PATH = str(
-    (REPO_ROOT / "argos_src" / "identity" / "db" / "identity.sqlite3").resolve()
+    (REPO_ROOT / "var" / "identity" / "identity.sqlite3").resolve()
 )

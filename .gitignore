@@ -160,6 +160,7 @@ cython_debug/
 #.idea/
 
 logs/
+var/
 .vscode/
 
 !examples/imgs/*.md

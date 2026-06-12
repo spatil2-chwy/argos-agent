@@ -21,14 +21,26 @@ Canonical operator guide: `docs/launch.md`
 ├── run_profile.py
 ├── pyproject.toml
 ├── poetry.lock
+├── config/
+│   └── profiles/
+├── resources/
+│   ├── nav_locations/
+│   ├── prompts/
+│   └── wake_words/
+├── scripts/
+│   └── labs/
+├── var/              # ignored local runtime state
 ├── docs/
 └── argos_src/
-    ├── config/profiles/
-    ├── runtime/
-    ├── observability/
     ├── agent/
-    ├── nav_support/
-    │   └── locations.py
+    ├── face_recognition/
+    ├── identity/
+    │   └── embeddings/
+    ├── integrations/
+    ├── media/
+    ├── memory/
+    ├── robot_api/
+    ├── runtime/
     └── tools/
         ├── common/
         └── unitree_go2/
@@ -40,5 +52,8 @@ Canonical operator guide: `docs/launch.md`
 - Architecture: `docs/architecture.md`
 - Voice/runtime notes: `docs/voice.md`
 - Face recognition: `docs/face_recognition.md`
+- Speaker recognition: `docs/speaker_recognition.md`
+- Identity store: `docs/identity_store.md`
+- Memory store: `docs/memory_store.md`
 - Employee directory: `docs/employee_directory.md`
 - Observability: `docs/observability.md`

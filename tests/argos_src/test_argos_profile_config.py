@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
-from argos_src.profile_config import DEFAULT_FACE_DB_PATH, ProfileValidationError, _parse_profile
+from argos_src.profile_config import (
+    DEFAULT_FACE_DB_PATH,
+    ProfileValidationError,
+    _parse_profile,
+    resolve_locations_file,
+    resolve_profile_path,
+    resolve_prompt_file,
+    resolve_wake_word_model,
+)
 
 
 def test_robot_profile_parses_bridge_settings():
@@ -141,6 +149,23 @@ def test_realtime_prompt_file_is_loaded_from_realtime_namespace():
     )
 
     assert profile.realtime.prompt_file == "static_interaction_prompt.md"
+
+
+def test_bare_resource_names_resolve_outside_source_package():
+    repo_root = Path(__file__).resolve().parents[2]
+
+    assert resolve_profile_path("static_interaction") == (
+        repo_root / "config" / "profiles" / "static_interaction.yaml"
+    )
+    assert resolve_prompt_file("static_interaction_prompt.md") == (
+        repo_root / "resources" / "prompts" / "static_interaction_prompt.md"
+    )
+    assert resolve_locations_file("lab.json") == (
+        repo_root / "resources" / "nav_locations" / "lab.json"
+    )
+    assert resolve_wake_word_model("hey puffle") == str(
+        repo_root / "resources" / "wake_words" / "Hey_Puffle.onnx"
+    )
 
 
 def test_embodiment_gesture_defaults_are_disabled():
@@ -285,7 +310,7 @@ def test_face_db_path_resolves_from_repo_root_not_cwd():
         {
             "name": "face-db-path",
             "face_recognition": {
-                "db_path": "argos_src/face_recognition/db",
+                "db_path": "var/face_recognition",
             },
         },
         profile_path=Path("/tmp/face-db-path.yaml"),
@@ -346,7 +371,7 @@ def test_memory_store_path_defaults_and_resolves_from_repo_root():
         {
             "name": "memory-db-path",
             "memory_store": {
-                "db_path": "argos_src/memory/db/memory.sqlite3",
+                "db_path": "var/memory/memory.sqlite3",
             },
         },
         profile_path=Path("/tmp/memory-db-path.yaml"),
@@ -354,6 +379,43 @@ def test_memory_store_path_defaults_and_resolves_from_repo_root():
     )
 
     assert profile.memory_store.db_path == str(DEFAULT_MEMORY_DB_PATH)
+
+
+def test_runtime_state_defaults_live_outside_source_package():
+    profile = _parse_profile(
+        {"name": "runtime-state-defaults"},
+        profile_path=Path("/tmp/runtime-state-defaults.yaml"),
+        framework_config={},
+    )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    assert profile.identity_store.db_path == str(
+        repo_root / "var" / "identity" / "identity.sqlite3"
+    )
+    assert profile.memory_store.db_path == str(
+        repo_root / "var" / "memory" / "memory.sqlite3"
+    )
+    assert profile.face_recognition.db_path == str(repo_root / "var" / "face_recognition")
+    assert profile.speaker_recognition.policy.db_path == str(
+        repo_root / "var" / "speaker_recognition"
+    )
+
+
+def test_explicit_runtime_state_paths_are_preserved():
+    profile = _parse_profile(
+        {
+            "name": "explicit-runtime-state",
+            "identity_store": {"db_path": "/tmp/argos/identity.sqlite3"},
+            "memory_store": {"db_path": "/tmp/argos/memory.sqlite3"},
+            "face_recognition": {"db_path": "/tmp/argos/faces"},
+        },
+        profile_path=Path("/tmp/explicit-runtime-state.yaml"),
+        framework_config={},
+    )
+
+    assert profile.identity_store.db_path == "/tmp/argos/identity.sqlite3"
+    assert profile.memory_store.db_path == "/tmp/argos/memory.sqlite3"
+    assert profile.face_recognition.db_path == "/tmp/argos/faces"
 
 
 def test_slack_memory_profile_parses_channel_wiring():

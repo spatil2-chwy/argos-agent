@@ -86,7 +86,7 @@ def list_voice_references(
     speaker_db_path: str = DEFAULT_SPEAKER_DB_PATH,
     identity_db_path: str = DEFAULT_IDENTITY_DB_PATH,
 ) -> None:
-    from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+    from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 
     speaker_db = SpeakerEmbeddingStore(db_path=speaker_db_path)
     name_map = _load_identity_name_map(identity_db_path=identity_db_path)
@@ -124,7 +124,7 @@ def show_voice_reference(
     speaker_db_path: str = DEFAULT_SPEAKER_DB_PATH,
     identity_db_path: str = DEFAULT_IDENTITY_DB_PATH,
 ) -> int:
-    from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+    from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 
     speaker_db = SpeakerEmbeddingStore(db_path=speaker_db_path)
     person_id = _resolve_reference_target(
@@ -174,8 +174,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python speaker_recognition/manage_voice.py --list
-  python speaker_recognition/manage_voice.py --show "Sakshee Patil"
+  python -m argos_src.speaker_recognition.manage_voice --list
+  python -m argos_src.speaker_recognition.manage_voice --show "Sakshee Patil"
         """,
     )
     parser.add_argument("--list", action="store_true", help="List all saved voice references")

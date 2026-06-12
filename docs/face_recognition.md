@@ -339,7 +339,7 @@ The canonical face-derived name in turn state is `primary_face_person_id`.
 
 Main config lives in:
 
-`argos_src/config/profiles/static_interaction.yaml`
+`config/profiles/static_interaction.yaml`
 
 ```yaml
 face_recognition:
@@ -448,15 +448,15 @@ poetry run pytest \
 Run standalone registration diagnostics without saving:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 source setup_shell.sh
-poetry run python -m argos_src.helpers.face_registration_lab --frames 5
+poetry run python -m scripts.labs.face_registration_lab --frames 5
 ```
 
 Try different preprocessing thresholds:
 
 ```bash
-poetry run python -m argos_src.helpers.face_registration_lab \
+poetry run python -m scripts.labs.face_registration_lab \
   --min-contrast 12 \
   --min-brightness 30 \
   --max-face-depth-m 2.5
@@ -465,7 +465,7 @@ poetry run python -m argos_src.helpers.face_registration_lab \
 Actually save an enrolled face from the helper:
 
 ```bash
-poetry run python -m argos_src.helpers.face_registration_lab \
+poetry run python -m scripts.labs.face_registration_lab \
   --name "Your Name" \
   --enroll
 ```
@@ -473,13 +473,13 @@ poetry run python -m argos_src.helpers.face_registration_lab \
 Run standalone recognition once:
 
 ```bash
-poetry run python -m argos_src.helpers.face_recognition_lab --once
+poetry run python -m scripts.labs.face_recognition_lab --once
 ```
 
 Run recognition in a loop and include enrollment-quality metrics for each face:
 
 ```bash
-poetry run python -m argos_src.helpers.face_recognition_lab \
+poetry run python -m scripts.labs.face_recognition_lab \
   --loop \
   --interval 0.5 \
   --include-enrollment-quality
@@ -488,18 +488,18 @@ poetry run python -m argos_src.helpers.face_recognition_lab \
 Start the supported Argos profile:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 python3 run_profile.py --profile static_interaction
 ```
 
 Manage identities:
 
 ```bash
-cd ~/rai
-python3 identity/manage_identity.py --list
-python3 identity/manage_identity.py --show "Your Name"
-python3 identity/manage_identity.py --delete "Your Name"
+cd ~/argos-agent
+python3 -m argos_src.identity.manage_identity --list
+python3 -m argos_src.identity.manage_identity --show "Your Name"
+python3 -m argos_src.identity.manage_identity --delete "Your Name"
 ```
 
-`identity/manage_identity.py --delete` removes the identity row plus linked face
+`argos_src.identity.manage_identity --delete` removes the identity row plus linked face
 and speaker embeddings.

@@ -39,6 +39,19 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `argos_src/agent/runtime_context.py`
   Builds dynamic per-turn instruction blocks.
 
+## Repository Layout
+
+- `argos_src/`
+  Importable runtime source only.
+- `config/profiles/`
+  Scenario YAML profiles such as `static_interaction`.
+- `resources/`
+  Prompt files, wake-word ONNX models, and navigation-location JSON.
+- `var/`
+  Ignored local runtime state for identity, memory, face, and speaker stores.
+- `scripts/labs/`
+  Operator/lab tools that exercise runtime services without starting the agent.
+
 ## Human Context and Memory Path
 
 The face/identity subsystem is not a sidecar prompt helper. It is part of the

@@ -23,9 +23,9 @@ def _load_factory_module(monkeypatch):
     realtime_mod.RealtimeRobotAgent = object
     monkeypatch.setitem(sys.modules, "argos_src.agent.agent_runtime", realtime_mod)
 
-    prompt_loader_mod = types.ModuleType("argos_src.prompts.loader")
+    prompt_loader_mod = types.ModuleType("argos_src.resource_paths")
     prompt_loader_mod.load_system_prompt = lambda *_args, **_kwargs: "prompt"
-    monkeypatch.setitem(sys.modules, "argos_src.prompts.loader", prompt_loader_mod)
+    monkeypatch.setitem(sys.modules, "argos_src.resource_paths", prompt_loader_mod)
 
     battery_mod = types.ModuleType("argos_src.runtime.battery_state")
     battery_mod.BatteryStateCache = object

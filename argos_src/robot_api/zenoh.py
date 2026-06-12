@@ -14,7 +14,6 @@ from typing import Any, Callable
 
 import numpy as np
 
-from argos_src.robot_api.client import RobotClient
 from argos_src.robot_api.errors import RobotBridgeError, RobotBridgeTimeout
 from argos_src.robot_api.models import (
     BatterySnapshot,

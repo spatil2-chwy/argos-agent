@@ -82,7 +82,7 @@ from argos_src.speaker_recognition.models import (
     SpeakerResolutionResult,
 )
 from argos_src.speaker_recognition.policy import resolve_owner_id
-from argos_src.audio import OpenWakeWord, SileroVAD
+from argos_src.media.audio_detection import OpenWakeWord, SileroVAD
 
 
 logger = logging.getLogger(__name__)
@@ -217,6 +217,11 @@ class RealtimeRobotAgent(
         self._current_visible_face_person_ids: tuple[str, ...] = ()
         self._current_turn_audio_chunks: list[bytes] = []
         self._current_turn_vad_positive_blocks = 0
+        self._candidate_voice_blocks = 0
+        self._recording_preroll_chunks: deque[tuple[float, bytes, bytes]] = deque()
+        self._recording_gesture_queue: queue.Queue[bool] = queue.Queue()
+        self._recording_gesture_lock = threading.Lock()
+        self._recording_gesture_thread: Optional[threading.Thread] = None
         self._resample_state: Any = None
         self._wake_window_until = 0.0
         self._input_suppressed_until_s = 0.0

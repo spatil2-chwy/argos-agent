@@ -15,7 +15,7 @@ def test_unified_delete_removes_identity_face_and_speaker(tmp_path):
     from argos_src.face_recognition.store import FaceRecognitionStore
     from argos_src.identity import IdentityStore
     from argos_src.identity.manage_identity import delete_identity
-    from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+    from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 
     identity_path = tmp_path / "identity.sqlite3"
     face_path = tmp_path / "face_db"
@@ -51,7 +51,7 @@ def test_unified_delete_removes_identity_face_and_speaker(tmp_path):
 
 @pytest.mark.skipif(not HAS_CHROMADB, reason="chromadb is not installed")
 def test_unified_delete_can_remove_orphan_face_embedding_by_person_id(tmp_path):
-    from argos_src.embedding_stores.face_store import FaceEmbeddingStore
+    from argos_src.identity.embeddings.face_store import FaceEmbeddingStore
     from argos_src.face_recognition.store import FaceRecognitionStore
     from argos_src.identity.manage_identity import delete_identity
 

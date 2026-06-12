@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import audioop
 import base64
+from collections import deque
 import queue
 import threading
 import time
@@ -21,9 +22,91 @@ from argos_src.speaker_recognition.policy import clip_stats
 AUDIO_DTYPE = "int16"
 VAD_SAMPLE_RATE = 16000
 PLAYBACK_ECHO_SUPPRESSION_SEC = 0.8
+RECORDING_PREROLL_SEC = 0.35
+RECORDING_START_CONFIRMATION_BLOCKS = 2
 
 
 class RealtimeAgentAudioMixin:
+    def _ensure_preroll_buffer_locked(self) -> deque[tuple[float, bytes, bytes]]:
+        buffer = getattr(self, "_recording_preroll_chunks", None)
+        if buffer is None:
+            buffer = deque()
+            self._recording_preroll_chunks = buffer
+        return buffer
+
+    def _remember_preroll_chunk_locked(
+        self,
+        *,
+        now_s: float,
+        raw_chunk: bytes,
+        audio_16k_pcm16: bytes,
+    ) -> None:
+        window_s = RECORDING_PREROLL_SEC
+        buffer = self._ensure_preroll_buffer_locked()
+        if window_s <= 0.0:
+            buffer.clear()
+            return
+        buffer.append((now_s, raw_chunk, audio_16k_pcm16))
+        cutoff = now_s - window_s
+        while buffer and buffer[0][0] < cutoff:
+            buffer.popleft()
+
+    def _take_preroll_chunks_locked(self, *, now_s: float) -> list[tuple[bytes, bytes]]:
+        window_s = RECORDING_PREROLL_SEC
+        buffer = self._ensure_preroll_buffer_locked()
+        cutoff = now_s - window_s
+        chunks = [
+            (raw_chunk, audio_16k_pcm16)
+            for chunk_at, raw_chunk, audio_16k_pcm16 in buffer
+            if chunk_at >= cutoff
+        ]
+        buffer.clear()
+        return chunks
+
+    def _set_recording_gesture_async(self, active: bool) -> None:
+        gesture_runtime = getattr(self, "gesture_runtime", None)
+        if gesture_runtime is None:
+            return
+        gesture_queue = getattr(self, "_recording_gesture_queue", None)
+        if gesture_queue is None:
+            gesture_queue = queue.Queue()
+            self._recording_gesture_queue = gesture_queue
+        gesture_lock = getattr(self, "_recording_gesture_lock", None)
+        if gesture_lock is None:
+            gesture_lock = threading.Lock()
+            self._recording_gesture_lock = gesture_lock
+        with gesture_lock:
+            worker = getattr(self, "_recording_gesture_thread", None)
+            if worker is None or not worker.is_alive():
+                worker = threading.Thread(
+                    target=self._recording_gesture_worker_loop,
+                    daemon=True,
+                )
+                self._recording_gesture_thread = worker
+                worker.start()
+        gesture_queue.put(bool(active))
+
+    def _recording_gesture_worker_loop(self) -> None:
+        gesture_queue = getattr(self, "_recording_gesture_queue", None)
+        if gesture_queue is None:
+            return
+        while not self._stop_event.is_set():
+            try:
+                active = gesture_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                gesture_runtime = getattr(self, "gesture_runtime", None)
+                if gesture_runtime is not None:
+                    gesture_runtime.set_recording_active(bool(active))
+            except Exception:
+                self.logger.exception(
+                    "Failed to %s listening gesture",
+                    "enable" if active else "finalize",
+                )
+            finally:
+                gesture_queue.task_done()
+
     def _speaker_audio_debug_payload(
         self,
         *,
@@ -165,16 +248,41 @@ class RealtimeAgentAudioMixin:
                 )
                 self._wake_window_until = wake_until
                 if allowed and voice_detected:
-                    self._start_recording_locked(
-                        now_s=now,
-                        admission_reason=admission_reason,
-                        interaction_state=interaction_state,
-                        wake_detected=bool(wake_detected),
+                    self._candidate_voice_blocks = (
+                        int(getattr(self, "_candidate_voice_blocks", 0) or 0) + 1
                     )
-                    self._audio_send_queue.put(raw_chunk)
-                    self._current_turn_audio_chunks.append(resampled)
-                    self._current_turn_vad_positive_blocks = 1
-                    self._last_voice_at = now
+                    confirmation_blocks = (
+                        1 if wake_detected else RECORDING_START_CONFIRMATION_BLOCKS
+                    )
+                    if self._candidate_voice_blocks >= confirmation_blocks:
+                        confirmed_voice_blocks = int(self._candidate_voice_blocks)
+                        pre_roll_chunks = self._take_preroll_chunks_locked(now_s=now)
+                        self._start_recording_locked(
+                            now_s=now,
+                            admission_reason=admission_reason,
+                            interaction_state=interaction_state,
+                            wake_detected=bool(wake_detected),
+                        )
+                        for pre_raw_chunk, pre_audio_16k_pcm16 in pre_roll_chunks:
+                            self._audio_send_queue.put(pre_raw_chunk)
+                            self._current_turn_audio_chunks.append(pre_audio_16k_pcm16)
+                        self._audio_send_queue.put(raw_chunk)
+                        self._current_turn_audio_chunks.append(resampled)
+                        self._current_turn_vad_positive_blocks = confirmed_voice_blocks
+                        self._last_voice_at = now
+                    else:
+                        self._remember_preroll_chunk_locked(
+                            now_s=now,
+                            raw_chunk=raw_chunk,
+                            audio_16k_pcm16=resampled,
+                        )
+                else:
+                    self._candidate_voice_blocks = 0
+                    self._remember_preroll_chunk_locked(
+                        now_s=now,
+                        raw_chunk=raw_chunk,
+                        audio_16k_pcm16=resampled,
+                    )
                 return
 
             self._audio_send_queue.put(raw_chunk)
@@ -203,11 +311,8 @@ class RealtimeAgentAudioMixin:
         self._current_visible_face_person_ids = self._get_current_visible_face_person_ids()
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
-        if self.gesture_runtime is not None:
-            try:
-                self.gesture_runtime.set_recording_active(True)
-            except Exception:
-                self.logger.exception("Failed to enable listening gesture")
+        self._candidate_voice_blocks = 0
+        self._set_recording_gesture_async(True)
         try:
             self._send_event({"type": "input_audio_buffer.clear"})
         except Exception:
@@ -234,11 +339,8 @@ class RealtimeAgentAudioMixin:
         audio_pcm16 = b"".join(self._current_turn_audio_chunks)
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
-        if self.gesture_runtime is not None:
-            try:
-                self.gesture_runtime.set_recording_active(False)
-            except Exception:
-                self.logger.exception("Failed to finalize listening gesture state")
+        self._candidate_voice_blocks = 0
+        self._set_recording_gesture_async(False)
         speech_end_perf_s = perf_now()
         speech_end_unix_s = now_s
         self._latency.emit(event="speech_end", speech_end_unix_s=speech_end_unix_s)

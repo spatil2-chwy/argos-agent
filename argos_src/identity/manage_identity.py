@@ -42,7 +42,7 @@ def _open_stores(
     face_db_path: str,
     speaker_db_path: str,
 ):
-    from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+    from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
     from argos_src.face_recognition.store import FaceRecognitionStore
     from argos_src.identity import IdentityStore
 
@@ -325,10 +325,10 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python identity/manage_identity.py --list
-  python identity/manage_identity.py --show "Sakshee Patil"
-  python identity/manage_identity.py --delete "Sakshee Patil"
-  python identity/manage_identity.py --delete person_sakshee_patil_20260504_152002 -y
+  python -m argos_src.identity.manage_identity --list
+  python -m argos_src.identity.manage_identity --show "Sakshee Patil"
+  python -m argos_src.identity.manage_identity --delete "Sakshee Patil"
+  python -m argos_src.identity.manage_identity --delete person_sakshee_patil_20260504_152002 -y
         """,
     )
     parser.add_argument("--list", action="store_true", help="List saved identities")

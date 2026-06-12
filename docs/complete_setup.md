@@ -190,7 +190,7 @@ Knowledge tooling is Argos-owned. Build or rebuild a local FAISS knowledge base
 with:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 python3 -m argos_src.knowledge.build_faiss chewy_docs
 ```
 

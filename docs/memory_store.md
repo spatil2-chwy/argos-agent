@@ -211,14 +211,14 @@ Encounter prompt lines include approximate age, for example:
 
 ## Inspection
 
-From `argos_src`:
+From the repo root:
 
 ```bash
-python3 memory/manage_memory.py --person "Sakshee Patil"
-python3 memory/manage_memory.py --site BOS3
-python3 memory/manage_memory.py --person "Sakshee Patil" --site BOS3 --prompt
-python3 memory/manage_memory.py --person person_sakshee_patil_20260513_150604 --all --json
-python3 memory/manage_memory.py --archive mem_abc123
+python3 -m argos_src.memory.manage_memory --person "Sakshee Patil"
+python3 -m argos_src.memory.manage_memory --site BOS3
+python3 -m argos_src.memory.manage_memory --person "Sakshee Patil" --site BOS3 --prompt
+python3 -m argos_src.memory.manage_memory --person person_sakshee_patil_20260513_150604 --all --json
+python3 -m argos_src.memory.manage_memory --archive mem_abc123
 ```
 
 Use `--all` when you want to inspect archived or expired rows.
@@ -230,12 +230,12 @@ prompt projection: identity `Directory` lines, memory `About`,
 Plain `--person` shows raw person rows; plain `--site` shows site rows plus
 recent same-site encounters for debugging.
 
-If `memory/manage_memory.py --person ...` reports an unsupported identity
+If `python3 -m argos_src.memory.manage_memory --person ...` reports an unsupported identity
 database schema, the local identity DB is still from the old identity-owned
-memory design. From `argos_src`, reset local runtime storage with:
+memory design. From the repo root, reset local runtime storage with:
 
 ```bash
-rm -rf identity/db/identity.sqlite3 face_recognition/db speaker_recognition/db memory/db
+rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory
 ```
 
 Then re-enroll faces/voices so the identity and embedding stores point at the

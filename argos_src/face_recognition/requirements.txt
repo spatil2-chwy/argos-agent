@@ -1,6 +1,6 @@
 # Manual face-model add-on for the Argos Poetry environment.
 # Install after:
-#   cd ~/rai
+#   cd ~/argos-agent
 #   poetry install
 #   source setup_shell.sh
 #

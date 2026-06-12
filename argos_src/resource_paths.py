@@ -1,8 +1,9 @@
-"""System prompt loading for the Argos realtime agent."""
+"""Resource path helpers for the Argos realtime runtime."""
 
 from pathlib import Path
 
-_PROMPTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_PROMPTS_DIR = REPO_ROOT / "resources" / "prompts"
 _PROMPT_PATH = _PROMPTS_DIR / "static_interaction_prompt.md"
 
 
@@ -24,7 +25,7 @@ def _with_existing_markdown_or_text(path: Path) -> Path:
 def resolve_prompt_path(path: Path | str | None = None) -> Path:
     """Resolve a prompt path.
 
-    Bare filenames are first looked up under argos_src/prompts/ so callers can
+    Bare filenames are first looked up under resources/prompts/ so callers can
     pass values like ``static_interaction_prompt.md`` without a long path.
     """
     if path is None:

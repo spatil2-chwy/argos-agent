@@ -8,7 +8,7 @@ Read this with:
 - `argos_src/speaker_recognition/service.py`
 - `argos_src/speaker_recognition/policy.py`
 - `argos_src/speaker_recognition/backend.py`
-- `argos_src/embedding_stores/speaker_store.py`
+- `argos_src/identity/embeddings/speaker_store.py`
 - `argos_src/speaker_recognition/manage_voice.py`
 
 This document explains the Argos speaker path:
@@ -58,7 +58,7 @@ successful face enrollment
 | `argos_src/speaker_recognition/service.py` | Main orchestration layer for query embedding lookup and voice reference storage. |
 | `argos_src/speaker_recognition/policy.py` | Audio preprocessing, clip stats, quality gates, and owner-resolution rules. |
 | `argos_src/speaker_recognition/backend.py` | SpeechBrain ECAPA backend wrapper. |
-| `argos_src/embedding_stores/speaker_store.py` | Persistent ChromaDB storage for one voice reference embedding per `person_id`. |
+| `argos_src/identity/embeddings/speaker_store.py` | Persistent ChromaDB storage for one voice reference embedding per `person_id`. |
 | `argos_src/identity/store.py` | Shared identity store used after speaker ownership resolves. |
 | `argos_src/memory/store.py` | Source-aware social/context memory store keyed by `person_id` or site. |
 | `argos_src/speaker_recognition/manage_voice.py` | CLI for listing and showing saved voice references. |
@@ -226,22 +226,22 @@ speech-start scene is what allows face ownership instead of dropping to
 List saved voice references:
 
 ```bash
-cd ~/rai
+cd ~/argos-agent
 source setup_shell.sh
-python3 speaker_recognition/manage_voice.py --list
+python3 -m argos_src.speaker_recognition.manage_voice --list
 ```
 
 Show one saved reference:
 
 ```bash
-python3 speaker_recognition/manage_voice.py --show "Your Name"
+python3 -m argos_src.speaker_recognition.manage_voice --show "Your Name"
 ```
 
 Delete one person and all linked embeddings:
 
 ```bash
-python3 identity/manage_identity.py --delete "Your Name"
-python3 identity/manage_identity.py --delete person_your_name_20260505_123456 -y
+python3 -m argos_src.identity.manage_identity --delete "Your Name"
+python3 -m argos_src.identity.manage_identity --delete person_your_name_20260505_123456 -y
 ```
 
 Both management CLIs accept either:

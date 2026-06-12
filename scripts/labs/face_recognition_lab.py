@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Standalone face-recognition lab.
 
-Run from `argos_src`:
+Run from the repo root:
 
     source setup_shell.sh
-    poetry run python -m argos_src.helpers.face_recognition_lab --once
-    poetry run python -m argos_src.helpers.face_recognition_lab --loop --interval 0.5
+    poetry run python -m scripts.labs.face_recognition_lab --once
+    poetry run python -m scripts.labs.face_recognition_lab --loop --interval 0.5
 
 Optional diagnostics:
 
-    poetry run python -m argos_src.helpers.face_recognition_lab --once --include-enrollment-quality
-    poetry run python -m argos_src.helpers.face_recognition_lab --once --disable-depth
+    poetry run python -m scripts.labs.face_recognition_lab --once --include-enrollment-quality
+    poetry run python -m scripts.labs.face_recognition_lab --once --disable-depth
 
 This uses the same Argos face detection, optional depth gate, embedding extraction,
 and face DB matching as the live system, but it does not start the realtime
@@ -29,7 +29,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from argos_src.helpers.face_lab_common import (
+from scripts.labs.face_lab_common import (
     add_enrollment_policy_args,
     add_profile_args,
     build_enrollment_policy,

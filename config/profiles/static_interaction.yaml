@@ -53,7 +53,7 @@ knowledge_bases:
     k: 4
 
 identity_store:
-  db_path: argos_src/identity/db/identity.sqlite3
+  db_path: var/identity/identity.sqlite3
 
 slack_memory:
   enabled: false
@@ -72,11 +72,10 @@ slack_memory:
 
 face_recognition:
   enabled: true
-  db_path: argos_src/face_recognition/db
+  db_path: var/face_recognition
   camera_topic: /camera/color/image_raw/compressed
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
-  publish_presence_topic: /go2/face_presence
   owner_turn:
     enabled: true
     camera_info_topic: /camera/color/camera_info
