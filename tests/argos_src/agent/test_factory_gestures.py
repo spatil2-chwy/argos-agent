@@ -4,10 +4,20 @@ import sys
 import threading
 import types
 
-from argos_src.profile_config import _parse_profile
+from argos_src.profile_config import _parse_profile as _raw_parse_profile
 
 
-class _FakeRobotClient:
+def _parse_profile(payload, *, profile_path, framework_config):
+    merged = {"manifest": "puffle"}
+    merged.update(payload)
+    return _raw_parse_profile(
+        merged,
+        profile_path=profile_path,
+        framework_config=framework_config,
+    )
+
+
+class _FakeProviderClient:
     pass
 
 
@@ -67,7 +77,7 @@ def test_factory_does_not_create_gesture_runtime_when_disabled(monkeypatch):
 
     runtime = factory_mod._create_gesture_runtime(
         scenario_profile=profile,
-        robot_client=_FakeRobotClient(),
+        robot_client=_FakeProviderClient(),
         engagement=_FakeEngagement(),
     )
 
@@ -96,7 +106,7 @@ def test_factory_creates_go2_gesture_runtime_when_enabled(monkeypatch):
         profile_path=Path("/tmp/factory-enabled.yaml"),
         framework_config={},
     )
-    robot_client = _FakeRobotClient()
+    robot_client = _FakeProviderClient()
     engagement = _FakeEngagement()
 
     runtime = factory_mod._create_gesture_runtime(
@@ -139,7 +149,7 @@ def test_factory_passes_individual_gesture_state_toggles(monkeypatch):
 
     runtime = factory_mod._create_gesture_runtime(
         scenario_profile=profile,
-        robot_client=_FakeRobotClient(),
+        robot_client=_FakeProviderClient(),
         engagement=_FakeEngagement(),
     )
 
@@ -167,7 +177,7 @@ def test_factory_skips_runtime_when_all_gesture_states_are_disabled(monkeypatch)
 
     runtime = factory_mod._create_gesture_runtime(
         scenario_profile=profile,
-        robot_client=_FakeRobotClient(),
+        robot_client=_FakeProviderClient(),
         engagement=_FakeEngagement(),
     )
 
@@ -178,7 +188,7 @@ def test_factory_startup_does_not_block_when_employee_directory_warmup_fails(mon
     factory_mod = _load_factory_module(monkeypatch)
     created_services = []
 
-    class _FakeRobotClient:
+    class _FakeProviderClient:
         def start(self):
             return None
 
@@ -227,7 +237,11 @@ def test_factory_startup_does_not_block_when_employee_directory_warmup_fails(mon
         def shutdown(self):
             self.stopped = True
 
-    monkeypatch.setattr(factory_mod, "create_robot_client", lambda **_kwargs: _FakeRobotClient())
+    monkeypatch.setattr(
+        factory_mod,
+        "create_provider_client",
+        lambda **_kwargs: _FakeProviderClient(),
+    )
     monkeypatch.setattr(factory_mod, "RealtimeRobotAgent", _FakeRealtimeRobotAgent)
     monkeypatch.setattr(
         factory_mod,

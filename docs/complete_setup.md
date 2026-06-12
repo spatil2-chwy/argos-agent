@@ -1,17 +1,17 @@
 # Argos Complete Setup
 
-This guide describes the ROS-agnostic Argos runtime setup. Argos talks to robot
-capabilities over Zenoh. ROS, Unitree SDKs, Nav2, camera drivers, RTSP, REST,
-and serial devices belong in the external robot provider process, not in the
-Argos agent process.
+This guide describes the ROS-agnostic Argos runtime setup. Argos talks to
+provider/resource capabilities over Zenoh. ROS, Unitree SDKs, Nav2, camera
+drivers, RTSP, REST, and serial devices belong in the external provider
+process, not in the Argos agent process.
 
 ## Architecture
 
 ```text
 Argos agent/tools
-  -> RobotClient capability API
-  -> ZenohRobotClient
-  -> Argos capability messages on Zenoh keys
+  -> provider-backed capability client
+  -> provider API transport
+  -> Argos provider/resource messages on Zenoh keys
   -> external robot provider
   -> ROS 2 / Nav2 / Go2 SDK / camera stack
   -> robot hardware
@@ -53,7 +53,7 @@ go2.action
   -> topic=rt/api/sport/request
 ```
 
-The bridge protocol lives in `argos_src/robot_bridge/protocol.py`.
+The bridge protocol lives in `argos_src/provider_api/wire.py`.
 
 ## Fresh Machine: Argos Runtime
 
@@ -106,8 +106,9 @@ root on `PYTHONPATH`. It does not source ROS.
 
 ```bash
 export OPENAI_API_KEY=...
-export ARGOS_ROBOT_TRANSPORT=zenoh
-export ARGOS_ZENOH_KEY_PREFIX=pair/robots/puffle
+export ARGOS_PROVIDER_TRANSPORT=zenoh
+export ARGOS_ZENOH_KEY_PREFIX=argos/providers/puffle-local
+export ARGOS_PROVIDER_RESOURCE_ID=base
 ```
 
 If the provider is not discovered automatically, configure Zenoh endpoints:
@@ -133,7 +134,7 @@ Start the external robot provider first. Then start Argos:
 cd "$WORKSPACE_DIR/argos_src"
 source setup_shell.sh
 export OPENAI_API_KEY=...
-export ARGOS_ROBOT_TRANSPORT=zenoh
+export ARGOS_PROVIDER_TRANSPORT=zenoh
 python3 run_profile.py --profile static_interaction
 ```
 
@@ -159,7 +160,7 @@ Provider-side shape:
 
 ```text
 external provider
-  -> receives Argos capability messages on Zenoh
+  -> receives Argos provider/resource capability messages on Zenoh
   -> translates to ROS/SDK calls
   -> publishes responses/events back to Argos
 ```
@@ -170,7 +171,7 @@ bridge.
 
 ## Fake Transport
 
-`ARGOS_ROBOT_TRANSPORT=fake` exists for tests and isolated unit checks. It is
+`ARGOS_PROVIDER_TRANSPORT=fake` exists for tests and isolated unit checks. It is
 not a deployment mode and should not be used to validate physical robot I/O.
 
 ## Knowledge Bases
@@ -203,7 +204,7 @@ remain compatible.
 - If Argos cannot import `zenoh`, install the Python Zenoh package in the Argos
   environment with `python3 -m pip install eclipse-zenoh`.
 - If Argos times out on robot actions, confirm the provider is running and using
-  the same `ARGOS_ZENOH_KEY_PREFIX`.
+  the same `ARGOS_ZENOH_KEY_PREFIX` and resource IDs as the selected manifest.
 - If the provider cannot publish Go2 actions, check ROS sourcing and
   `go2_interfaces` on the provider machine, not the Argos machine.
 - If camera snapshots fail, confirm the provider implements
@@ -219,7 +220,7 @@ Run focused Argos tests from the repo root:
 
 ```bash
 python3 -B -m pytest \
-  tests/argos_src/robot_api/test_zenoh_robot_client.py \
+  tests/argos_src/provider_api/test_zenoh_provider_client.py \
   tests/argos_src/agent/test_agent_runtime.py \
   tests/argos_src/agent/test_orchestrator.py \
   tests/argos_src/agent/test_bridges.py \

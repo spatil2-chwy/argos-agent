@@ -11,7 +11,7 @@ from argos_src.agent.owner_turn import (
     OwnerTurnRequest,
     OwnerTurnSettings,
 )
-from argos_src.robot_api.motion import motion_lock_for_topic
+from argos_src.runtime.motion_locks import motion_lock_for_channel
 
 
 class _FakeClock:
@@ -236,7 +236,7 @@ def test_owner_turn_releases_motion_lock_when_stop_publish_fails(monkeypatch):
 
     try:
         controller._execute_request(OwnerTurnRequest(person_id="person-1", req_id="rt-1"))
-        lock = motion_lock_for_topic(CMD_VEL_TOPIC)
+        lock = motion_lock_for_channel(CMD_VEL_TOPIC)
         acquired = lock.acquire(blocking=False)
         try:
             assert acquired is True

@@ -69,7 +69,7 @@ Terminal 1: external robot provider
 
 Start the provider process that owns ROS, SDK, camera, navigation, or other
 robot-specific dependencies. Argos only talks to that provider through the
-configured robot transport.
+configured provider transport.
 
 Terminal 2: Argos realtime runtime
 
@@ -77,7 +77,7 @@ Terminal 2: Argos realtime runtime
 cd ~/argos-agent
 source setup_shell.sh
 export OPENAI_API_KEY=...
-export ARGOS_ROBOT_TRANSPORT=zenoh
+export ARGOS_PROVIDER_TRANSPORT=zenoh
 python3 run_profile.py --profile static_interaction
 ```
 

@@ -1,9 +1,4 @@
-"""Argos robot bridge wire protocol.
-
-The bridge protocol is intentionally not ROS-shaped. Argos publishes capability
-requests such as ``go2.action`` and the robot-side provider translates those
-requests to ROS, Unitree SDK, RTSP, REST, or serial calls.
-"""
+"""Argos provider wire protocol."""
 
 from __future__ import annotations
 
@@ -31,37 +26,9 @@ OP_NAVIGATION_EVENT = "navigation.event"
 OP_CHARGING_DOCK = "dock.charging_sequence"
 OP_SPOT_COMMAND = "spot.command"
 
-
 REQUEST_TYPE = "request"
 RESPONSE_TYPE = "response"
 EVENT_TYPE = "event"
-
-DEFAULT_KEY_PREFIX = "pair/robots/puffle"
-REQUEST_KEY_SEGMENT = "request"
-RESPONSE_KEY_SEGMENT = "response"
-EVENT_KEY_SEGMENT = "event"
-
-
-def normalize_key_prefix(prefix: str | None = None) -> str:
-    """Normalize a Zenoh key prefix."""
-    rendered = str(prefix or DEFAULT_KEY_PREFIX).strip().strip("/")
-    return rendered or DEFAULT_KEY_PREFIX
-
-
-def request_key(prefix: str, request_id: str) -> str:
-    """Return the key used to publish one request."""
-    return f"{normalize_key_prefix(prefix)}/{REQUEST_KEY_SEGMENT}/{request_id}"
-
-
-def response_key(prefix: str, request_id: str) -> str:
-    """Return the key used to receive one response."""
-    return f"{normalize_key_prefix(prefix)}/{RESPONSE_KEY_SEGMENT}/{request_id}"
-
-
-def event_key(prefix: str, op: str = "*") -> str:
-    """Return the key used for provider events."""
-    rendered_op = str(op or "*").strip().strip("/") or "*"
-    return f"{normalize_key_prefix(prefix)}/{EVENT_KEY_SEGMENT}/{rendered_op}"
 
 
 def new_request_id() -> str:
@@ -70,7 +37,7 @@ def new_request_id() -> str:
 
 
 def now_s() -> float:
-    """Return wall-clock seconds for bridge messages."""
+    """Return wall-clock seconds for provider messages."""
     return time.time()
 
 
@@ -82,7 +49,7 @@ def build_request(
     request_id: str | None = None,
     ts: float | None = None,
 ) -> dict[str, Any]:
-    """Build one bridge request message."""
+    """Build one provider request message."""
     return {
         "id": request_id or new_request_id(),
         "type": REQUEST_TYPE,
@@ -101,7 +68,7 @@ def build_response(
     error: str | None = None,
     ts: float | None = None,
 ) -> dict[str, Any]:
-    """Build one bridge response message."""
+    """Build one provider response message."""
     return {
         "id": str(request_id or "").strip(),
         "type": RESPONSE_TYPE,
@@ -118,7 +85,7 @@ def build_event(
     data: dict[str, Any] | None = None,
     ts: float | None = None,
 ) -> dict[str, Any]:
-    """Build one bridge event message."""
+    """Build one provider event message."""
     return {
         "type": EVENT_TYPE,
         "op": str(op or "").strip(),
@@ -128,24 +95,23 @@ def build_event(
 
 
 def encode_message(message: dict[str, Any]) -> bytes:
-    """Encode a bridge message as compact UTF-8 JSON."""
+    """Encode a provider message as compact UTF-8 JSON."""
     return json.dumps(message, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def decode_message(payload: bytes | bytearray | memoryview | str) -> dict[str, Any]:
-    """Decode one bridge message from UTF-8 JSON."""
+    """Decode one provider message from UTF-8 JSON."""
     if isinstance(payload, str):
         text = payload
     else:
         text = bytes(payload).decode("utf-8")
     decoded = json.loads(text)
     if not isinstance(decoded, dict):
-        raise ValueError("Bridge message must decode to a JSON object")
+        raise ValueError("Provider message must decode to a JSON object")
     return decoded
 
 
 __all__ = [
-    "DEFAULT_KEY_PREFIX",
     "EVENT_TYPE",
     "OP_BATTERY_SNAPSHOT",
     "OP_BATTERY_EVENT",
@@ -166,18 +132,12 @@ __all__ = [
     "OP_TRANSFORM",
     "OP_VOICE_COMMAND",
     "REQUEST_TYPE",
-    "REQUEST_KEY_SEGMENT",
     "RESPONSE_TYPE",
-    "RESPONSE_KEY_SEGMENT",
     "build_event",
     "build_request",
     "build_response",
     "decode_message",
     "encode_message",
-    "event_key",
     "new_request_id",
-    "normalize_key_prefix",
     "now_s",
-    "request_key",
-    "response_key",
 ]

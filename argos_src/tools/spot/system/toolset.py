@@ -1,4 +1,4 @@
-"""Spot lease and power control tools backed by RobotClient capabilities."""
+"""Spot lease and power control tools backed by provider capabilities."""
 
 from __future__ import annotations
 
@@ -97,9 +97,9 @@ class SpotCommandTool(BaseTool):
 
 def get_spot_system_tools(
     robot_client: Any,
-    enabled_tool_names: Iterable[str] | None = None,
+    runtime_tool_names: Iterable[str] | None = None,
 ) -> List[BaseTool]:
-    allowed = None if enabled_tool_names is None else {str(name) for name in enabled_tool_names}
+    allowed = None if runtime_tool_names is None else {str(name) for name in runtime_tool_names}
     tools: List[BaseTool] = []
     for tool_name, description, command, robot_state_after in SPOT_TRIGGER_TOOL_SPECS:
         if allowed is not None and tool_name not in allowed:

@@ -1,4 +1,4 @@
-"""Plain Python data models for robot capabilities."""
+"""Plain Python data models for provider capabilities."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class ImageFrame:
     """One decoded camera frame."""
 
     image: np.ndarray
-    topic: str = ""
+    resource_id: str = ""
     captured_at: float = 0.0
     stamp_s: float = 0.0
 

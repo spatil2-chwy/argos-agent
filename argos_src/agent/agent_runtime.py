@@ -76,7 +76,7 @@ from argos_src.openai_realtime import (
 )
 from argos_src.profile_config import RealtimeProfile, ScenarioProfile
 from argos_src.runtime.audio_admission import FacePresenceGate
-from argos_src.robot_api.client import RobotClient
+from argos_src.provider_api.client import ProviderClient
 from argos_src.speaker_recognition.models import (
     PendingVoiceEnrollment,
     SpeakerResolutionResult,
@@ -117,7 +117,7 @@ class RealtimeRobotAgent(
         self,
         *,
         scenario_profile: ScenarioProfile,
-        robot_client: RobotClient,
+        robot_client: ProviderClient,
         tools: list[Any],
         base_system_prompt: str,
         engagement: EngagementStateMachine,

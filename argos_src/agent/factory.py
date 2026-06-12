@@ -23,8 +23,8 @@ from argos_src.profile_config import (
 )
 from argos_src.resource_paths import load_system_prompt
 from argos_src.runtime.battery_state import BatteryStateCache
-from argos_src.robot_api.client import RobotClient
-from argos_src.robot_api.factory import create_robot_client
+from argos_src.provider_api.client import ProviderClient
+from argos_src.provider_api.factory import create_provider_client
 from argos_src.nav_support.locations import LocationStore, NavigationState
 from argos_src.tools import (
     NAVIGATION_TOOL_NAMES,
@@ -96,7 +96,7 @@ def _derive_runtime_flags(
 def _create_gesture_runtime(
     *,
     scenario_profile: ScenarioProfile,
-    robot_client: RobotClient,
+    robot_client: ProviderClient,
     engagement: EngagementStateMachine,
 ) -> Optional[GestureRuntime]:
     gesture_profile = scenario_profile.embodiment.gestures
@@ -202,11 +202,12 @@ def create_agent(
     node_prefix = _node_prefix(robot_family)
     robot_label = scenario_profile.robot.display_name or _robot_label(robot_family)
 
-    robot_client = create_robot_client(
+    robot_client = create_provider_client(
         transport=scenario_profile.robot.bridge.transport,
-        node_name=f"{node_prefix}_realtime",
         key_prefix=scenario_profile.robot.bridge.key_prefix,
         connect_endpoints=scenario_profile.robot.bridge.connect_endpoints,
+        resource_id=scenario_profile.robot.bridge.resource_id,
+        manifest=scenario_profile.manifest,
     )
     startup_steps = prepare_robot_for_agent_session(
         robot_client,
@@ -225,16 +226,16 @@ def create_agent(
             len(startup_steps),
         )
 
-    enabled_tool_names = scenario_profile.tools.enabled_tool_names
+    enabled_tool_ids = scenario_profile.tools.enabled_tool_ids
     if not scenario_profile.face_recognition.enabled:
-        enabled_tool_names = tuple(
+        enabled_tool_ids = tuple(
             name
-            for name in enabled_tool_names
+            for name in enabled_tool_ids
             if resolve_builtin_tool_name(name, robot_family=robot_family)
             != "enroll_visible_person"
         )
     resolved_tool_names = resolve_builtin_tool_names(
-        enabled_tool_names,
+        enabled_tool_ids,
         robot_family=robot_family,
     )
     runtime_flags = _derive_runtime_flags(scenario_profile, resolved_tool_names)
@@ -280,17 +281,12 @@ def create_agent(
             identity_store=identity_store,
             memory_store=memory_store,
             site_code=scenario_profile.employee_directory.site_code,
-            camera_info_topic=(
-                scenario_profile.face_recognition.owner_turn.camera_info_topic
-                if scenario_profile.face_recognition.owner_turn.enabled
-                else ""
-            ),
+            camera_resource_id=scenario_profile.resources.face_camera,
             camera_yaw_offset_rad=(
                 scenario_profile.face_recognition.owner_turn.camera_yaw_offset_rad
             ),
             depth_gate_settings=(
                 DepthGateSettings(
-                    depth_topic=scenario_profile.face_recognition.depth_gate.depth_topic,
                     sync_slop_sec=scenario_profile.face_recognition.depth_gate.sync_slop_sec,
                     sync_queue_size=scenario_profile.face_recognition.depth_gate.sync_queue_size,
                     capture_timeout_sec=scenario_profile.face_recognition.depth_gate.capture_timeout_sec,
@@ -310,7 +306,7 @@ def create_agent(
             preference_extractor = PreferenceExtractor(memory_store=memory_store)
         if scenario_profile.face_recognition.enabled:
             face_service.start_loop(
-                camera_topic=scenario_profile.face_recognition.camera_topic,
+                camera_resource_id=scenario_profile.resources.face_camera,
                 interval=scenario_profile.face_recognition.loop_interval_sec,
             )
 
@@ -380,7 +376,7 @@ def create_agent(
 
     tools = build_builtin_tools(
         robot_family=robot_family,
-        enabled_tool_names=enabled_tool_names,
+        enabled_tool_ids=enabled_tool_ids,
         robot_client=robot_client,
         face_service=face_service,
         employee_directory_service=employee_directory_service,
@@ -388,7 +384,7 @@ def create_agent(
         nav_state=nav_state,
         on_nav_event=wiring.submit_nav_event,
         battery_cache=battery_cache,
-        default_camera_topic=scenario_profile.face_recognition.camera_topic,
+        default_camera_resource=scenario_profile.resources.scene_camera,
     )
     tools.extend(build_knowledge_tools(scenario_profile.knowledge_bases))
 

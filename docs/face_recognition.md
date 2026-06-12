@@ -96,7 +96,7 @@ result = self.face_service.enroll_visible_person(
     official_name=official_name,
     username=username or "",
     employee_profile=employee_profile,
-    camera_topic=self.default_camera_topic,
+    camera_resource_id=self.default_camera_resource,
 )
 ```
 
@@ -344,12 +344,10 @@ Main config lives in:
 ```yaml
 face_recognition:
   enabled: true
-  camera_topic: /camera/color/image_raw/compressed
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
   depth_gate:
     enabled: true
-    depth_topic: /camera/aligned_depth_to_color/image_raw
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5

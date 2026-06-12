@@ -1,0 +1,31 @@
+id: puffle
+display_name: Puffle
+
+providers:
+  - id: puffle-local
+    transport: zenoh
+    key_prefix: argos/providers/puffle-local
+    connect_endpoints: []
+
+resources:
+  - id: base
+    kind: robot_base
+    family: unitree_go2
+    provider: puffle-local
+    capabilities:
+      - motion.velocity
+      - posture.command
+      - embodiment.action
+      - battery.state
+      - transform.lookup
+      - presence.face.publish
+      - voice_command.publish
+
+  - id: head_realsense
+    kind: camera
+    hardware: realsense
+    provider: puffle-local
+    capabilities:
+      - camera.rgb
+      - camera.rgbd
+      - camera.intrinsics

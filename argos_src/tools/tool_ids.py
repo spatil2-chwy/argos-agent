@@ -1,8 +1,7 @@
-"""Built-in tool identifiers for robot-family-specific scenario profiles."""
+"""Built-in capability-style tool identifiers."""
 
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Iterable
 
 ROBOT_FAMILY_UNITREE_GO2 = "unitree_go2"
@@ -67,135 +66,130 @@ SPOT_MOBILITY_TOOL_NAMES = (
     "spot_reset_body_pose",
 )
 
-LEGACY_BUILT_IN_TOOL_NAMES = tuple(
-    list(GO2_ACTION_TOOL_NAMES) + list(NAVIGATION_TOOL_NAMES) + list(SINGLETON_TOOL_NAMES)
-)
-
-RUNTIME_TOOL_NAME_BY_CANONICAL = {
-    **{f"unitree_go2.actions.{name}": name for name in GO2_ACTION_TOOL_NAMES},
-    "unitree_go2.locomotion.move_robot": "move_robot",
-    "unitree_go2.vision.capture_scene": "capture_scene",
-    "unitree_go2.vision.enroll_visible_person": "enroll_visible_person",
-    "unitree_go2.vision.resolve_employee_identity": "resolve_employee_identity",
-    "unitree_go2.navigation.navigate_to_location": "navigate_to_location",
-    "unitree_go2.navigation.navigate_to_location_blocking": "navigate_to_location_blocking",
-    "unitree_go2.navigation.navigate_relative": "navigate_relative",
-    "unitree_go2.navigation.follow_waypoints": "follow_waypoints",
-    "unitree_go2.navigation.cancel_navigation": "cancel_navigation",
-    "unitree_go2.navigation.stop_patrol": "stop_patrol",
-    "unitree_go2.navigation.get_current_location": "get_current_location",
-    "unitree_go2.navigation.charging_dock": "charging_dock",
-    "spot.system.claim": "spot_claim",
-    "spot.system.release": "spot_release",
-    "spot.system.power_on": "spot_power_on",
-    "spot.system.power_off": "spot_power_off",
-    "spot.mobility.stand": "spot_stand",
-    "spot.mobility.sit": "spot_sit",
-    "spot.mobility.stop": "spot_stop",
-    "spot.mobility.self_right": "spot_self_right",
-    "spot.mobility.rollover": "spot_rollover",
-    "spot.mobility.set_stand_height": "spot_set_stand_height",
-    "spot.mobility.reset_body_pose": "spot_reset_body_pose",
-    "spot.locomotion.move_robot": "move_robot",
+TOOL_RUNTIME_BY_ID_BY_FAMILY: dict[str, dict[str, str]] = {
+    "motion.move_robot": {
+        ROBOT_FAMILY_UNITREE_GO2: "move_robot",
+        ROBOT_FAMILY_SPOT: "move_robot",
+    },
+    "vision.capture_scene": {
+        ROBOT_FAMILY_UNITREE_GO2: "capture_scene",
+    },
+    "identity.enroll_visible_person": {
+        ROBOT_FAMILY_UNITREE_GO2: "enroll_visible_person",
+    },
+    "identity.resolve_employee_identity": {
+        ROBOT_FAMILY_UNITREE_GO2: "resolve_employee_identity",
+    },
+    "navigation.navigate_to_location": {
+        ROBOT_FAMILY_UNITREE_GO2: "navigate_to_location",
+    },
+    "navigation.navigate_to_location_blocking": {
+        ROBOT_FAMILY_UNITREE_GO2: "navigate_to_location_blocking",
+    },
+    "navigation.navigate_relative": {
+        ROBOT_FAMILY_UNITREE_GO2: "navigate_relative",
+    },
+    "navigation.follow_waypoints": {
+        ROBOT_FAMILY_UNITREE_GO2: "follow_waypoints",
+    },
+    "navigation.cancel": {
+        ROBOT_FAMILY_UNITREE_GO2: "cancel_navigation",
+    },
+    "navigation.stop_patrol": {
+        ROBOT_FAMILY_UNITREE_GO2: "stop_patrol",
+    },
+    "navigation.get_current_location": {
+        ROBOT_FAMILY_UNITREE_GO2: "get_current_location",
+    },
+    "dock.charging": {
+        ROBOT_FAMILY_UNITREE_GO2: "charging_dock",
+    },
+    "posture.rest": {
+        ROBOT_FAMILY_UNITREE_GO2: "go2_damp",
+    },
+    "posture.stand": {
+        ROBOT_FAMILY_UNITREE_GO2: "go2_balance_stand",
+        ROBOT_FAMILY_SPOT: "spot_stand",
+    },
+    "posture.stop": {
+        ROBOT_FAMILY_UNITREE_GO2: "go2_stop_move",
+        ROBOT_FAMILY_SPOT: "spot_stop",
+    },
+    "posture.sit": {
+        ROBOT_FAMILY_UNITREE_GO2: "go2_sit",
+        ROBOT_FAMILY_SPOT: "spot_sit",
+    },
+    "posture.self_right": {
+        ROBOT_FAMILY_SPOT: "spot_self_right",
+    },
+    "posture.rollover": {
+        ROBOT_FAMILY_SPOT: "spot_rollover",
+    },
+    "posture.set_stand_height": {
+        ROBOT_FAMILY_SPOT: "spot_set_stand_height",
+    },
+    "posture.reset_body_pose": {
+        ROBOT_FAMILY_SPOT: "spot_reset_body_pose",
+    },
+    "spot.system.claim": {
+        ROBOT_FAMILY_SPOT: "spot_claim",
+    },
+    "spot.system.release": {
+        ROBOT_FAMILY_SPOT: "spot_release",
+    },
+    "spot.system.power_on": {
+        ROBOT_FAMILY_SPOT: "spot_power_on",
+    },
+    "spot.system.power_off": {
+        ROBOT_FAMILY_SPOT: "spot_power_off",
+    },
 }
 
-ROBOT_FAMILY_BY_CANONICAL = {
-    canonical_name: (
-        ROBOT_FAMILY_SPOT if canonical_name.startswith("spot.") else ROBOT_FAMILY_UNITREE_GO2
-    )
-    for canonical_name in RUNTIME_TOOL_NAME_BY_CANONICAL
-}
+for _action_name in GO2_ACTION_TOOL_NAMES:
+    _short_name = _action_name.removeprefix("go2_")
+    TOOL_RUNTIME_BY_ID_BY_FAMILY[f"embodiment.unitree_go2.{_short_name}"] = {
+        ROBOT_FAMILY_UNITREE_GO2: _action_name,
+    }
 
-CANONICAL_TOOL_NAME_BY_LEGACY: dict[str, str] = {}
-TOOL_NAME_ALIASES: dict[str, str] = {}
-
-_canonical_by_runtime_name: dict[str, set[str]] = defaultdict(set)
-for canonical_name, runtime_name in RUNTIME_TOOL_NAME_BY_CANONICAL.items():
-    TOOL_NAME_ALIASES[canonical_name] = runtime_name
-    _canonical_by_runtime_name[runtime_name].add(canonical_name)
-
-for legacy_name in LEGACY_BUILT_IN_TOOL_NAMES:
-    if legacy_name in CANONICAL_TOOL_NAME_BY_LEGACY:
-        continue
-    if legacy_name in GO2_ACTION_TOOL_NAMES:
-        canonical_name = f"unitree_go2.actions.{legacy_name}"
-    elif legacy_name == "move_robot":
-        canonical_name = "unitree_go2.locomotion.move_robot"
-    elif legacy_name == "capture_scene":
-        canonical_name = "unitree_go2.vision.capture_scene"
-    elif legacy_name == "enroll_visible_person":
-        canonical_name = "unitree_go2.vision.enroll_visible_person"
-    elif legacy_name == "resolve_employee_identity":
-        canonical_name = "unitree_go2.vision.resolve_employee_identity"
-    else:
-        canonical_name = f"unitree_go2.navigation.{legacy_name}"
-    CANONICAL_TOOL_NAME_BY_LEGACY[legacy_name] = canonical_name
-    TOOL_NAME_ALIASES[legacy_name] = RUNTIME_TOOL_NAME_BY_CANONICAL[canonical_name]
-
-AMBIGUOUS_LEGACY_TOOL_NAMES = frozenset(
-    sorted(
-        runtime_name
-        for runtime_name, canonical_names in _canonical_by_runtime_name.items()
-        if len(canonical_names) > 1 and runtime_name not in CANONICAL_TOOL_NAME_BY_LEGACY
-    )
-)
-
-BUILT_IN_TOOL_NAMES = tuple(sorted(TOOL_NAME_ALIASES))
+BUILT_IN_TOOL_NAMES = tuple(sorted(TOOL_RUNTIME_BY_ID_BY_FAMILY))
 
 
-def _validate_robot_family(robot_family: str | None) -> str | None:
-    if robot_family is None:
-        return None
-    raw_family = str(robot_family).strip()
+def _validate_robot_family(robot_family: str | None) -> str:
+    raw_family = str(robot_family or "").strip()
     if raw_family in SUPPORTED_ROBOT_FAMILIES:
         return raw_family
     raise ValueError(
-        "Unsupported robot family: "
-        f"{robot_family}. Expected one of: {', '.join(SUPPORTED_ROBOT_FAMILIES)}"
+        "robot_family is required and must be one of: "
+        + ", ".join(SUPPORTED_ROBOT_FAMILIES)
     )
 
 
-def canonical_tool_name_for(name: str) -> str:
-    """Resolve an input tool id to its canonical dotted name."""
-    raw_name = str(name).strip()
-    if raw_name in RUNTIME_TOOL_NAME_BY_CANONICAL:
-        return raw_name
-    canonical = CANONICAL_TOOL_NAME_BY_LEGACY.get(raw_name)
-    if canonical is not None:
-        return canonical
-    if raw_name in AMBIGUOUS_LEGACY_TOOL_NAMES:
-        canonical_names = sorted(_canonical_by_runtime_name[raw_name])
-        raise ValueError(
-            f"Ambiguous built-in tool name '{raw_name}'. Use one of: "
-            + ", ".join(canonical_names)
-        )
-    raise ValueError(f"Unknown built-in tool name: {raw_name}")
-
-
 def resolve_builtin_tool_name(name: str, *, robot_family: str | None = None) -> str:
-    """Resolve one built-in tool id to the current runtime tool name."""
+    """Resolve one capability-style tool id to the current runtime tool name."""
+    raw_name = str(name or "").strip()
+    by_family = TOOL_RUNTIME_BY_ID_BY_FAMILY.get(raw_name)
+    if by_family is None:
+        raise ValueError(f"Unknown built-in tool id: {raw_name}")
     family = _validate_robot_family(robot_family)
-    canonical_name = canonical_tool_name_for(name)
-    canonical_family = ROBOT_FAMILY_BY_CANONICAL[canonical_name]
-    if family is not None and canonical_family != family:
+    runtime_name = by_family.get(family)
+    if runtime_name is None:
         raise ValueError(
-            f"Built-in tool '{name}' belongs to robot family '{canonical_family}', "
-            f"not '{family}'."
+            f"Built-in tool id '{raw_name}' is not available for robot family '{family}'."
         )
-    return RUNTIME_TOOL_NAME_BY_CANONICAL[canonical_name]
+    return runtime_name
 
 
 def resolve_builtin_tool_names(
-    enabled_tool_names: Iterable[str],
+    enabled_tool_ids: Iterable[str],
     *,
     robot_family: str | None = None,
 ) -> tuple[str, ...]:
-    """Resolve built-in tool ids to the current runtime tool names."""
+    """Resolve built-in capability-style tool ids to runtime tool names."""
     resolved: list[str] = []
     seen: set[str] = set()
     errors: list[str] = []
 
-    for raw_name in enabled_tool_names:
+    for raw_name in enabled_tool_ids:
         try:
             runtime_name = resolve_builtin_tool_name(
                 str(raw_name),
@@ -211,5 +205,53 @@ def resolve_builtin_tool_names(
 
     if errors:
         raise ValueError("; ".join(errors))
-
     return tuple(resolved)
+
+
+def required_capability_ids_for_tool_id(
+    name: str,
+    *,
+    robot_family: str | None = None,
+) -> tuple[str, ...]:
+    """Return provider capabilities needed to enable one built-in tool id."""
+    raw_name = str(name or "").strip()
+    runtime_name = resolve_builtin_tool_name(raw_name, robot_family=robot_family)
+
+    if raw_name.startswith("motion."):
+        return ("motion.velocity",)
+    if raw_name.startswith("vision."):
+        return ("camera.rgb",)
+    if raw_name.startswith("identity.enroll"):
+        return ("camera.rgb",)
+    if raw_name.startswith("identity.resolve"):
+        return ()
+    if raw_name.startswith("navigation."):
+        if runtime_name in {"navigate_relative", "get_current_location"}:
+            return ("navigation.goal", "transform.lookup")
+        return ("navigation.goal",)
+    if raw_name.startswith("dock."):
+        return ("dock.charging",)
+    if raw_name.startswith("posture."):
+        return ("posture.command",)
+    if raw_name.startswith("embodiment."):
+        return ("embodiment.action",)
+    if raw_name.startswith("spot.system."):
+        return ("posture.command",)
+    return ()
+
+
+__all__ = [
+    "BUILT_IN_TOOL_NAMES",
+    "GO2_ACTION_TOOL_NAMES",
+    "NAVIGATION_TOOL_NAMES",
+    "ROBOT_FAMILY_SPOT",
+    "ROBOT_FAMILY_UNITREE_GO2",
+    "SINGLETON_TOOL_NAMES",
+    "SPOT_MOBILITY_TOOL_NAMES",
+    "SPOT_SYSTEM_TOOL_NAMES",
+    "SUPPORTED_ROBOT_FAMILIES",
+    "TOOL_RUNTIME_BY_ID_BY_FAMILY",
+    "required_capability_ids_for_tool_id",
+    "resolve_builtin_tool_name",
+    "resolve_builtin_tool_names",
+]

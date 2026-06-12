@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from argos_src.robot_api.errors import is_robot_provider_error
+from argos_src.provider_api.errors import is_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class FactoryRuntimeWireup:
             if callable(publisher):
                 publisher(cmd)
         except Exception as exc:
-            if is_robot_provider_error(exc):
+            if is_provider_error(exc):
                 logger.warning("Robot provider voice command publish failed cmd=%s: %s", cmd, exc)
             else:
                 logger.exception("Failed to publish voice command=%s", cmd)

@@ -1,4 +1,4 @@
-"""Fake robot client for local development and tests."""
+"""Fake provider client for local development and tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from argos_src.robot_api.models import (
+from argos_src.provider_api.models import (
     BatterySnapshot,
     CameraIntrinsics,
     ImageFrame,
@@ -15,8 +15,8 @@ from argos_src.robot_api.models import (
 )
 
 
-class FakeRobotClient:
-    """In-memory robot client with no external transport."""
+class FakeProviderClient:
+    """In-memory provider client with no external transport."""
 
     def __init__(self) -> None:
         self.actions: list[dict[str, Any]] = []
@@ -36,6 +36,44 @@ class FakeRobotClient:
 
     def shutdown(self) -> None:
         return None
+
+    def get_manifest(self):
+        return None
+
+    def request(
+        self,
+        *,
+        resource_id: str,
+        operation: str,
+        args: dict[str, Any] | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        del resource_id, timeout_ms
+        raise NotImplementedError(f"FakeProviderClient request unsupported: {operation}")
+
+    def publish_event(
+        self,
+        *,
+        resource_id: str,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        del resource_id
+        if event_type == "voice.command":
+            self.publish_voice_command(str((data or {}).get("command", "")))
+            return
+        if event_type == "face.presence":
+            self.publish_face_presence(dict(data or {}))
+
+    def subscribe_event(
+        self,
+        *,
+        resource_id: str,
+        event_type: str,
+        callback: Callable[[dict[str, Any]], None],
+    ) -> Callable[[], None]:
+        del resource_id, event_type, callback
+        return lambda: None
 
     def perform_go2_action(
         self,
@@ -91,28 +129,31 @@ class FakeRobotClient:
                 }
             )
 
-    def get_latest_image(self, camera_topic: str, timeout: float = 2.0) -> ImageFrame | None:
-        del camera_topic, timeout
+    def get_latest_image(
+        self,
+        resource_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> ImageFrame | None:
+        del resource_id, timeout
         return None
 
     def get_latest_rgbd(
         self,
         *,
-        color_topic: str,
-        depth_topic: str,
+        resource_id: str | None = None,
         timeout: float = 2.0,
         sync_slop_sec: float = 0.12,
         queue_size: int = 10,
     ) -> RGBDFrame | None:
-        del color_topic, depth_topic, timeout, sync_slop_sec, queue_size
+        del resource_id, timeout, sync_slop_sec, queue_size
         return None
 
     def get_latest_intrinsics(
         self,
-        camera_info_topic: str,
+        resource_id: str | None = None,
         timeout: float = 0.05,
     ) -> CameraIntrinsics | None:
-        del camera_info_topic, timeout
+        del resource_id, timeout
         return None
 
     def get_transform(

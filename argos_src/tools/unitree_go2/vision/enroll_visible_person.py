@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from argos_src.tools.base import BaseTool
 from argos_src.tools.common.tool_response import tool_response_json
-from argos_src.tools.unitree_go2.vision.capture_scene import DEFAULT_CAMERA_TOPIC
+from argos_src.tools.unitree_go2.vision.capture_scene import DEFAULT_CAMERA_RESOURCE
 
 
 class _EnrollVisiblePersonInput(BaseModel):
@@ -37,7 +37,7 @@ class EnrollVisiblePersonTool(BaseTool):
     args_schema: Type[BaseModel] = _EnrollVisiblePersonInput
     face_service: Any = Field(exclude=True)
     employee_directory_service: Any | None = Field(default=None, exclude=True)
-    default_camera_topic: str = Field(default=DEFAULT_CAMERA_TOPIC, exclude=True)
+    default_camera_resource: str = Field(default=DEFAULT_CAMERA_RESOURCE, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
@@ -58,7 +58,7 @@ class EnrollVisiblePersonTool(BaseTool):
             official_name=official_name,
             username=username or "",
             employee_profile=employee_profile,
-            camera_topic=self.default_camera_topic,
+            camera_resource_id=self.default_camera_resource,
         )
         success = bool(result.get("success", False))
         status = str(result.get("status", "") or ("completed" if success else "error"))
@@ -78,12 +78,12 @@ class EnrollVisiblePersonTool(BaseTool):
 
 def get_enroll_visible_person_tool(
     face_service: Any,
-    default_camera_topic: str = DEFAULT_CAMERA_TOPIC,
+    default_camera_resource: str = DEFAULT_CAMERA_RESOURCE,
     employee_directory_service: Any | None = None,
 ) -> BaseTool:
     """Return the enrollment tool bound to the active face service."""
     return EnrollVisiblePersonTool(
         face_service=face_service,
         employee_directory_service=employee_directory_service,
-        default_camera_topic=default_camera_topic,
+        default_camera_resource=default_camera_resource,
     )

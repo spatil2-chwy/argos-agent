@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from argos_src.robot_api.errors import is_robot_provider_error
+from argos_src.provider_api.errors import is_provider_error
 from argos_src.tools.tool_ids import ROBOT_FAMILY_UNITREE_GO2
 
 
@@ -302,7 +302,7 @@ class GestureRuntime:
         if now < next_allowed:
             return
         self._next_error_log_by_key[key] = now + ERROR_LOG_THROTTLE_SEC
-        if exc is not None and is_robot_provider_error(exc):
+        if exc is not None and is_provider_error(exc):
             logger.warning("%s %s", message, exc)
             return
         logger.error(message, exc_info=exc_info or exc is not None)

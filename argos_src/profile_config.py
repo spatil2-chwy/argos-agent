@@ -19,9 +19,16 @@ from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
 from argos_src.agent.gesture_runtime import resolve_gesture_preset_name
 from argos_src.speaker_recognition.constants import DEFAULT_SPEAKER_DB_PATH
 from argos_src.speaker_recognition.models import SpeakerRecognitionPolicy
+from argos_src.provider_api.manifest import (
+    ManifestValidationError,
+    ProviderManifest,
+    ProviderResource,
+    load_provider_manifest,
+)
 from argos_src.tools.tool_ids import (
     ROBOT_FAMILY_UNITREE_GO2,
     SUPPORTED_ROBOT_FAMILIES,
+    required_capability_ids_for_tool_id,
     resolve_builtin_tool_name,
     resolve_builtin_tool_names,
 )
@@ -56,7 +63,7 @@ class KnowledgeBaseProfile:
 
 @dataclass(frozen=True)
 class ToolsProfile:
-    enabled_tool_names: tuple[str, ...] = ()
+    enabled_tool_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,7 +83,6 @@ class ProactiveGreetingProfile:
 @dataclass(frozen=True)
 class FaceOwnerTurnProfile:
     enabled: bool
-    camera_info_topic: str
     camera_yaw_offset_rad: float
     deadband_deg: float
     turn_gain: float
@@ -95,7 +101,6 @@ class FaceOwnerTurnProfile:
 @dataclass(frozen=True)
 class FaceDepthGateProfile:
     enabled: bool
-    depth_topic: str
     sync_slop_sec: float
     sync_queue_size: int
     capture_timeout_sec: float
@@ -115,7 +120,6 @@ class PreferenceExtractionProfile:
 class FaceRecognitionProfile:
     enabled: bool
     db_path: str
-    camera_topic: str
     loop_interval_sec: float
     recognition_threshold: float
     publish_presence_topic: str
@@ -214,10 +218,12 @@ class StartupProfile:
 
 
 @dataclass(frozen=True)
-class RobotBridgeProfile:
+class ProviderBindingProfile:
     transport: Optional[str] = None
     key_prefix: Optional[str] = None
     connect_endpoints: Optional[tuple[str, ...]] = None
+    provider_id: Optional[str] = None
+    resource_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -225,7 +231,15 @@ class RobotProfile:
     id: str = ""
     family: str = DEFAULT_ROBOT_FAMILY
     display_name: str = ""
-    bridge: RobotBridgeProfile = field(default_factory=RobotBridgeProfile)
+    bridge: ProviderBindingProfile = field(default_factory=ProviderBindingProfile)
+
+
+@dataclass(frozen=True)
+class ResourceSelectionsProfile:
+    primary_robot: str = ""
+    face_camera: str = ""
+    scene_camera: str = ""
+    lidar: str = ""
 
 
 @dataclass(frozen=True)
@@ -260,6 +274,9 @@ class ScenarioProfile:
     name: str
     source_path: Path
     framework_config: dict[str, Any] = field(repr=False)
+    manifest_id: str = ""
+    manifest: ProviderManifest | None = None
+    resources: ResourceSelectionsProfile = field(default_factory=ResourceSelectionsProfile)
     robot: RobotProfile = field(default_factory=RobotProfile)
     robot_family: str = DEFAULT_ROBOT_FAMILY
     navigation: NavigationProfile = field(
@@ -277,13 +294,11 @@ class ScenarioProfile:
         default_factory=lambda: FaceRecognitionProfile(
             enabled=True,
             db_path=DEFAULT_FACE_DB_PATH,
-            camera_topic="/camera/color/image_raw/compressed",
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
             publish_presence_topic=FACE_PRESENCE_TOPIC,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
-                depth_topic="/camera/aligned_depth_to_color/image_raw",
                 sync_slop_sec=0.12,
                 sync_queue_size=10,
                 capture_timeout_sec=1.5,
@@ -295,7 +310,6 @@ class ScenarioProfile:
             ),
             owner_turn=FaceOwnerTurnProfile(
                 enabled=False,
-                camera_info_topic="/camera/color/camera_info",
                 camera_yaw_offset_rad=0.0,
                 deadband_deg=3.0,
                 turn_gain=1.0,
@@ -615,6 +629,195 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return dict(data)
 
 
+def _load_manifest_for_profile(manifest_id: str) -> ProviderManifest:
+    if not manifest_id:
+        raise ProfileValidationError("profile.manifest is required.")
+    try:
+        return load_provider_manifest(manifest_id)
+    except ManifestValidationError as exc:
+        raise ProfileValidationError(str(exc)) from exc
+
+
+def _parse_resource_selections(
+    data: dict[str, Any],
+    *,
+    manifest: ProviderManifest,
+) -> ResourceSelectionsProfile:
+    selections = ResourceSelectionsProfile(
+        primary_robot=_pop_optional_str(data, "primary_robot", default="") or "",
+        face_camera=_pop_optional_str(data, "face_camera", default="") or "",
+        scene_camera=_pop_optional_str(data, "scene_camera", default="") or "",
+        lidar=_pop_optional_str(data, "lidar", default="") or "",
+    )
+    _reject_unknown(data, "resources")
+
+    primary_robot = selections.primary_robot
+    if not primary_robot:
+        primary_robot = _default_resource_id(manifest, kind="robot_base")
+        selections = replace(selections, primary_robot=primary_robot)
+    if not selections.scene_camera:
+        scene_camera = _default_resource_id(manifest, capability_id="camera.rgb")
+        selections = replace(selections, scene_camera=scene_camera)
+    if not selections.face_camera:
+        face_camera = selections.scene_camera or _default_resource_id(
+            manifest,
+            capability_id="camera.rgb",
+        )
+        selections = replace(selections, face_camera=face_camera)
+
+    for field_name in ("primary_robot", "face_camera", "scene_camera", "lidar"):
+        resource_id = str(getattr(selections, field_name, "") or "").strip()
+        if not resource_id:
+            continue
+        if manifest.resource_by_id(resource_id) is None:
+            raise ProfileValidationError(
+                f"resources.{field_name} references unknown manifest resource "
+                f"'{resource_id}'."
+            )
+    return selections
+
+
+def _default_resource_id(
+    manifest: ProviderManifest,
+    *,
+    kind: str | None = None,
+    capability_id: str | None = None,
+) -> str:
+    for resource in manifest.resources:
+        if kind is not None and resource.kind != kind:
+            continue
+        if capability_id is not None and capability_id not in resource.capabilities:
+            continue
+        return resource.id
+    return ""
+
+
+def _primary_robot_resource(
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile | None,
+) -> ProviderResource:
+    resource_id = str(getattr(resources, "primary_robot", "") or "").strip()
+    if not resource_id:
+        resource_id = _default_resource_id(manifest, kind="robot_base")
+    resource = manifest.resource_by_id(resource_id)
+    if resource is None:
+        raise ProfileValidationError(
+            f"manifest {manifest.id} does not define primary robot resource "
+            f"'{resource_id or '<missing>'}'."
+        )
+    return resource
+
+
+def _validate_tool_capabilities(
+    enabled_tool_ids: tuple[str, ...],
+    *,
+    robot_family: str | None,
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile | None,
+) -> None:
+    primary_robot = _primary_robot_resource(manifest, resources)
+    scene_camera = _selected_resource(
+        manifest,
+        getattr(resources, "scene_camera", "") if resources is not None else "",
+    )
+    face_camera = _selected_resource(
+        manifest,
+        getattr(resources, "face_camera", "") if resources is not None else "",
+    )
+    for tool_id in enabled_tool_ids:
+        for capability_id in required_capability_ids_for_tool_id(
+            tool_id,
+            robot_family=robot_family,
+        ):
+            resource = _resource_for_capability(
+                capability_id,
+                primary_robot=primary_robot,
+                scene_camera=scene_camera,
+                face_camera=face_camera,
+            )
+            if resource is None or capability_id not in resource.capabilities:
+                raise ProfileValidationError(
+                    f"Tool '{tool_id}' requires manifest capability "
+                    f"'{capability_id}', but no selected resource provides it."
+                )
+
+
+def _require_selected_capability(
+    *,
+    capability_id: str,
+    resource: ProviderResource | None,
+    selector_name: str,
+    feature_name: str,
+) -> None:
+    if resource is None or capability_id not in resource.capabilities:
+        raise ProfileValidationError(
+            f"{feature_name} requires selected resource {selector_name} "
+            f"to provide manifest capability '{capability_id}'."
+        )
+
+
+def _validate_runtime_resource_capabilities(
+    *,
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile,
+    face_recognition: FaceRecognitionProfile,
+) -> None:
+    primary_robot = _primary_robot_resource(manifest, resources)
+    face_camera = _selected_resource(manifest, resources.face_camera)
+
+    if face_recognition.enabled:
+        _require_selected_capability(
+            capability_id="camera.rgb",
+            resource=face_camera,
+            selector_name="resources.face_camera",
+            feature_name="face_recognition.enabled",
+        )
+    if face_recognition.depth_gate.enabled:
+        _require_selected_capability(
+            capability_id="camera.rgbd",
+            resource=face_camera,
+            selector_name="resources.face_camera",
+            feature_name="face_recognition.depth_gate.enabled",
+        )
+    if face_recognition.owner_turn.enabled:
+        _require_selected_capability(
+            capability_id="camera.intrinsics",
+            resource=face_camera,
+            selector_name="resources.face_camera",
+            feature_name="face_recognition.owner_turn.enabled",
+        )
+        _require_selected_capability(
+            capability_id="transform.lookup",
+            resource=primary_robot,
+            selector_name="resources.primary_robot",
+            feature_name="face_recognition.owner_turn.enabled",
+        )
+
+
+def _selected_resource(
+    manifest: ProviderManifest,
+    resource_id: str,
+) -> ProviderResource | None:
+    rendered = str(resource_id or "").strip()
+    if not rendered:
+        return None
+    return manifest.resource_by_id(rendered)
+
+
+def _resource_for_capability(
+    capability_id: str,
+    *,
+    primary_robot: ProviderResource,
+    scene_camera: ProviderResource | None,
+    face_camera: ProviderResource | None,
+) -> ProviderResource | None:
+    if capability_id.startswith("camera."):
+        if scene_camera is not None and capability_id in scene_camera.capabilities:
+            return scene_camera
+        return face_camera
+    return primary_robot
+
+
 def _parse_profile(
     payload: dict[str, Any],
     *,
@@ -623,17 +826,24 @@ def _parse_profile(
 ) -> ScenarioProfile:
     profile_data = dict(payload)
     name = _pop_optional_str(profile_data, "name", default=profile_path.stem)
-    robot_data = _pop_section(profile_data, "robot")
-    legacy_robot_family = _pop_optional_str(
-        profile_data,
-        "robot_family",
-        default=None,
-    )
-    robot = _parse_robot(robot_data, legacy_robot_family=legacy_robot_family)
+    manifest_id = _pop_optional_str(profile_data, "manifest", default=None) or ""
+    manifest = _load_manifest_for_profile(manifest_id)
+    resources_data = _pop_section(profile_data, "resources")
+    resources = _parse_resource_selections(resources_data, manifest=manifest)
+    if "robot" in profile_data:
+        raise ProfileValidationError(
+            "profile.robot is no longer supported; use manifest/resources."
+        )
+    if "robot_family" in profile_data:
+        raise ProfileValidationError(
+            "profile.robot_family is no longer supported; use manifest resource family."
+        )
+    robot = _parse_robot(manifest=manifest, resources=resources)
     robot_family = robot.family
     if robot_family not in SUPPORTED_ROBOT_FAMILIES:
         raise ProfileValidationError(
-            "robot.family must be one of: " + ", ".join(SUPPORTED_ROBOT_FAMILIES)
+            "manifest primary robot resource family must be one of: "
+            + ", ".join(SUPPORTED_ROBOT_FAMILIES)
         )
 
     legacy_agent_data = _pop_section(profile_data, "agent")
@@ -659,7 +869,12 @@ def _parse_profile(
     _reject_unknown(profile_data, "profile")
 
     navigation = _parse_navigation(navigation_data)
-    tools = _parse_tools(tools_data, robot_family=robot_family)
+    tools = _parse_tools(
+        tools_data,
+        robot_family=robot_family,
+        manifest=manifest,
+        resources=resources,
+    )
     employee_directory = _parse_employee_directory(employee_directory_data)
     knowledge_bases = tuple(
         _parse_knowledge_base_entry(item, index=i)
@@ -673,6 +888,11 @@ def _parse_profile(
     realtime = _parse_realtime(
         realtime_data,
         face_profile=face_recognition,
+    )
+    _validate_runtime_resource_capabilities(
+        manifest=manifest,
+        resources=resources,
+        face_recognition=face_recognition,
     )
     tools, employee_directory, face_recognition, realtime = _reconcile_profile_dependencies(
         robot_family=robot_family,
@@ -695,6 +915,9 @@ def _parse_profile(
         name=name,
         source_path=profile_path,
         framework_config=framework_config,
+        manifest_id=manifest_id,
+        manifest=manifest,
+        resources=resources,
         robot=robot,
         robot_family=robot_family,
         navigation=navigation,
@@ -715,55 +938,29 @@ def _parse_profile(
 
 
 def _parse_robot(
-    data: dict[str, Any],
     *,
-    legacy_robot_family: Optional[str],
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile,
 ) -> RobotProfile:
-    family = _pop_optional_str(
-        data,
-        "family",
-        default=legacy_robot_family or DEFAULT_ROBOT_FAMILY,
+    resource = _primary_robot_resource(manifest, resources)
+    provider = manifest.provider_by_id(resource.provider)
+    if provider is None:
+        raise ProfileValidationError(
+            f"manifest {manifest.id} primary robot resource '{resource.id}' "
+            f"references unknown provider '{resource.provider}'."
+        )
+    bridge = ProviderBindingProfile(
+        transport=provider.transport,
+        key_prefix=provider.key_prefix,
+        connect_endpoints=provider.connect_endpoints or None,
+        provider_id=provider.id,
+        resource_id=resource.id,
     )
-    if legacy_robot_family and family != legacy_robot_family:
-        raise ProfileValidationError(
-            "robot.family and top-level robot_family must match when both are set."
-        )
-    if family not in SUPPORTED_ROBOT_FAMILIES:
-        raise ProfileValidationError(
-            "robot.family must be one of: " + ", ".join(SUPPORTED_ROBOT_FAMILIES)
-        )
-    robot_id = _pop_optional_str(data, "id", default="") or ""
-    display_name = _pop_optional_str(data, "display_name", default="") or ""
-    bridge_data = _pop_section(data, "bridge")
-    bridge = _parse_robot_bridge(bridge_data)
-    _reject_unknown(data, "robot")
     return RobotProfile(
-        id=robot_id.strip(),
-        family=family.strip(),
-        display_name=display_name.strip(),
+        id=manifest.id,
+        family=(resource.family or DEFAULT_ROBOT_FAMILY).strip(),
+        display_name=manifest.display_name,
         bridge=bridge,
-    )
-
-
-def _parse_robot_bridge(data: dict[str, Any]) -> RobotBridgeProfile:
-    transport = _pop_optional_str(data, "transport", default=None)
-    key_prefix = _pop_optional_str(data, "key_prefix", default=None)
-    raw_endpoints = data.pop("connect_endpoints", None)
-    connect_endpoints: Optional[tuple[str, ...]]
-    if raw_endpoints is None:
-        connect_endpoints = None
-    else:
-        if not isinstance(raw_endpoints, list):
-            raise ProfileValidationError("robot.bridge.connect_endpoints must be a list.")
-        parsed_endpoints = tuple(
-            _coerce_string_list(raw_endpoints, context="robot.bridge.connect_endpoints")
-        )
-        connect_endpoints = parsed_endpoints or None
-    _reject_unknown(data, "robot.bridge")
-    return RobotBridgeProfile(
-        transport=transport.strip() if transport else None,
-        key_prefix=key_prefix.strip() if key_prefix else None,
-        connect_endpoints=connect_endpoints,
     )
 
 
@@ -782,19 +979,34 @@ def _parse_navigation(data: dict[str, Any]) -> NavigationProfile:
     )
 
 
-def _parse_tools(data: dict[str, Any], *, robot_family: str) -> ToolsProfile:
-    enabled_tool_names = tuple(
+def _parse_tools(
+    data: dict[str, Any],
+    *,
+    robot_family: str | None,
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile | None = None,
+) -> ToolsProfile:
+    raw_enabled = data.pop("enabled_tool_ids", None)
+    if raw_enabled is None:
+        raw_enabled = []
+    enabled_tool_ids = tuple(
         _coerce_string_list(
-            _pop_list(data, "enabled_tool_names", default=[]),
-            context="tools.enabled_tool_names",
+            raw_enabled,
+            context="tools.enabled_tool_ids",
         )
     )
     _reject_unknown(data, "tools")
     try:
-        resolve_builtin_tool_names(enabled_tool_names, robot_family=robot_family)
+        resolve_builtin_tool_names(enabled_tool_ids, robot_family=robot_family)
     except ValueError as exc:
         raise ProfileValidationError(str(exc)) from exc
-    return ToolsProfile(enabled_tool_names=enabled_tool_names)
+    _validate_tool_capabilities(
+        enabled_tool_ids,
+        robot_family=robot_family,
+        manifest=manifest,
+        resources=resources,
+    )
+    return ToolsProfile(enabled_tool_ids=enabled_tool_ids)
 
 
 def _parse_knowledge_base_entry(item: Any, *, index: int) -> KnowledgeBaseProfile:
@@ -857,12 +1069,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
     depth_gate = FaceDepthGateProfile(
         enabled=_pop_bool(depth_gate_data, "enabled", default=False),
-        depth_topic=_pop_optional_str(
-            depth_gate_data,
-            "depth_topic",
-            default="/camera/aligned_depth_to_color/image_raw",
-        )
-        or "/camera/aligned_depth_to_color/image_raw",
         sync_slop_sec=_pop_float(depth_gate_data, "sync_slop_sec", default=0.12),
         sync_queue_size=_pop_int(depth_gate_data, "sync_queue_size", default=10),
         capture_timeout_sec=_pop_float(
@@ -886,7 +1092,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     )
     try:
         DepthGateSettings(
-            depth_topic=depth_gate.depth_topic,
             sync_slop_sec=depth_gate.sync_slop_sec,
             sync_queue_size=depth_gate.sync_queue_size,
             capture_timeout_sec=depth_gate.capture_timeout_sec,
@@ -904,12 +1109,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
     owner_turn = FaceOwnerTurnProfile(
         enabled=_pop_bool(owner_turn_data, "enabled", default=False),
-        camera_info_topic=_pop_optional_str(
-            owner_turn_data,
-            "camera_info_topic",
-            default="/camera/color/camera_info",
-        )
-        or "/camera/color/camera_info",
         camera_yaw_offset_rad=_pop_float(
             owner_turn_data,
             "camera_yaw_offset_rad",
@@ -1006,12 +1205,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             default=DEFAULT_FACE_DB_PATH,
         )
         or DEFAULT_FACE_DB_PATH,
-        camera_topic=_pop_optional_str(
-            data,
-            "camera_topic",
-            default="/camera/color/image_raw/compressed",
-        )
-        or "/camera/color/image_raw/compressed",
         loop_interval_sec=_pop_float(data, "loop_interval_sec", default=1.0),
         recognition_threshold=_pop_float(
             data,
@@ -1302,19 +1495,19 @@ def _reconcile_profile_dependencies(
     if face_recognition.enabled and employee_directory.enabled:
         return tools, employee_directory, face_recognition, realtime
 
-    effective_tool_names = list(tools.enabled_tool_names)
+    effective_tool_ids = list(tools.enabled_tool_ids)
     if not employee_directory.enabled:
-        effective_tool_names = [
+        effective_tool_ids = [
             name
-            for name in effective_tool_names
+            for name in effective_tool_ids
             if resolve_builtin_tool_name(name, robot_family=robot_family)
             != "resolve_employee_identity"
         ]
 
     if not face_recognition.enabled:
-        effective_tool_names = [
+        effective_tool_ids = [
             name
-            for name in effective_tool_names
+            for name in effective_tool_ids
             if resolve_builtin_tool_name(name, robot_family=robot_family)
             != "enroll_visible_person"
         ]
@@ -1342,9 +1535,9 @@ def _reconcile_profile_dependencies(
                 ),
             )
 
-    effective_tool_names_tuple = tuple(effective_tool_names)
-    if effective_tool_names_tuple != tools.enabled_tool_names:
-        tools = replace(tools, enabled_tool_names=effective_tool_names_tuple)
+    effective_tool_ids_tuple = tuple(effective_tool_ids)
+    if effective_tool_ids_tuple != tools.enabled_tool_ids:
+        tools = replace(tools, enabled_tool_ids=effective_tool_ids_tuple)
     return tools, employee_directory, face_recognition, realtime
 
 

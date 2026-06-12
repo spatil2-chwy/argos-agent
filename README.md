@@ -22,6 +22,7 @@ Canonical operator guide: `docs/launch.md`
 ├── pyproject.toml
 ├── poetry.lock
 ├── config/
+│   ├── manifests/
 │   └── profiles/
 ├── resources/
 │   ├── nav_locations/
@@ -33,13 +34,14 @@ Canonical operator guide: `docs/launch.md`
 ├── docs/
 └── argos_src/
     ├── agent/
+    ├── capabilities/
     ├── face_recognition/
     ├── identity/
     │   └── embeddings/
     ├── integrations/
     ├── media/
     ├── memory/
-    ├── robot_api/
+    ├── provider_api/
     ├── runtime/
     └── tools/
         ├── common/

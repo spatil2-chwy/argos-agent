@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from argos_src.robot_api.models import CameraIntrinsics
+from argos_src.provider_api.models import CameraIntrinsics
 
 
 def face_center_px(face: dict[str, Any]) -> tuple[float, float] | None:

@@ -21,7 +21,6 @@ LANDMARK_NAMES = (
 class DepthGateSettings:
     """Runtime settings for landmark-based face depth gating."""
 
-    depth_topic: str = "/camera/aligned_depth_to_color/image_raw"
     sync_slop_sec: float = 0.12
     sync_queue_size: int = 10
     capture_timeout_sec: float = 1.5
