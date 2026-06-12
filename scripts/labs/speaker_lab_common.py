@@ -247,7 +247,7 @@ def build_speaker_service(config: SpeakerLabConfig) -> "SpeakerRecognitionServic
 
 def build_vad(vad_threshold: float) -> tuple[object, str]:
     try:
-        from argos_src.audio import SileroVAD
+        from argos_src.media.audio_detection import SileroVAD
     except Exception:
         return _RmsVAD(rms_threshold=350.0), "rms_fallback"
     return SileroVAD(SAMPLE_RATE, float(vad_threshold)), "silero"

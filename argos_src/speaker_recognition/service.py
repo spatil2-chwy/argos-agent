@@ -11,7 +11,7 @@ from argos_src.speaker_recognition.backend import (
     SpeechBrainEcapaBackend,
 )
 from argos_src.speaker_recognition.constants import DEFAULT_SPEAKER_DB_PATH
-from argos_src.embedding_stores.speaker_store import SpeakerEmbeddingStore
+from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 from argos_src.speaker_recognition.models import (
     SpeakerRecognitionPolicy,
     SpeakerResolutionResult,

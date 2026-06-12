@@ -6,7 +6,7 @@ import wave
 
 import numpy as np
 
-from argos_src.helpers.speaker_lab_common import (
+from scripts.labs.speaker_lab_common import (
     SAMPLE_RATE,
     build_lab_config,
     inspect_vad_frames,

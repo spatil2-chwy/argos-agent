@@ -33,12 +33,12 @@ if "websocket" not in sys.modules:
         create_connection=lambda *args, **kwargs: object(),
     )
     _TEMP_STUBS.add("websocket")
-if "argos_src.audio" not in sys.modules:
-    audio_mod = types.ModuleType("argos_src.audio")
+if "argos_src.media.audio_detection" not in sys.modules:
+    audio_mod = types.ModuleType("argos_src.media.audio_detection")
     audio_mod.OpenWakeWord = lambda *args, **kwargs: SimpleNamespace(threshold=0.5)
     audio_mod.SileroVAD = lambda *args, **kwargs: (lambda audio, ctx: (False, {}))
-    sys.modules["argos_src.audio"] = audio_mod
-    _TEMP_STUBS.add("argos_src.audio")
+    sys.modules["argos_src.media.audio_detection"] = audio_mod
+    _TEMP_STUBS.add("argos_src.media.audio_detection")
 if "argos_src.agent.factory" not in sys.modules:
     factory_mod = types.ModuleType("argos_src.agent.factory")
     factory_mod.create_ros2_agent = None
@@ -322,8 +322,14 @@ def _make_agent():
     agent._current_primary_face_person_id = None
     agent._current_visible_face_person_ids = ()
     agent._current_turn_audio_chunks = []
+    agent._current_turn_vad_positive_blocks = 0
     agent._pending_voice_enrollments = {}
     agent._voice_enrollment_lock = threading.Lock()
+    agent._candidate_voice_blocks = 0
+    agent._recording_preroll_chunks = deque()
+    agent._recording_gesture_queue = queue.Queue()
+    agent._recording_gesture_lock = threading.Lock()
+    agent._recording_gesture_thread = None
     return agent
 
 
@@ -494,21 +500,37 @@ def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     assert followups == [turn.req_id]
     assert owner_turn.cancellations == []
 
-def test_recording_hooks_update_gesture_runtime(monkeypatch):
-    class _NoopThread:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def start(self):
-            return None
-
-    monkeypatch.setattr(realtime_mod.threading, "Thread", _NoopThread)
+def test_recording_hooks_update_gesture_runtime():
     agent = _make_agent()
 
     agent._start_recording_locked(now_s=10.0)
     agent._finalize_recording_locked(now_s=11.0)
 
+    deadline = time.time() + 1.0
+    while len(agent.gesture_runtime.recording_active) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+
     assert agent.gesture_runtime.recording_active == [True, False]
+
+
+def test_recording_gesture_does_not_block_audio_finalize():
+    class _SlowGestureRuntime:
+        def __init__(self):
+            self.recording_active = []
+
+        def set_recording_active(self, active):
+            time.sleep(0.25)
+            self.recording_active.append(bool(active))
+
+    agent = _make_agent()
+    agent.gesture_runtime = _SlowGestureRuntime()
+
+    started = time.monotonic()
+    agent._finalize_recording_locked(now_s=11.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert any(evt.get("event") == "speech_end" for evt in agent._latency.events)
 
 
 def test_audio_face_uses_only_strict_primary_face_id():
@@ -1419,7 +1441,7 @@ def test_active_recording_survives_admission_closing_mid_capture():
     agent._vad = lambda *_args, **_kwargs: (True, {})
     agent._wake_word = lambda *_args, **_kwargs: (False, {})
 
-    states = deque(["cooldown", "idle"])
+    states = deque(["cooldown", "cooldown", "idle"])
 
     class _Engagement:
         def snapshot(self):
@@ -1439,10 +1461,11 @@ def test_active_recording_survives_admission_closing_mid_capture():
 
     agent._capture_callback(chunk, 1600, None, None)
     agent._capture_callback(chunk, 1600, None, None)
+    agent._capture_callback(chunk, 1600, None, None)
 
     assert agent._recording_active is True
-    assert len(agent._current_turn_audio_chunks) == 2
-    assert agent._current_turn_vad_positive_blocks == 2
+    assert len(agent._current_turn_audio_chunks) == 3
+    assert agent._current_turn_vad_positive_blocks == 3
 
 
 def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():

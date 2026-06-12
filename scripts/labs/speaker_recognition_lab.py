@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """Standalone speaker-enrollment and recognition lab.
 
-cd ~/rai
+cd ~/argos-agent
 source setup_shell.sh
 
 # Enroll 3 clips into the temp lab DB
-poetry run python -m argos_src.helpers.speaker_recognition_lab enroll --person-id person_me --clips 3
+poetry run python -m scripts.labs.speaker_recognition_lab enroll --person-id person_me --clips 3
 
 # Recognize one live clip against that temp lab DB
-poetry run python -m argos_src.helpers.speaker_recognition_lab recognize --clips 1
+poetry run python -m scripts.labs.speaker_recognition_lab recognize --clips 1
 
 # If you want to test final face/audio arbitration too
-poetry run python -m argos_src.helpers.speaker_recognition_lab recognize \
+poetry run python -m scripts.labs.speaker_recognition_lab recognize \
   --clips 1 \
   --primary-face-person-id person_me \
   --visible-face-person-id person_me
 
 # Use prerecorded WAVs instead of the mic
-poetry run python -m argos_src.helpers.speaker_recognition_lab enroll \
+poetry run python -m scripts.labs.speaker_recognition_lab enroll \
   --person-id person_me \
   --audio-file /path/to/clip1.wav \
   --audio-file /path/to/clip2.wav
 
 # Inspect saved refs in the temp session DB
-poetry run python -m argos_src.helpers.speaker_recognition_lab list
+poetry run python -m scripts.labs.speaker_recognition_lab list
 
 # Reset the temp lab session
-poetry run python -m argos_src.helpers.speaker_recognition_lab reset -y
+poetry run python -m scripts.labs.speaker_recognition_lab reset -y
 
 
 This helper uses the real Argos speaker policy, VAD-based voiced trimming,
@@ -45,7 +45,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from argos_src.helpers.speaker_lab_common import (
+from scripts.labs.speaker_lab_common import (
     add_common_args,
     add_policy_override_args,
     build_lab_config,

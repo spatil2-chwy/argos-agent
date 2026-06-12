@@ -6,5 +6,5 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_FACE_DB_PATH = str((REPO_ROOT / "argos_src" / "face_recognition" / "db").resolve())
+DEFAULT_FACE_DB_PATH = str((REPO_ROOT / "var" / "face_recognition").resolve())
 MIN_FACE_DETECTION_CONFIDENCE = 0.9

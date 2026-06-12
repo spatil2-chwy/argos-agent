@@ -8,7 +8,7 @@ from typing import Any, Callable
 import cv2
 from langchain_core.tools import tool
 
-from argos_src.images import preprocess_image
+from argos_src.media.image_encoding import preprocess_image
 from argos_src.tools.common.tool_response import tool_response_json
 
 DEFAULT_CAMERA_TOPIC = "/camera/color/image_raw/compressed"

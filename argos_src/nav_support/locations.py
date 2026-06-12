@@ -50,11 +50,11 @@ CHARGING_DOCK_NAVIGATION_POLICY = NavigationPolicy(
 
 
 def _locations_dir() -> Path:
-    return Path(__file__).resolve().parent / "locations"
+    return Path(__file__).resolve().parents[2] / "resources" / "nav_locations"
 
 
 def resolve_map_locations_path(map_filename: str) -> Path:
-    """Resolve map-specific locations file under nav_support/locations/.
+    """Resolve map-specific locations file under resources/nav_locations/.
 
     The filename must be a basename ending with `.json` (no path separators).
     """

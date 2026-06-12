@@ -106,14 +106,14 @@ events or Argos logs when debugging face-triggered interaction.
 Live tail:
 
 ```bash
-python3 argos_src/observability/latency_tail.py --follow
-python3 argos_src/observability/latency_tail.py --follow --component realtime
+python3 -m argos_src.observability.latency_tail --follow
+python3 -m argos_src.observability.latency_tail --follow --component realtime
 ```
 
 Aggregate summary:
 
 ```bash
-python3 argos_src/observability/latency_report.py
+python3 -m argos_src.observability.latency_report
 ```
 
 ## What To Look For

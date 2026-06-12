@@ -21,7 +21,7 @@ from argos_src.profile_config import (
     resolve_locations_file,
     resolve_prompt_file,
 )
-from argos_src.prompts.loader import load_system_prompt
+from argos_src.resource_paths import load_system_prompt
 from argos_src.runtime.battery_state import BatteryStateCache
 from argos_src.robot_api.client import RobotClient
 from argos_src.robot_api.factory import create_robot_client

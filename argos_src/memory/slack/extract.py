@@ -306,7 +306,7 @@ class SlackMemoryExtractor:
     """Extract source-aware memory operations from normalized Slack windows."""
 
     def __init__(self, *, memory_store: Any) -> None:
-        from argos_src.llm import get_llm_model_direct
+        from argos_src.integrations.openai_models import get_llm_model_direct
         from argos_src.profile_config import FRAMEWORK_CONFIG_PATH
 
         self.memory_store = memory_store

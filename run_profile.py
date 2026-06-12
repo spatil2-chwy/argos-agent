@@ -29,7 +29,7 @@ def parse_arguments() -> argparse.Namespace:
         "--profile",
         type=str,
         required=True,
-        help="Scenario profile name under argos_src/config/profiles/ or an explicit YAML path",
+        help="Scenario profile name under config/profiles/ or an explicit YAML path",
     )
     parser.add_argument("--map-file", type=str, default=None)
     parser.add_argument("--prompt-file", type=str, default=None)

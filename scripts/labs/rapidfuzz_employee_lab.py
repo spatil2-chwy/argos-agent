@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Standalone employee-directory registration probe.
 
-Run from `argos_src`:
+Run from the repo root:
 
     source setup_shell.sh
-    poetry run python -m argos_src.helpers.rapidfuzz_employee_lab --sites bos1,bos3
-    poetry run python -m argos_src.helpers.rapidfuzz_employee_lab --sites bos1 bos3 --loop
+    poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3
+    poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1 bos3 --loop
 
 This helper is intentionally narrow. It tests the registration name-matching
 path in a standalone way:
@@ -45,7 +45,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from argos_src.employee_directory import EmployeeDirectoryService
 from argos_src.employee_directory.service import load_directory_records_by_site
-from argos_src.helpers.face_lab_common import configure_logging, json_print
+from scripts.labs.face_lab_common import configure_logging, json_print
 from argos_src.openai_realtime import (
     realtime_auth_headers,
     realtime_response_payload,
@@ -53,7 +53,7 @@ from argos_src.openai_realtime import (
     realtime_websocket_url,
 )
 from argos_src.profile_config import load_scenario_profile, resolve_prompt_file
-from argos_src.prompts.loader import load_system_prompt
+from argos_src.resource_paths import load_system_prompt
 from argos_src.tools.unitree_go2.vision.resolve_employee_identity import (
     get_resolve_employee_identity_tool,
 )
@@ -664,7 +664,7 @@ def _build_vad(
     rms_threshold: float,
 ) -> tuple[Callable[[np.ndarray, dict[str, Any]], tuple[bool, dict[str, Any]]], dict[str, Any]]:
     try:
-        from argos_src.audio import SileroVAD
+        from argos_src.media.audio_detection import SileroVAD
 
         return SileroVAD(VAD_SAMPLE_RATE, vad_threshold), {
             "mode": "silero",

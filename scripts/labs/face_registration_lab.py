@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Standalone face-registration lab.
 
-Run from `argos_src`:
+Run from the repo root:
 
     source setup_shell.sh
-    poetry run python -m argos_src.helpers.face_registration_lab --frames 5
-    poetry run python -m argos_src.helpers.face_registration_lab --name "Jane Doe" --enroll
+    poetry run python -m scripts.labs.face_registration_lab --frames 5
+    poetry run python -m scripts.labs.face_registration_lab --name "Jane Doe" --enroll
 
 Useful tuning examples:
 
-    poetry run python -m argos_src.helpers.face_registration_lab --min-contrast 12
-    poetry run python -m argos_src.helpers.face_registration_lab --max-face-depth-m 2.5
-    poetry run python -m argos_src.helpers.face_registration_lab --disable-depth
+    poetry run python -m scripts.labs.face_registration_lab --min-contrast 12
+    poetry run python -m scripts.labs.face_registration_lab --max-face-depth-m 2.5
+    poetry run python -m scripts.labs.face_registration_lab --disable-depth
 
 Default mode is a dry-run diagnostic: it captures frames, runs the same
 registration preprocessing, and prints quality metrics without saving a person.
@@ -30,7 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from argos_src.helpers.face_lab_common import (
+from scripts.labs.face_lab_common import (
     add_enrollment_policy_args,
     add_profile_args,
     build_enrollment_policy,

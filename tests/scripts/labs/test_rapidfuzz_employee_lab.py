@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from argos_src.helpers.rapidfuzz_employee_lab import (
+from scripts.labs.rapidfuzz_employee_lab import (
     LoadedDirectory,
     SpokenName,
     parse_site_codes,

@@ -29,8 +29,8 @@ from argos_src.tools.tool_ids import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRAMEWORK_CONFIG_PATH = REPO_ROOT / "config.toml"
-PROFILES_DIR = REPO_ROOT / "argos_src" / "config" / "profiles"
-ARGOS_MODELS_DIR = REPO_ROOT / "argos_src" / "models"
+PROFILES_DIR = REPO_ROOT / "config" / "profiles"
+ARGOS_MODELS_DIR = REPO_ROOT / "resources" / "wake_words"
 DEFAULT_PROFILE_NAME = "static_interaction"
 DEFAULT_ROBOT_FAMILY = ROBOT_FAMILY_UNITREE_GO2
 
@@ -464,7 +464,7 @@ def resolve_prompt_file(prompt_file: Optional[str]) -> Optional[Path]:
     """Resolve a prompt path using the existing Argos prompt lookup rules."""
     if not prompt_file:
         return None
-    from argos_src.prompts.loader import resolve_prompt_path
+    from argos_src.resource_paths import resolve_prompt_path
 
     return resolve_prompt_path(prompt_file)
 

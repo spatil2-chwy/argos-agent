@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import threading
 import time
 from typing import Any, Callable, List, Optional, Type
 
@@ -15,7 +14,6 @@ from argos_src.runtime.battery_state import (
 )
 from argos_src.nav_support.locations import (
     CHARGE_DOCK_LOCATION_NAME,
-    CHARGING_DOCK_NAVIGATION_POLICY,
     FOCUSED_NAVIGATION_POLICY,
     INTERRUPTIBLE_NAVIGATION_POLICY,
     LocationStore,

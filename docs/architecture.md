@@ -26,8 +26,6 @@ There is no separate ASR process and no separate TTS process in the supported pa
 
 - `run_profile.py`
   Supported single-process launcher.
-- `run_agent.py`
-  Direct realtime runtime entrypoint.
 - `argos_src/agent/factory.py`
   Wires face runtime, nav state, battery cache, tools, bridges, coalescer, and engagement state.
 - `argos_src/agent/agent_runtime.py`
@@ -40,6 +38,19 @@ There is no separate ASR process and no separate TTS process in the supported pa
   Pure local speech admission policy.
 - `argos_src/agent/runtime_context.py`
   Builds dynamic per-turn instruction blocks.
+
+## Repository Layout
+
+- `argos_src/`
+  Importable runtime source only.
+- `config/profiles/`
+  Scenario YAML profiles such as `static_interaction`.
+- `resources/`
+  Prompt files, wake-word ONNX models, and navigation-location JSON.
+- `var/`
+  Ignored local runtime state for identity, memory, face, and speaker stores.
+- `scripts/labs/`
+  Operator/lab tools that exercise runtime services without starting the agent.
 
 ## Human Context and Memory Path
 

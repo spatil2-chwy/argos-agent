@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from argos_src.embedding_stores.face_store import FaceEmbeddingStore
+from argos_src.identity.embeddings.face_store import FaceEmbeddingStore
 from argos_src.face_recognition.constants import DEFAULT_FACE_DB_PATH
 from argos_src.identity.constants import DEFAULT_IDENTITY_DB_PATH
 from argos_src.identity.store import IdentityStore

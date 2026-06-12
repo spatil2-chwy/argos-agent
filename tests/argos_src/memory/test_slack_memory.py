@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 def test_slack_prompt_attributes_mentions_to_mentioned_people():
     from argos_src.memory.slack.extract import build_slack_extraction_prompt
-    from argos_src.memory.slack.models import SlackChannelWindow, SlackMessage
+    from argos_src.memory.slack.models import SlackChannelWindow
     from argos_src.memory.slack.normalize import normalize_message
     from argos_src.memory.slack.models import SlackUserProfile
 

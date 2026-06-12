@@ -136,6 +136,7 @@ For every chunk it:
 3. Runs local wake-word detection.
 4. Reads the current interaction snapshot from `EngagementStateMachine`.
 5. Evaluates `resolve_record_admission(...)`.
+6. Keeps a short local pre-roll buffer while not actively recording.
 
 ### Step 2: Local admission decides whether recording is open
 
@@ -156,7 +157,13 @@ When admission is open and voice is detected:
 - `_start_recording_locked()` marks recording active
 - the runtime sends `input_audio_buffer.clear`
 - raw PCM chunks start flowing into `_audio_send_queue`
+- a small pre-roll window is prepended so the first syllable is less likely to be clipped
+- passive starts require two consecutive VAD-positive chunks; wake-word starts open immediately
 - `_audio_sender_loop()` converts each chunk to base64 and sends `input_audio_buffer.append`
+
+Recording gesture updates are dispatched through a serial background worker.
+That keeps slow robot/bridge gesture calls out of the realtime audio callback
+and out of the `speech_end -> commit` path.
 
 ### Step 4: Local end-of-speech commits the turn
 
@@ -166,6 +173,10 @@ When voice has been absent for `silence_grace_period`:
 - `_commit_audio_turn()` waits for `_audio_send_queue` to drain
 - the runtime sends `input_audio_buffer.commit`
 - a new `QueuedTurn(kind="audio")` is created
+
+OpenAI input transcription is attached to the committed audio item. It is used
+for observability, memory, and preference extraction, but it is not what opens,
+closes, or commits the local recording.
 
 ### Step 5: Pending internal events may be folded into the same turn
 

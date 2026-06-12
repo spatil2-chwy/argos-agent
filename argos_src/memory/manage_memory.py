@@ -270,12 +270,12 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python memory/manage_memory.py --person "Sakshee Patil"
-  python memory/manage_memory.py --site BOS3
-  python memory/manage_memory.py --person "Sakshee Patil" --source slack
-  python memory/manage_memory.py --person "Sakshee Patil" --site BOS3 --prompt
-  python memory/manage_memory.py --person person_sakshee_patil_20260513_150604 --all --json
-  python memory/manage_memory.py --archive mem_abc123
+  python -m argos_src.memory.manage_memory --person "Sakshee Patil"
+  python -m argos_src.memory.manage_memory --site BOS3
+  python -m argos_src.memory.manage_memory --person "Sakshee Patil" --source slack
+  python -m argos_src.memory.manage_memory --person "Sakshee Patil" --site BOS3 --prompt
+  python -m argos_src.memory.manage_memory --person person_sakshee_patil_20260513_150604 --all --json
+  python -m argos_src.memory.manage_memory --archive mem_abc123
         """,
     )
     parser.add_argument("--person", metavar="NAME_OR_ID", default="", help="Show person memory")

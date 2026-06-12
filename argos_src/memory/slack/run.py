@@ -26,7 +26,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--profile",
         required=True,
-        help="Scenario profile name under argos_src/config/profiles/ or explicit YAML path.",
+        help="Scenario profile name under config/profiles/ or explicit YAML path.",
     )
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit.")
     parser.add_argument(

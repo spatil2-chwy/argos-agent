@@ -2,7 +2,7 @@
 
 Read this with:
 
-- `argos_src/prompts/static_interaction_prompt.md`
+- `resources/prompts/static_interaction_prompt.md`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
 - `argos_src/agent/agent_tools.py`
@@ -37,7 +37,7 @@ Those layers are deliberately kept separate.
 
 The static system prompt lives in:
 
-- `argos_src/prompts/static_interaction_prompt.md`
+- `resources/prompts/static_interaction_prompt.md`
 
 It is loaded by `factory.py` and sent in `RealtimeRobotAgent._configure_session()` as:
 

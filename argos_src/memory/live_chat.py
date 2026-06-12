@@ -788,7 +788,7 @@ class PreferenceExtractor:
         *,
         memory_store: MemoryStore,
     ):
-        from argos_src.llm import get_llm_model_direct
+        from argos_src.integrations.openai_models import get_llm_model_direct
         from argos_src.observability.observability import LatencyLogger, perf_now
         from argos_src.observability.pricing import estimate_text_generation_cost
 

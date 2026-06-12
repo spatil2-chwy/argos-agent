@@ -73,9 +73,9 @@ def _load_preference_extractor_module(monkeypatch):
     messages_mod.HumanMessage = object
     monkeypatch.setitem(sys.modules, "langchain_core.messages", messages_mod)
 
-    init_mod = types.ModuleType("argos_src.llm")
+    init_mod = types.ModuleType("argos_src.integrations.openai_models")
     init_mod.get_llm_model_direct = lambda *args, **kwargs: None
-    monkeypatch.setitem(sys.modules, "argos_src.llm", init_mod)
+    monkeypatch.setitem(sys.modules, "argos_src.integrations.openai_models", init_mod)
 
     observability_mod = types.ModuleType("argos_src.observability.observability")
     observability_mod.LatencyLogger = object
