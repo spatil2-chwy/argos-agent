@@ -36,7 +36,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--wake-word", type=str, default=None)
     parser.add_argument("--wake-threshold", type=float, default=None)
     parser.add_argument("--wake-window-sec", type=float, default=None)
-    parser.add_argument("--face-presence-topic", type=str, default=None)
     parser.add_argument("--silence-grace-period", type=float, default=None)
     parser.add_argument("--patrol-route", type=str, default=None)
     return parser.parse_args()
@@ -65,7 +64,6 @@ def main() -> int:
         wake_word=args.wake_word,
         wake_threshold=args.wake_threshold,
         wake_window_sec=args.wake_window_sec,
-        face_presence_topic=args.face_presence_topic,
         silence_grace_period=args.silence_grace_period,
     )
 

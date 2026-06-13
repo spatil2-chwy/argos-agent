@@ -516,7 +516,6 @@ def create_agent(
             coalescer=coalescer,
             engagement=engagement,
             nav_state=nav_state,
-            topic=scenario_profile.face_recognition.publish_presence_topic,
             presence_callback=agent.update_face_presence_snapshot,
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,

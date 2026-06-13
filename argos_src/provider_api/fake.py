@@ -129,6 +129,9 @@ class FakeProviderClient:
                 }
             )
 
+    def stop(self) -> None:
+        self.publish_velocity()
+
     def get_latest_image(
         self,
         resource_id: str | None = None,

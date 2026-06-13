@@ -21,7 +21,6 @@ from .orchestrator import EngagementState
 if TYPE_CHECKING:
     from argos_src.face_recognition.face_recognition_service import FaceRecognitionService
 
-FACE_PRESENCE_TOPIC = "/go2/face_presence"
 FACE_EVENT_POLL_SEC = 0.5
 RECOGNIZED_GREET_COOLDOWN_SEC = 45.0
 UNKNOWN_GREET_COOLDOWN_SEC = 30.0
@@ -48,7 +47,6 @@ class FaceEventBridge:
         coalescer,
         engagement,
         nav_state: NavigationState,
-        topic: str = FACE_PRESENCE_TOPIC,
         presence_callback=None,
         recognized_greet_enabled: bool = True,
         unknown_greet_enabled: bool = True,
@@ -60,7 +58,6 @@ class FaceEventBridge:
         self._coalescer = coalescer
         self._engagement = engagement
         self._nav_state = nav_state
-        self._topic = topic
         self._presence_callback = presence_callback
         self._recognized_greet_enabled = recognized_greet_enabled
         self._unknown_greet_enabled = unknown_greet_enabled

@@ -7,12 +7,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
 import tomli
-
-from argos_src.runtime.interaction_topics import (
-    FACE_PRESENCE_TOPIC,
-)
+import yaml
 from argos_src.face_recognition.constants import DEFAULT_FACE_DB_PATH
 from argos_src.identity.constants import DEFAULT_IDENTITY_DB_PATH
 from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
@@ -122,7 +118,6 @@ class FaceRecognitionProfile:
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
-    publish_presence_topic: str
     depth_gate: FaceDepthGateProfile
     owner_turn: FaceOwnerTurnProfile
     preference_extraction: PreferenceExtractionProfile
@@ -191,7 +186,6 @@ class RealtimeProfile:
     wake_word_model: str
     wake_threshold: float
     wake_window_sec: float
-    face_presence_topic: str
     input_sample_rate: int
     output_sample_rate: int
     input_block_size: int
@@ -296,7 +290,6 @@ class ScenarioProfile:
             db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
-            publish_presence_topic=FACE_PRESENCE_TOPIC,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
                 sync_slop_sec=0.12,
@@ -379,7 +372,6 @@ class ScenarioProfile:
             wake_word_model="hey puffle",
             wake_threshold=0.5,
             wake_window_sec=5.0,
-            face_presence_topic=FACE_PRESENCE_TOPIC,
             input_sample_rate=24000,
             output_sample_rate=24000,
             input_block_size=2400,
@@ -566,7 +558,6 @@ def apply_audio_cli_overrides(
     wake_word: Optional[str] = None,
     wake_threshold: Optional[float] = None,
     wake_window_sec: Optional[float] = None,
-    face_presence_topic: Optional[str] = None,
     silence_grace_period: Optional[float] = None,
     speaker_channels: Optional[int] = None,
 ) -> ScenarioProfile:
@@ -595,11 +586,6 @@ def apply_audio_cli_overrides(
         updated_realtime = replace(
             updated_realtime,
             wake_window_sec=float(wake_window_sec),
-        )
-    if face_presence_topic is not None:
-        updated_realtime = replace(
-            updated_realtime,
-            face_presence_topic=face_presence_topic,
         )
     if silence_grace_period is not None:
         updated_realtime = replace(
@@ -1211,12 +1197,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_threshold",
             default=0.6,
         ),
-        publish_presence_topic=_pop_optional_str(
-            data,
-            "publish_presence_topic",
-            default=FACE_PRESENCE_TOPIC,
-        )
-        or FACE_PRESENCE_TOPIC,
         depth_gate=depth_gate,
         owner_turn=owner_turn,
         preference_extraction=preference_extraction,
@@ -1442,11 +1422,6 @@ def _parse_realtime(
         default=0.5,
     )
     wake_window_sec = _pop_float(data, "wake_window_sec", default=5.0)
-    face_presence_topic = _pop_optional_str(
-        data,
-        "face_presence_topic",
-        default=face_profile.publish_presence_topic,
-    ) or face_profile.publish_presence_topic
     input_sample_rate = _pop_int(data, "input_sample_rate", default=24000)
     output_sample_rate = _pop_int(data, "output_sample_rate", default=24000)
     input_block_size = _pop_int(data, "input_block_size", default=2400)
@@ -1469,7 +1444,6 @@ def _parse_realtime(
         wake_word_model=wake_word_model,
         wake_threshold=wake_threshold,
         wake_window_sec=wake_window_sec,
-        face_presence_topic=face_presence_topic,
         input_sample_rate=input_sample_rate,
         output_sample_rate=output_sample_rate,
         input_block_size=input_block_size,

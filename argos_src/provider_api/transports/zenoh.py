@@ -240,6 +240,9 @@ class ZenohProviderClient:
             },
         )
 
+    def stop(self) -> None:
+        self._request(OP_STOP_MOTION, {})
+
     def get_latest_image(
         self,
         resource_id: str | None = None,

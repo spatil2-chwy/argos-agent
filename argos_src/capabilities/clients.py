@@ -18,7 +18,7 @@ from argos_src.provider_api.models import (
 
 
 class MotionClient(Protocol):
-    def move_for_duration(
+    def move_velocity(
         self,
         *,
         linear_x: float = 0.0,
