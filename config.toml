@@ -34,7 +34,7 @@ host = "https://api.smith.langchain.com"
 
 [asr]
 # Audio input device
-recording_device_name = "pulse"
+recording_device_name = "pipewire"
 
 # Transcription model: "LocalWhisper" or "OpenAIWhisper"
 transcription_model = "OpenAIWhisper"
@@ -66,5 +66,5 @@ vendor = "OpenAITTS"
 # OpenAI TTS settings (only used if vendor = "OpenAITTS")
 openai_voice = "fable"
 
-# Speaker device (use "pulse" for PulseAudio default, or a specific device name)
-speaker_device_name = "pulse"
+# Speaker device (use "pipewire" for pipewireAudio default, or a specific device name)
+speaker_device_name = "pipewire"

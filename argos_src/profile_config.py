@@ -368,8 +368,8 @@ class ScenarioProfile:
             voice="cedar",
             audio_output_speed=0.9,
             transcription_model="gpt-4o-mini-transcribe",
-            input_device="pulse",
-            output_device="pulse",
+            input_device="pipewire",
+            output_device="pipewire",
             noise_reduction="near_field",
             language=None,
             vad_threshold=0.8,
@@ -1417,12 +1417,12 @@ def _parse_realtime(
     input_device = _pop_optional_str(
         data,
         "input_device",
-        default="pulse",
+        default="pipewire",
     )
     output_device = _pop_optional_str(
         data,
         "output_device",
-        default="pulse",
+        default="pipewire",
     )
     noise_reduction = _pop_optional_str(
         data,

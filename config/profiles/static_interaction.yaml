@@ -127,8 +127,8 @@ realtime:
   voice: cedar
   audio_output_speed: 1.0
   transcription_model: gpt-4o-mini-transcribe
-  input_device: pulse
-  output_device: pulse
+  input_device: pipewire
+  output_device: pipewire
   noise_reduction: near_field
   vad_threshold: 0.8
   silence_grace_period: 1.0

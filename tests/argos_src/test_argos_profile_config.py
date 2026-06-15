@@ -188,8 +188,8 @@ def test_realtime_defaults_do_not_inherit_legacy_asr_tts_config():
         },
     )
 
-    assert profile.realtime.input_device == "pulse"
-    assert profile.realtime.output_device == "pulse"
+    assert profile.realtime.input_device == "pipewire"
+    assert profile.realtime.output_device == "pipewire"
     assert profile.realtime.language is None
     assert profile.realtime.vad_threshold == 0.8
     assert profile.realtime.silence_grace_period == 0.3
