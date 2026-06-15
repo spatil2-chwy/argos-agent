@@ -233,6 +233,7 @@ class ResourceSelectionsProfile:
     primary_robot: str = ""
     face_camera: str = ""
     scene_camera: str = ""
+    interaction_display: str = ""
     lidar: str = ""
 
 
@@ -241,6 +242,11 @@ class BatteryProfile:
     enabled: bool
     low_battery_pct: float
     charging_ready_pct: float
+
+
+@dataclass(frozen=True)
+class DisplayProfile:
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -408,6 +414,9 @@ class ScenarioProfile:
             low_battery_pct=30.0,
             charging_ready_pct=90.0,
         )
+    )
+    display: DisplayProfile = field(
+        default_factory=lambda: DisplayProfile(enabled=True)
     )
     embodiment: EmbodimentProfile = field(default_factory=EmbodimentProfile)
 
@@ -628,11 +637,15 @@ def _parse_resource_selections(
     data: dict[str, Any],
     *,
     manifest: ProviderManifest,
+    display_enabled: bool = True,
 ) -> ResourceSelectionsProfile:
     selections = ResourceSelectionsProfile(
         primary_robot=_pop_optional_str(data, "primary_robot", default="") or "",
         face_camera=_pop_optional_str(data, "face_camera", default="") or "",
         scene_camera=_pop_optional_str(data, "scene_camera", default="") or "",
+        interaction_display=(
+            _pop_optional_str(data, "interaction_display", default="") or ""
+        ),
         lidar=_pop_optional_str(data, "lidar", default="") or "",
     )
     _reject_unknown(data, "resources")
@@ -650,8 +663,22 @@ def _parse_resource_selections(
             capability_id="camera.rgb",
         )
         selections = replace(selections, face_camera=face_camera)
+    if not display_enabled:
+        selections = replace(selections, interaction_display="")
+    elif not selections.interaction_display:
+        interaction_display = _default_resource_id(
+            manifest,
+            capability_id="display.command",
+        )
+        selections = replace(selections, interaction_display=interaction_display)
 
-    for field_name in ("primary_robot", "face_camera", "scene_camera", "lidar"):
+    for field_name in (
+        "primary_robot",
+        "face_camera",
+        "scene_camera",
+        "interaction_display",
+        "lidar",
+    ):
         resource_id = str(getattr(selections, field_name, "") or "").strip()
         if not resource_id:
             continue
@@ -814,8 +841,14 @@ def _parse_profile(
     name = _pop_optional_str(profile_data, "name", default=profile_path.stem)
     manifest_id = _pop_optional_str(profile_data, "manifest", default=None) or ""
     manifest = _load_manifest_for_profile(manifest_id)
+    display_data = _pop_section(profile_data, "display")
+    display = _parse_display(display_data)
     resources_data = _pop_section(profile_data, "resources")
-    resources = _parse_resource_selections(resources_data, manifest=manifest)
+    resources = _parse_resource_selections(
+        resources_data,
+        manifest=manifest,
+        display_enabled=display.enabled,
+    )
     if "robot" in profile_data:
         raise ProfileValidationError(
             "profile.robot is no longer supported; use manifest/resources."
@@ -919,6 +952,7 @@ def _parse_profile(
         engagement=engagement,
         startup=startup,
         battery=battery,
+        display=display,
         embodiment=embodiment,
     )
 
@@ -1608,6 +1642,14 @@ def _parse_battery(data: dict[str, Any]) -> BatteryProfile:
         charging_ready_pct=_pop_float(data, "charging_ready_pct", default=90.0),
     )
     _reject_unknown(data, "battery")
+    return profile
+
+
+def _parse_display(data: dict[str, Any]) -> DisplayProfile:
+    profile = DisplayProfile(
+        enabled=_pop_bool(data, "enabled", default=True),
+    )
+    _reject_unknown(data, "display")
     return profile
 
 

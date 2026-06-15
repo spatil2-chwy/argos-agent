@@ -25,6 +25,10 @@ OP_CANCEL_NAVIGATION = "navigation.cancel"
 OP_NAVIGATION_EVENT = "navigation.event"
 OP_CHARGING_DOCK = "dock.charging_sequence"
 OP_SPOT_COMMAND = "spot.command"
+OP_DISPLAY_COMMAND = "display.command"
+OP_DISPLAY_AWAIT_RESPONSE = "display.await_response"
+OP_DISPLAY_HEALTH = "display.health"
+OP_DISPLAY_STATE = "display.state"
 
 REQUEST_TYPE = "request"
 RESPONSE_TYPE = "response"
@@ -121,6 +125,10 @@ __all__ = [
     "OP_FACE_PRESENCE",
     "OP_CANCEL_NAVIGATION",
     "OP_CHARGING_DOCK",
+    "OP_DISPLAY_AWAIT_RESPONSE",
+    "OP_DISPLAY_COMMAND",
+    "OP_DISPLAY_HEALTH",
+    "OP_DISPLAY_STATE",
     "OP_FOLLOW_WAYPOINTS",
     "OP_GO2_ACTION",
     "OP_STOP_MOTION",

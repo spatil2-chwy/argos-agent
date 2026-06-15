@@ -5,6 +5,7 @@ Talk to your Go2 robot with the Argos realtime speech runtime: direct microphone
 Use [launch.md](/home/spatil2/argos-agent/docs/launch.md) for setup and bring-up.
 Use [observability.md](/home/spatil2/argos-agent/docs/observability.md) for latency debugging.
 Use [speaker_recognition.md](/home/spatil2/argos-agent/docs/speaker_recognition.md) for speaker ownership and voice enrollment details.
+Use [interaction_display.md](/home/spatil2/argos-agent/docs/interaction_display.md) for Puffle screen state and subtitles.
 
 ## Example
 
@@ -46,5 +47,6 @@ ts=2026-04-24 13:23:45.487 | component=realtime | metric=first_audio_latency_s |
     ├── agent/agent_runtime.py      # Persistent realtime session + audio/tool loop
     ├── agent/agent_audio.py        # Audio capture, commit, and playback callbacks
     ├── agent/agent_events/         # Realtime server-event parsing + routing helpers
+    ├── display/runtime.py          # Optional Puffle screen facade
     └── runtime/audio_admission.py  # Local wake/face/cooldown admission logic
 ```

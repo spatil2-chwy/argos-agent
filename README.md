@@ -35,6 +35,7 @@ Canonical operator guide: `docs/launch.md`
 └── argos_src/
     ├── agent/
     ├── capabilities/
+    ├── display/
     ├── face_recognition/
     ├── identity/
     │   └── embeddings/
@@ -53,6 +54,7 @@ Canonical operator guide: `docs/launch.md`
 - Launch and testing: `docs/launch.md`
 - Architecture: `docs/architecture.md`
 - Voice/runtime notes: `docs/voice.md`
+- Puffle interaction display: `docs/interaction_display.md`
 - Face recognition: `docs/face_recognition.md`
 - Speaker recognition: `docs/speaker_recognition.md`
 - Identity store: `docs/identity_store.md`

@@ -134,6 +134,7 @@ class RealtimeRobotAgent(
         nav_state: Any = None,
         battery_cache: Any = None,
         gesture_runtime: Any = None,
+        display_runtime: Any = None,
         owner_turn_controller: Any = None,
         initial_robot_posture: str = "standing",
         stand_tool_name: str = "move_robot",
@@ -159,6 +160,7 @@ class RealtimeRobotAgent(
         self.nav_state = nav_state
         self.battery_cache = battery_cache
         self.gesture_runtime = gesture_runtime
+        self.display_runtime = display_runtime
         self.owner_turn_controller = owner_turn_controller
         self._robot_posture = initial_robot_posture
         self._stand_tool_name = stand_tool_name
@@ -222,6 +224,10 @@ class RealtimeRobotAgent(
         self._recording_gesture_queue: queue.Queue[bool] = queue.Queue()
         self._recording_gesture_lock = threading.Lock()
         self._recording_gesture_thread: Optional[threading.Thread] = None
+        self._display_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._display_thread: Optional[threading.Thread] = None
+        self._display_mode_lock = threading.Lock()
+        self._display_mode = ""
         self._resample_state: Any = None
         self._wake_window_until = 0.0
         self._input_suppressed_until_s = 0.0
@@ -279,10 +285,14 @@ class RealtimeRobotAgent(
         starter = getattr(self.robot_client, "start", None)
         if callable(starter):
             starter()
+        display_starter = getattr(self.display_runtime, "start", None)
+        if callable(display_starter):
+            display_starter()
         self._start_websocket_threads()
         self._configure_session()
         self._start_audio_streams()
         self._start_workers()
+        self._set_display_mode_async("idle")
 
         atexit.register(self.shutdown)
 
@@ -309,6 +319,11 @@ class RealtimeRobotAgent(
                 self.gesture_runtime.shutdown()
             except Exception:
                 self.logger.exception("Failed to stop gesture runtime cleanly")
+        if self.display_runtime is not None:
+            try:
+                self.display_runtime.shutdown()
+            except Exception:
+                self.logger.exception("Failed to stop display runtime cleanly")
         if self.owner_turn_controller is not None:
             try:
                 self.owner_turn_controller.shutdown()
@@ -337,6 +352,7 @@ class RealtimeRobotAgent(
             self._response_thread,
             self._tool_thread,
             self._watchdog_thread,
+            self._display_thread,
         ):
             if thread is not None:
                 thread.join(timeout=2.0)
@@ -775,6 +791,85 @@ class RealtimeRobotAgent(
         self._response_thread.start()
         self._tool_thread.start()
         self._watchdog_thread.start()
+        if getattr(self, "display_runtime", None) is not None:
+            self._display_thread = threading.Thread(
+                target=self._display_worker_loop,
+                daemon=True,
+            )
+            self._display_thread.start()
+
+    def _set_display_mode_async(self, mode: str) -> None:
+        if getattr(self, "display_runtime", None) is None:
+            return
+        rendered = str(mode or "").strip()
+        if not rendered:
+            return
+        with self._display_mode_lock:
+            if rendered == self._display_mode:
+                return
+            self._display_mode = rendered
+        self._display_queue.put(("mode", rendered))
+
+    def _show_display_subtitle_async(self, text: str, *, duration_ms: int = 5000) -> None:
+        if getattr(self, "display_runtime", None) is None:
+            return
+        rendered = str(text or "").strip()
+        if not rendered:
+            return
+        self._display_queue.put(
+            (
+                "subtitle",
+                {
+                    "text": rendered,
+                    "duration_ms": int(duration_ms),
+                },
+            )
+        )
+
+    @staticmethod
+    def _display_subtitle_window(text: str, *, max_chars: int = 180) -> str:
+        rendered = " ".join(str(text or "").split())
+        if len(rendered) <= max_chars:
+            return rendered
+        trimmed = rendered[-max_chars:]
+        if " " in trimmed:
+            trimmed = trimmed.split(" ", 1)[1]
+        return trimmed.strip()
+
+    def _display_worker_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                kind, payload = self._display_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                display = getattr(self, "display_runtime", None)
+                if display is None:
+                    continue
+                if kind == "mode":
+                    self._apply_display_mode(display, str(payload or ""))
+                elif kind == "subtitle" and isinstance(payload, dict):
+                    display.show_subtitle(
+                        str(payload.get("text", "") or ""),
+                        duration_ms=int(payload.get("duration_ms", 5000) or 5000),
+                    )
+            except Exception:
+                self.logger.debug("Display update failed", exc_info=True)
+            finally:
+                self._display_queue.task_done()
+
+    @staticmethod
+    def _apply_display_mode(display: Any, mode: str) -> None:
+        if mode == "idle":
+            display.show_idle()
+        elif mode == "alert":
+            display.show_alert()
+        elif mode == "recording":
+            display.show_recording()
+        elif mode == "thinking":
+            display.show_thinking()
+        elif mode == "speaking":
+            display.show_speaking()
 
     def _configure_session(self) -> None:
         session = realtime_audio_session_payload(
@@ -1344,6 +1439,7 @@ class RealtimeRobotAgent(
             turn.req_id,
             stream_id=turn.response_id,
         )
+        self._set_display_mode_async("speaking")
         with self._turn_lock:
             self._playback_req_id = turn.req_id
             self._playback_stream_id = turn.response_id
@@ -1371,6 +1467,10 @@ class RealtimeRobotAgent(
             turn.assistant_item_id = item_id or turn.assistant_item_id
             turn.assistant_item_ids.add(item_id)
         turn.assistant_transcript += delta
+        self._show_display_subtitle_async(
+            self._display_subtitle_window(turn.assistant_transcript),
+            duration_ms=5000,
+        )
         if turn.phase == TURN_PHASE_FINALIZED:
             self._maybe_note_preference_turn(turn)
 
@@ -1390,6 +1490,10 @@ class RealtimeRobotAgent(
             turn.assistant_item_id = item_id or turn.assistant_item_id
             turn.assistant_item_ids.add(item_id)
         turn.assistant_transcript += delta
+        self._show_display_subtitle_async(
+            self._display_subtitle_window(turn.assistant_transcript),
+            duration_ms=5000,
+        )
         if turn.phase == TURN_PHASE_FINALIZED:
             self._maybe_note_preference_turn(turn)
 

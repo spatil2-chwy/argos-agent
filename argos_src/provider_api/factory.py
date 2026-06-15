@@ -26,6 +26,14 @@ def create_provider_client(
     ).strip().lower()
     if selected == "fake":
         return FakeProviderClient()
+    if selected == "http":
+        from argos_src.provider_api.transports.http import HttpProviderClient
+
+        return HttpProviderClient(
+            connect_endpoints=connect_endpoints,
+            resource_id=resource_id,
+            manifest=manifest,
+        )
     if selected in {"zenoh", "bridge"}:
         if not key_prefix or not resource_id:
             raise ValueError(
@@ -47,7 +55,7 @@ def create_provider_client(
         )
     raise ValueError(
         f"Unsupported ARGOS provider transport '{selected}'. "
-        "Expected one of: zenoh, fake."
+        "Expected one of: zenoh, http, fake."
     )
 
 

@@ -37,6 +37,7 @@ def build_builtin_tools(
     on_nav_event,
     battery_cache,
     default_camera_resource: str,
+    display_runtime=None,
 ) -> list[BaseTool]:
     """Build selected built-in tools for the selected robot family."""
     requested = resolve_builtin_tool_names(
@@ -71,6 +72,7 @@ def build_builtin_tools(
                 face_service,
                 employee_directory_service=employee_directory_service,
                 default_camera_resource=default_camera_resource,
+                display_runtime=display_runtime,
             )
         )
     if (

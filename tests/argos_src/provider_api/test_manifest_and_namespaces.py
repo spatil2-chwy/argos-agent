@@ -21,14 +21,20 @@ def test_puffle_manifest_loads_resources_and_capabilities():
 
     assert manifest.id == "puffle"
     assert manifest.display_name == "Puffle"
-    assert manifest.provider_by_id("puffle-local").key_prefix == (
-        "argos/providers/puffle-local"
+    assert manifest.provider_by_id("puffle-go2").key_prefix == (
+        "argos/providers/puffle-go2"
     )
     base = manifest.resource_by_id("base")
     assert base is not None
     assert base.family == "unitree_go2"
     assert base.has_capability("motion.velocity")
     assert manifest.resource_by_id("head_realsense").has_capability("camera.rgbd")
+    display = manifest.resource_by_id("interaction_display")
+    assert display is not None
+    assert display.kind == "display"
+    assert display.has_capability("display.command")
+    assert display.has_capability("display.interaction")
+    assert manifest.provider_by_id("puffle-go2-display").transport == "http"
 
 
 def test_manifest_rejects_unknown_capability():
@@ -51,18 +57,18 @@ def test_manifest_rejects_unknown_capability():
 
 
 def test_provider_resource_namespace_helpers():
-    prefix = "argos/providers/puffle-local"
+    prefix = "argos/providers/puffle-go2"
 
-    assert provider_manifest_key(prefix) == "argos/providers/puffle-local/manifest"
+    assert provider_manifest_key(prefix) == "argos/providers/puffle-go2/manifest"
     assert provider_request_key(prefix, "base", "req1") == (
-        "argos/providers/puffle-local/resources/base/request/req1"
+        "argos/providers/puffle-go2/resources/base/request/req1"
     )
     assert provider_response_key(prefix, "base", "req1") == (
-        "argos/providers/puffle-local/resources/base/response/req1"
+        "argos/providers/puffle-go2/resources/base/response/req1"
     )
     assert provider_event_key(prefix, "base", "battery.event") == (
-        "argos/providers/puffle-local/resources/base/event/battery.event"
+        "argos/providers/puffle-go2/resources/base/event/battery.event"
     )
     assert provider_state_key(prefix, "base", "battery") == (
-        "argos/providers/puffle-local/resources/base/state/battery"
+        "argos/providers/puffle-go2/resources/base/state/battery"
     )

@@ -134,6 +134,33 @@ def _create_gesture_runtime(
     )
 
 
+def _create_display_runtime(*, scenario_profile: ScenarioProfile):
+    if not bool(getattr(scenario_profile.display, "enabled", True)):
+        return None
+    resource_id = str(
+        getattr(scenario_profile.resources, "interaction_display", "") or ""
+    ).strip()
+    manifest = scenario_profile.manifest
+    if not resource_id or manifest is None:
+        return None
+    resource = manifest.resource_by_id(resource_id)
+    if resource is None or not resource.has_capability("display.command"):
+        return None
+    provider = manifest.provider_by_id(resource.provider)
+    if provider is None:
+        return None
+    from argos_src.display import DisplayRuntime
+
+    display_client = create_provider_client(
+        transport=provider.transport,
+        key_prefix=provider.key_prefix,
+        connect_endpoints=provider.connect_endpoints,
+        resource_id=resource.id,
+        manifest=manifest,
+    )
+    return DisplayRuntime(client=display_client, resource_id=resource.id)
+
+
 def _resolve_agent_profile(
     scenario_profile: Optional[ScenarioProfile],
     *,
@@ -374,6 +401,8 @@ def create_agent(
         )
         wiring.bind_battery_cache(battery_cache)
 
+    display_runtime = _create_display_runtime(scenario_profile=scenario_profile)
+
     tools = build_builtin_tools(
         robot_family=robot_family,
         enabled_tool_ids=enabled_tool_ids,
@@ -385,6 +414,7 @@ def create_agent(
         on_nav_event=wiring.submit_nav_event,
         battery_cache=battery_cache,
         default_camera_resource=scenario_profile.resources.scene_camera,
+        display_runtime=display_runtime,
     )
     tools.extend(build_knowledge_tools(scenario_profile.knowledge_bases))
 
@@ -428,6 +458,7 @@ def create_agent(
         nav_state=nav_state,
         battery_cache=battery_cache,
         gesture_runtime=gesture_runtime,
+        display_runtime=display_runtime,
         owner_turn_controller=None,
         initial_robot_posture=initial_robot_posture,
         stand_tool_name=_stand_tool_name(robot_family),

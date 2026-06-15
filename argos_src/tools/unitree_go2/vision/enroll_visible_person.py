@@ -38,6 +38,7 @@ class EnrollVisiblePersonTool(BaseTool):
     face_service: Any = Field(exclude=True)
     employee_directory_service: Any | None = Field(default=None, exclude=True)
     default_camera_resource: str = Field(default=DEFAULT_CAMERA_RESOURCE, exclude=True)
+    display_runtime: Any | None = Field(default=None, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
@@ -54,12 +55,15 @@ class EnrollVisiblePersonTool(BaseTool):
                 username=username or "",
                 official_name=official_name,
             )
-        result = self.face_service.enroll_visible_person(
-            official_name=official_name,
-            username=username or "",
-            employee_profile=employee_profile,
-            camera_resource_id=self.default_camera_resource,
-        )
+        enroll_kwargs = {
+            "official_name": official_name,
+            "username": username or "",
+            "employee_profile": employee_profile,
+            "camera_resource_id": self.default_camera_resource,
+        }
+        if self.display_runtime is not None:
+            enroll_kwargs["display_runtime"] = self.display_runtime
+        result = self.face_service.enroll_visible_person(**enroll_kwargs)
         success = bool(result.get("success", False))
         status = str(result.get("status", "") or ("completed" if success else "error"))
         message = str(result.get("message", "") or "")
@@ -80,10 +84,12 @@ def get_enroll_visible_person_tool(
     face_service: Any,
     default_camera_resource: str = DEFAULT_CAMERA_RESOURCE,
     employee_directory_service: Any | None = None,
+    display_runtime: Any | None = None,
 ) -> BaseTool:
     """Return the enrollment tool bound to the active face service."""
     return EnrollVisiblePersonTool(
         face_service=face_service,
         employee_directory_service=employee_directory_service,
         default_camera_resource=default_camera_resource,
+        display_runtime=display_runtime,
     )

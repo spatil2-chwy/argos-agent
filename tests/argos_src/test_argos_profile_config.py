@@ -45,7 +45,7 @@ def test_robot_profile_section_is_rejected():
                     "display_name": "Puffle",
                     "bridge": {
                         "transport": "zenoh",
-                        "key_prefix": "argos/providers/puffle-local",
+                        "key_prefix": "argos/providers/puffle-go2",
                         "connect_endpoints": ["tcp/127.0.0.1:7447"],
                     },
                 },
@@ -85,13 +85,15 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
     assert profile.manifest is not None
     assert profile.resources.primary_robot == "base"
     assert profile.resources.face_camera == "head_realsense"
+    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.display.enabled is True
     assert profile.robot_family == "unitree_go2"
     assert profile.robot.id == "puffle"
     assert profile.robot.family == "unitree_go2"
     assert profile.robot.display_name == "Puffle"
     assert profile.robot.bridge.transport == "zenoh"
-    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-local"
-    assert profile.robot.bridge.provider_id == "puffle-local"
+    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
+    assert profile.robot.bridge.provider_id == "puffle-go2"
     assert profile.robot.bridge.resource_id == "base"
     assert profile.tools.enabled_tool_ids == (
         "posture.stand",
@@ -125,9 +127,37 @@ def test_static_interaction_profile_uses_manifest_shape():
 
     assert profile.manifest_id == "puffle"
     assert profile.resources.primary_robot == "base"
-    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-local"
+    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.display.enabled is True
+    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
     assert profile.robot.bridge.resource_id == "base"
     assert "motion.move_robot" in profile.tools.enabled_tool_ids
+
+
+def test_display_can_be_disabled_even_when_manifest_has_display_resource():
+    profile = _parse_profile(
+        {
+            "name": "display-disabled",
+            "display": {"enabled": False},
+        },
+        profile_path=Path("/tmp/display-disabled.yaml"),
+        framework_config={},
+    )
+
+    assert profile.display.enabled is False
+    assert profile.resources.interaction_display == ""
+
+
+def test_display_section_rejects_unknown_keys():
+    with pytest.raises(ProfileValidationError, match="Unknown keys in display"):
+        _parse_profile(
+            {
+                "name": "display-bad",
+                "display": {"enabled": True, "brightness": 0.5},
+            },
+            profile_path=Path("/tmp/display-bad.yaml"),
+            framework_config={},
+        )
 
 
 def test_robot_family_section_is_rejected():

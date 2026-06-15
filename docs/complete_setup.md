@@ -107,7 +107,7 @@ root on `PYTHONPATH`. It does not source ROS.
 ```bash
 export OPENAI_API_KEY=...
 export ARGOS_PROVIDER_TRANSPORT=zenoh
-export ARGOS_ZENOH_KEY_PREFIX=argos/providers/puffle-local
+export ARGOS_ZENOH_KEY_PREFIX=argos/providers/puffle-go2
 export ARGOS_PROVIDER_RESOURCE_ID=base
 ```
 
@@ -122,6 +122,11 @@ Optional integrations:
 ```bash
 export SLACK_BOT_TOKEN=...
 ```
+
+For Puffle's local browser screen, run the display control server separately at
+`http://localhost:4173`. The `puffle` manifest selects the HTTP-backed
+`interaction_display` resource through provider `puffle-go2-display`.
+Set `display.enabled: false` in a profile when running without the screen.
 
 Snowflake-backed employee directory variables are still optional and only needed
 when that profile feature is enabled.
@@ -211,6 +216,9 @@ remain compatible.
   `camera.latest_image` or `camera.latest_rgbd`.
 - If owner-turn fails, confirm the provider implements `tf.transform` and
   `motion.velocity_sample`.
+- If the Puffle screen does not update, confirm the local display server is
+  running at `http://localhost:4173` and that the selected profile includes
+  `display.enabled: true`.
 - If OpenAI Realtime fails, confirm `OPENAI_API_KEY`, microphone/speaker device
   names in the profile, and `logs/latency.log`.
 

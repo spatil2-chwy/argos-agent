@@ -83,7 +83,7 @@ def _last_request(session):
 
 def _client(session):
     return ZenohProviderClient(
-        key_prefix="argos/providers/puffle-local",
+        key_prefix="argos/providers/puffle-go2",
         resource_id="base",
         session=session,
     )
@@ -106,7 +106,7 @@ def test_factory_creates_zenoh_provider_client(monkeypatch):
     monkeypatch.setitem(sys.modules, "zenoh", _FakeZenohModule)
 
     client = create_provider_client(
-        key_prefix="argos/providers/puffle-local",
+        key_prefix="argos/providers/puffle-go2",
         resource_id="base",
     )
     client.start()
@@ -130,13 +130,13 @@ def test_factory_keeps_fake_provider_for_tests():
 def test_factory_passes_zenoh_provider_routing_options():
     client = create_provider_client(
         transport="zenoh",
-        key_prefix="argos/providers/puffle-local",
+        key_prefix="argos/providers/puffle-go2",
         resource_id="base",
         connect_endpoints=["tcp/127.0.0.1:7447"],
     )
 
     assert isinstance(client, ZenohProviderClient)
-    assert client.key_prefix == "argos/providers/puffle-local"
+    assert client.key_prefix == "argos/providers/puffle-go2"
     assert client._resource_id == "base"
     assert client._connect_endpoints == ("tcp/127.0.0.1:7447",)
 
@@ -149,7 +149,7 @@ def test_factory_rejects_ros2_transport():
 def test_zenoh_transport_reports_missing_python_package(monkeypatch):
     monkeypatch.setitem(sys.modules, "zenoh", None)
     client = ZenohProviderClient(
-        key_prefix="argos/providers/puffle-local",
+        key_prefix="argos/providers/puffle-go2",
         resource_id="base",
     )
 
@@ -177,10 +177,10 @@ def test_go2_action_uses_provider_resource_request_keys():
         "priority": 2,
     }
     assert session.puts[-1][0] == (
-        f"argos/providers/puffle-local/resources/base/request/{request['id']}"
+        f"argos/providers/puffle-go2/resources/base/request/{request['id']}"
     )
     assert (
-        f"argos/providers/puffle-local/resources/base/response/{request['id']}"
+        f"argos/providers/puffle-go2/resources/base/response/{request['id']}"
         in session.declared_subscribers
     )
 
@@ -271,7 +271,7 @@ def test_provider_resource_battery_events_update_subscribers():
 
     unsubscribe = client.subscribe_battery(snapshots.append)
     session.emit_event(
-        provider_event_key("argos/providers/puffle-local", "base"),
+        provider_event_key("argos/providers/puffle-go2", "base"),
         build_event(
             op=OP_BATTERY_EVENT,
             data={

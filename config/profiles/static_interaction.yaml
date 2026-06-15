@@ -4,8 +4,12 @@ manifest: puffle
 
 resources:
   primary_robot: base
-  face_camera: head_realsense
-  scene_camera: head_realsense
+  face_camera: arducam_001
+  scene_camera: arducam_001
+  interaction_display: interaction_display
+
+display:
+  enabled: true
 
 navigation:
   locations_file:
@@ -89,7 +93,7 @@ face_recognition:
     slow_zone_deg: 8.0
     min_angular_speed_rad_s: 0.25
   depth_gate:
-    enabled: true
+    enabled: false
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5
