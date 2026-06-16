@@ -498,18 +498,21 @@ class ZenohProviderClient:
             timeout_ms=rendered_timeout_ms,
         )
         request_id = str(request["id"])
+        request_key = self._request_key(request_id, resource_id=resource_id)
+        response_key = self._response_key(request_id, resource_id=resource_id)
+        rendered_resource_id = self._effective_resource_id(resource_id)
         done = threading.Event()
         slot = {"event": done, "response": None}
         with self._lock:
             self._pending[request_id] = slot
 
         subscriber = session.declare_subscriber(
-            self._response_key(request_id, resource_id=resource_id),
+            response_key,
             lambda sample: self._handle_response_sample(request_id, sample),
         )
         try:
             session.put(
-                self._request_key(request_id, resource_id=resource_id),
+                request_key,
                 encode_message(request),
             )
             if not done.wait(rendered_timeout_ms / 1000.0):
@@ -523,7 +526,10 @@ class ZenohProviderClient:
                 )
             if not bool(response.get("ok", False)):
                 raise ProviderError(
-                    str(response.get("error") or f"Provider request failed op={op}")
+                    "Provider request failed "
+                    f"op={op} id={request_id} resource_id={rendered_resource_id} "
+                    f"request_key={request_key} response_key={response_key} "
+                    f"args={args} error={response.get('error')}"
                 )
             result = response.get("result", {})
             if not isinstance(result, dict):
