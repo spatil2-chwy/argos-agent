@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import threading
 from typing import Any, Callable
@@ -59,6 +60,8 @@ from argos_src.provider_api.wire import (
 DEFAULT_TIMEOUT_MS = 3000
 DEFAULT_IMAGE_TIMEOUT_MS = 5000
 DEFAULT_GO2_ACTION_TOPIC = "rt/api/sport/request"
+
+logger = logging.getLogger(__name__)
 
 
 class ZenohProviderClient:
@@ -529,7 +532,7 @@ class ZenohProviderClient:
                     "Provider request failed "
                     f"op={op} id={request_id} resource_id={rendered_resource_id} "
                     f"request_key={request_key} response_key={response_key} "
-                    f"args={args} error={response.get('error')}"
+                    f"args={args} response={response}"
                 )
             result = response.get("result", {})
             if not isinstance(result, dict):
@@ -567,6 +570,12 @@ class ZenohProviderClient:
             slot = self._pending.get(request_id)
             if slot is None:
                 return
+            if isinstance(response, dict) and not bool(response.get("ok", False)):
+                logger.warning(
+                    "Zenoh provider response failed id=%s response=%s",
+                    request_id,
+                    response,
+                )
             slot["response"] = response
             event = slot.get("event")
         if isinstance(event, threading.Event):
