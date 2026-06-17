@@ -100,13 +100,15 @@ When the display is configured, face enrollment does:
 
 ```text
 capture and validate burst
-    -> prepare candidate embedding and preview image
+    -> prepare candidate embedding and padded reference-face preview
     -> send face_capture_preview to interaction_display
     -> wait for Accept / Reject
     -> save only after Accept
 ```
 
 Reject, timeout, or display-unavailable responses do not save the face.
+The preview image is cropped from the same reference face bbox used by the
+enrollment candidate, with padding for a more natural confirmation view.
 
 The preview command sent to the display is:
 
