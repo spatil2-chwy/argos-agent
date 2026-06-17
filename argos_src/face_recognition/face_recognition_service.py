@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
-import cv2
 import numpy as np
 import torch
 
@@ -1282,8 +1281,7 @@ class FaceRecognitionService:
         if image is None:
             return ""
         try:
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            return "data:image/png;base64," + preprocess_image(rgb_image)
+            return "data:image/png;base64," + preprocess_image(image)
         except Exception:
             logger.exception("Failed to encode enrollment preview image")
             return ""

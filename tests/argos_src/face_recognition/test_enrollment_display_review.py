@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
+
 import numpy as np
+from PIL import Image
 
 from argos_src.face_recognition.face_recognition_service import (
     FaceEnrollmentCandidate,
@@ -70,6 +74,17 @@ def test_enrollment_display_accept_commits_person():
     assert result["status"] == "enrolled"
     assert len(service.db.saved) == 1
     assert display.reviews[0]["image_url"].startswith("data:image/png;base64,")
+
+
+def test_enrollment_preview_data_url_preserves_rgb_channel_order():
+    image = np.zeros((1, 1, 3), dtype=np.uint8)
+    image[0, 0] = [255, 0, 0]
+
+    data_url = FaceRecognitionService._enrollment_preview_data_url(image)
+    encoded = data_url.removeprefix("data:image/png;base64,")
+    decoded = Image.open(BytesIO(base64.b64decode(encoded)))
+
+    assert decoded.getpixel((0, 0)) == (255, 0, 0)
 
 
 def test_enrollment_display_reject_does_not_commit():
