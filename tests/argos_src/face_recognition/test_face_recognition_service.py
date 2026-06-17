@@ -393,7 +393,9 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
         lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
     )
     service._recognize_face_match = lambda *_args, **_kwargs: None
-    service._bbox_area = lambda face_payload: face_payload["bbox"]["w"] * face_payload["bbox"]["h"]
+    service._bbox_area = (
+        lambda face_payload: face_payload["bbox"]["w"] * face_payload["bbox"]["h"]
+    )
     service._center_distance = lambda *_args, **_kwargs: 0.0
 
     result = module.FaceRecognitionService.enroll_visible_person(
@@ -595,6 +597,48 @@ def test_enrollment_face_quality_rejects_small_face(monkeypatch):
 
     assert result.accepted is False
     assert result.reason == "face_too_small"
+
+
+def test_enrollment_preview_image_uses_padded_reference_bbox(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    image = np.arange(100 * 120 * 3, dtype=np.uint8).reshape((100, 120, 3))
+    face = {"bbox": {"x": 40, "y": 30, "w": 20, "h": 20}}
+
+    preview = module.FaceRecognitionService._enrollment_preview_image(
+        image,
+        face,
+        padding_ratio=0.5,
+    )
+
+    assert preview.shape == (40, 40, 3)
+    np.testing.assert_array_equal(preview, image[20:60, 30:70])
+    assert not np.shares_memory(preview, image)
+
+
+def test_prepare_visible_person_enrollment_preview_is_padded_face_crop(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    image = _good_image(size=160)
+    face = _face(area=2500, depth_m=0.8, x=50, y=40)
+
+    service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
+    service._prepare_faces_for_recognition_result = (
+        lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
+    )
+    service._recognize_face_match = lambda *_args, **_kwargs: None
+    service._bbox_area = lambda face_payload: face_payload["bbox"]["w"] * face_payload["bbox"]["h"]
+    service._center_distance = lambda *_args, **_kwargs: 0.0
+
+    candidate, failure = module.FaceRecognitionService._prepare_visible_person_enrollment(
+        service,
+        official_name="Sakshee Patil",
+    )
+
+    assert failure is None
+    assert candidate is not None
+    assert candidate.preview_image.shape[0] < image.shape[0]
+    assert candidate.preview_image.shape[1] < image.shape[1]
+    assert not np.shares_memory(candidate.preview_image, image)
 
 
 def test_enroll_visible_person_reports_missing_name_failure(monkeypatch):

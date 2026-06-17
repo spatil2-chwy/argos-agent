@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
-import cv2
 import numpy as np
 import torch
 
@@ -580,6 +579,40 @@ class FaceRecognitionService:
             contrast=contrast,
             sharpness=sharpness,
         )
+
+    @staticmethod
+    def _enrollment_preview_image(
+        image: Any,
+        face: dict[str, Any],
+        padding_ratio: float = 0.45,
+    ) -> Any:
+        if image is None or not hasattr(image, "shape"):
+            return image
+        try:
+            height, width = image.shape[:2]
+            if height <= 0 or width <= 0:
+                return image
+            bbox = face.get("bbox") or {}
+            x = float(bbox.get("x", 0) or 0)
+            y = float(bbox.get("y", 0) or 0)
+            w = float(bbox.get("w", 0) or 0)
+            h = float(bbox.get("h", 0) or 0)
+            if w <= 0 or h <= 0:
+                return image.copy()
+
+            center_x = x + (w / 2.0)
+            center_y = y + (h / 2.0)
+            side = max(w, h) * (1.0 + (2.0 * max(0.0, float(padding_ratio))))
+            x1 = max(0, int(round(center_x - (side / 2.0))))
+            y1 = max(0, int(round(center_y - (side / 2.0))))
+            x2 = min(width, int(round(center_x + (side / 2.0))))
+            y2 = min(height, int(round(center_y + (side / 2.0))))
+            if x2 <= x1 or y2 <= y1:
+                return image.copy()
+            return image[y1:y2, x1:x2].copy()
+        except Exception:
+            logger.exception("Failed to prepare enrollment preview crop")
+            return image.copy() if hasattr(image, "copy") else image
 
     def _assess_enrollment_face_quality(
         self,
@@ -1208,7 +1241,10 @@ class FaceRecognitionService:
                 averaged_embedding=averaged_embedding,
                 reference_face=reference_face,
                 image_shape=reference_item["image_shape"],
-                preview_image=reference_item["image"],
+                preview_image=self._enrollment_preview_image(
+                    reference_item["image"],
+                    reference_face,
+                ),
             ),
             None,
         )
@@ -1245,8 +1281,7 @@ class FaceRecognitionService:
         if image is None:
             return ""
         try:
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            return "data:image/png;base64," + preprocess_image(rgb_image)
+            return "data:image/png;base64," + preprocess_image(image)
         except Exception:
             logger.exception("Failed to encode enrollment preview image")
             return ""

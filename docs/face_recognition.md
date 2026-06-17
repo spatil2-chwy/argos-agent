@@ -154,7 +154,10 @@ usable embedding. Current reasons are:
 
 After the burst passes quality and consistency checks, the service prepares a
 candidate object containing the averaged embedding, durable metadata, reference
-face, image shape, and preview image. The candidate is not saved yet.
+face, image shape, and preview image. The preview image is a padded crop derived
+from the selected reference face bbox, so the review screen shows the face region
+used for embedding with a little surrounding context. The candidate is not saved
+yet.
 
 When `display.enabled` is true and the `interaction_display` resource is
 configured, Argos encodes the preview image as a `data:image/png;base64,...` URL
