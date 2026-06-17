@@ -8,14 +8,28 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.10, <3.13"
-torch = { version = "2.7.1", source = "pytorch-cu128" }
-torchvision = { version = "0.22.1", source = "pytorch-cu128" }
-torchaudio = { version = "2.7.1", source = "pytorch-cu128" }
+torch = [
+  { version = "2.7.1", source = "pytorch-cu128", markers = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+  { version = "2.10.0", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" },
+]
+torchvision = [
+  { version = "0.22.1", source = "pytorch-cu128", markers = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+  { version = "0.25.0", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" },
+]
+torchaudio = [
+  { version = "2.7.1", source = "pytorch-cu128", markers = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+  { version = "2.10.0", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" },
+]
+triton = { version = "3.3.1", source = "pytorch-cu128", markers = "platform_system == 'Linux' and platform_machine == 'x86_64'" }
+nvpl-blas = { version = ">=0.5.0.1,<0.7", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" }
+nvpl-lapack = { version = ">=0.3.2,<0.5", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" }
+nvidia-cudss-cu13 = { version = ">=0.7,<0.9", source = "jetson-ai-cu130", markers = "platform_system == 'Linux' and platform_machine == 'aarch64'" }
 pytest = "^8.2.0"
 pytest-timeout = "^2.3.1"
 pytest-cov = "^7.0.0"
 PyYAML = "^6.0.2"
 tomli = "^2.0.1"
+numpy = ">=1.26,<2"
 rapidfuzz = "^3.13.0"
 snowflake-connector-python = "^4.4.0"
 websocket-client = "^1.8.0"
@@ -45,6 +59,11 @@ coloredlogs = "^15.0.1"
 [[tool.poetry.source]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+priority = "explicit"
+
+[[tool.poetry.source]]
+name = "jetson-ai-cu130"
+url = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/"
 priority = "explicit"
 
 [build-system]

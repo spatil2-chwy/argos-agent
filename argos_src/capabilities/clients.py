@@ -1,10 +1,14 @@
-"""Robot capability protocol used by the Argos agent."""
+"""Capability-scoped client protocols.
+
+These protocols define the small provider-backed capability vocabulary used by
+Argos tools and runtime services.
+"""
 
 from __future__ import annotations
 
 from typing import Any, Callable, Protocol
 
-from argos_src.robot_api.models import (
+from argos_src.provider_api.models import (
     BatterySnapshot,
     CameraIntrinsics,
     ImageFrame,
@@ -13,25 +17,7 @@ from argos_src.robot_api.models import (
 )
 
 
-class RobotClient(Protocol):
-    """Transport-neutral robot operations expected by Argos."""
-
-    def start(self) -> None:
-        """Start transport threads or subscriptions."""
-
-    def shutdown(self) -> None:
-        """Release transport resources."""
-
-    def perform_go2_action(
-        self,
-        *,
-        api_id: int,
-        parameter: dict[str, Any] | None = None,
-        priority: int = 0,
-        topic: str = "rt/api/sport/request",
-    ) -> None:
-        """Execute a Unitree Go2 sport action."""
-
+class MotionClient(Protocol):
     def move_velocity(
         self,
         *,
@@ -53,14 +39,36 @@ class RobotClient(Protocol):
     ) -> None:
         """Publish one velocity command sample."""
 
-    def get_latest_image(self, camera_topic: str, timeout: float = 2.0) -> ImageFrame | None:
+    def stop(self) -> None:
+        """Stop base motion."""
+
+
+class PostureClient(Protocol):
+    def command_posture(self, posture: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run a posture command such as stand, sit, rest, or self_right."""
+
+
+class EmbodimentClient(Protocol):
+    def perform_action(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run an expressive embodied action."""
+
+
+class CameraClient(Protocol):
+    def get_latest_image(
+        self,
+        resource_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> ImageFrame | None:
         """Return one decoded camera image."""
 
     def get_latest_rgbd(
         self,
         *,
-        color_topic: str,
-        depth_topic: str,
+        resource_id: str | None = None,
         timeout: float = 2.0,
         sync_slop_sec: float = 0.12,
         queue_size: int = 10,
@@ -69,11 +77,13 @@ class RobotClient(Protocol):
 
     def get_latest_intrinsics(
         self,
-        camera_info_topic: str,
+        resource_id: str | None = None,
         timeout: float = 0.05,
     ) -> CameraIntrinsics | None:
         """Return camera intrinsics."""
 
+
+class TransformClient(Protocol):
     def get_transform(
         self,
         parent_frame: str,
@@ -82,12 +92,19 @@ class RobotClient(Protocol):
     ) -> RobotTransform | Any:
         """Return a robot transform."""
 
+
+class BatteryClient(Protocol):
     def get_battery_snapshot(self) -> BatterySnapshot | None:
         """Return latest battery telemetry."""
 
-    def subscribe_battery(self, callback: Callable[[BatterySnapshot], None]) -> Callable[[], None]:
-        """Subscribe to battery updates and return an unsubscribe callback."""
+    def subscribe_battery(
+        self,
+        callback: Callable[[BatterySnapshot], None],
+    ) -> Callable[[], None]:
+        """Subscribe to battery updates."""
 
+
+class NavigationClient(Protocol):
     def navigate_to_pose(
         self,
         *,
@@ -117,9 +134,14 @@ class RobotClient(Protocol):
     def cancel_navigation(self, *, goal_id: str | None = None) -> dict[str, Any]:
         """Cancel active navigation."""
 
-    def subscribe_navigation(self, callback: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+    def subscribe_navigation(
+        self,
+        callback: Callable[[dict[str, Any]], None],
+    ) -> Callable[[], None]:
         """Subscribe to navigation progress/result events."""
 
+
+class DockingClient(Protocol):
     def dock_for_charging(
         self,
         *,
@@ -128,15 +150,26 @@ class RobotClient(Protocol):
     ) -> dict[str, Any]:
         """Run the provider's charging-dock sequence."""
 
-    def perform_spot_command(
-        self,
-        command: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Execute a Spot capability command."""
 
-    def publish_voice_command(self, command: str) -> None:
-        """Optionally publish a voice command to outside observers."""
-
+class PresenceClient(Protocol):
     def publish_face_presence(self, snapshot: dict[str, Any]) -> None:
-        """Optionally publish a face-presence snapshot to outside observers."""
+        """Publish a face-presence snapshot to outside observers."""
+
+
+class VoiceCommandClient(Protocol):
+    def publish_voice_command(self, command: str) -> None:
+        """Publish a voice command to outside observers."""
+
+
+__all__ = [
+    "BatteryClient",
+    "CameraClient",
+    "DockingClient",
+    "EmbodimentClient",
+    "MotionClient",
+    "NavigationClient",
+    "PostureClient",
+    "PresenceClient",
+    "TransformClient",
+    "VoiceCommandClient",
+]

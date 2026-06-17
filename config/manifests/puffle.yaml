@@ -1,0 +1,53 @@
+id: puffle
+display_name: Puffle
+
+providers:
+  - id: puffle-go2
+    transport: zenoh
+    key_prefix: argos/providers/puffle-go2
+    connect_endpoints: []
+
+  - id: puffle-go2-display
+    transport: http
+    key_prefix: argos/providers/puffle-go2-display
+    connect_endpoints:
+      - http://localhost:4173
+
+resources:
+  - id: base
+    kind: robot_base
+    family: unitree_go2
+    provider: puffle-go2
+    capabilities:
+      - motion.velocity
+      - posture.command
+      - embodiment.action
+      - battery.state
+      - transform.lookup
+      - presence.face.publish
+      - voice_command.publish
+
+  - id: arducam_001
+    kind: camera
+    hardware: arducam
+    provider: puffle-go2
+    capabilities:
+      - camera.rgb
+      - camera.intrinsics
+
+  - id: realsense_001
+    kind: camera
+    hardware: realsense
+    provider: puffle-go2
+    capabilities:
+      - camera.rgb
+      - camera.rgbd
+      - camera.intrinsics
+
+  - id: interaction_display
+    kind: display
+    hardware: puffle_screen
+    provider: puffle-go2-display
+    capabilities:
+      - display.command
+      - display.interaction

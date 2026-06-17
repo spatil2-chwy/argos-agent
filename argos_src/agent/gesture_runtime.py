@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from argos_src.robot_api.errors import is_robot_provider_error
+from argos_src.provider_api.errors import is_provider_error
 from argos_src.tools.tool_ids import ROBOT_FAMILY_UNITREE_GO2
 
 
@@ -199,8 +199,10 @@ class GestureRuntime:
     def _enter_pose_mode_locked(self) -> bool:
         if self._pose_mode_active:
             return True
+        command_index = -1
+        command: GestureCommandSpec | None = None
         try:
-            for command in self._preset.enter_commands:
+            for command_index, command in enumerate(self._preset.enter_commands):
                 self._publish_command_locked(command)
         except Exception as exc:
             self._pose_mode_active = False
@@ -208,6 +210,11 @@ class GestureRuntime:
                 "enter_pose_mode",
                 "Gesture runtime failed to enter pose mode.",
                 exc=exc,
+                context=self._command_log_context(
+                    command,
+                    command_index=command_index,
+                    phase="enter",
+                ),
             )
             return False
         self._pose_mode_active = True
@@ -236,19 +243,26 @@ class GestureRuntime:
         return None
 
     def _deactivate_locked(self, *, reason: str) -> None:
-        del reason
         if not self._pose_mode_active:
             self._active_state_name = None
             self._next_publish_at = 0.0
             return
+        command_index = -1
+        command: GestureCommandSpec | None = None
         try:
-            for command in self._preset.exit_commands:
+            for command_index, command in enumerate(self._preset.exit_commands):
                 self._publish_command_locked(command)
         except Exception as exc:
             self._log_throttled(
                 "exit_pose_mode",
                 "Gesture runtime failed to exit pose mode cleanly.",
                 exc=exc,
+                context=self._command_log_context(
+                    command,
+                    command_index=command_index,
+                    phase="exit",
+                    reason=reason,
+                ),
             )
         finally:
             self._pose_mode_active = False
@@ -273,6 +287,15 @@ class GestureRuntime:
                 f"publish_state:{state_name}",
                 f"Gesture runtime failed to publish {state_name} state.",
                 exc=exc,
+                context={
+                    "preset": self._preset.name,
+                    "phase": "state",
+                    "state": state_name,
+                    "cycle_index": cycle_index,
+                    "api_id": state.api_id,
+                    "priority": state.priority,
+                    "parameter": parameter,
+                },
             )
             return RETRY_DELAY_SEC
         return max(state.interval_sec, 0.0)
@@ -289,6 +312,31 @@ class GestureRuntime:
         self._next_request_id += 1
         return msg_id
 
+    def _command_log_context(
+        self,
+        command: GestureCommandSpec | None,
+        *,
+        command_index: int,
+        phase: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "preset": self._preset.name,
+            "phase": phase,
+            "command_index": command_index,
+        }
+        if reason is not None:
+            context["reason"] = reason
+        if command is not None:
+            context.update(
+                {
+                    "api_id": command.api_id,
+                    "priority": command.priority,
+                    "parameter": command.parameter,
+                }
+            )
+        return context
+
     def _log_throttled(
         self,
         key: str,
@@ -296,13 +344,15 @@ class GestureRuntime:
         *,
         exc: BaseException | None = None,
         exc_info: bool = False,
+        context: dict[str, Any] | None = None,
     ) -> None:
         now = time.monotonic()
         next_allowed = self._next_error_log_by_key.get(key, 0.0)
         if now < next_allowed:
             return
         self._next_error_log_by_key[key] = now + ERROR_LOG_THROTTLE_SEC
-        if exc is not None and is_robot_provider_error(exc):
-            logger.warning("%s %s", message, exc)
+        suffix = f" context={context}" if context else ""
+        if exc is not None and is_provider_error(exc):
+            logger.warning("%s%s provider_error=%s", message, suffix, exc)
             return
-        logger.error(message, exc_info=exc_info or exc is not None)
+        logger.error("%s%s", message, suffix, exc_info=exc_info or exc is not None)

@@ -1,4 +1,4 @@
-"""Tool to move Spot through the transport-neutral RobotClient."""
+"""Tool to move Spot through provider-backed motion capabilities."""
 
 from __future__ import annotations
 

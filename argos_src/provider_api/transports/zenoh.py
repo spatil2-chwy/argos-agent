@@ -1,28 +1,37 @@
-"""Zenoh-backed RobotClient implementation for Argos.
+"""Zenoh-backed provider transport for Argos.
 
-This module is the default real robot transport. It speaks Argos capability
-messages over Zenoh and does not import ROS or robot SDK message packages.
+This module is the default real provider transport. It speaks Argos capability
+messages over provider/resource Zenoh keys and does not import ROS or robot SDK
+message packages.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import threading
 from typing import Any, Callable
 
 import numpy as np
 
-from argos_src.robot_api.errors import RobotBridgeError, RobotBridgeTimeout
-from argos_src.robot_api.models import (
+from argos_src.provider_api.manifest import ProviderManifest
+from argos_src.provider_api.namespaces import (
+    normalize_provider_prefix,
+    provider_event_key,
+    provider_request_key,
+    provider_response_key,
+)
+from argos_src.provider_api.errors import ProviderError, ProviderTimeout
+from argos_src.provider_api.models import (
     BatterySnapshot,
     CameraIntrinsics,
     ImageFrame,
     RGBDFrame,
     RobotTransform,
 )
-from argos_src.robot_bridge.protocol import (
+from argos_src.provider_api.wire import (
     OP_BATTERY_EVENT,
     OP_BATTERY_SNAPSHOT,
     OP_CANCEL_NAVIGATION,
@@ -45,10 +54,6 @@ from argos_src.robot_bridge.protocol import (
     build_request,
     decode_message,
     encode_message,
-    event_key,
-    normalize_key_prefix,
-    request_key,
-    response_key,
 )
 
 
@@ -56,9 +61,11 @@ DEFAULT_TIMEOUT_MS = 3000
 DEFAULT_IMAGE_TIMEOUT_MS = 5000
 DEFAULT_GO2_ACTION_TOPIC = "rt/api/sport/request"
 
+logger = logging.getLogger(__name__)
 
-class ZenohRobotClient:
-    """RobotClient that sends Argos capability messages over Zenoh."""
+
+class ZenohProviderClient:
+    """Provider client that sends Argos capability messages over Zenoh."""
 
     def __init__(
         self,
@@ -68,9 +75,11 @@ class ZenohRobotClient:
         timeout_ms: int | None = None,
         session: Any | None = None,
         zenoh_module: Any | None = None,
+        resource_id: str | None = None,
+        manifest: ProviderManifest | None = None,
     ) -> None:
-        self.key_prefix = normalize_key_prefix(
-            key_prefix or os.getenv("ARGOS_ZENOH_KEY_PREFIX")
+        self.key_prefix = normalize_provider_prefix(
+            key_prefix or os.getenv("ARGOS_ZENOH_KEY_PREFIX", "")
         )
         self.timeout_ms = int(
             timeout_ms
@@ -87,6 +96,10 @@ class ZenohRobotClient:
         self._zenoh = zenoh_module
         self._session = session
         self._owns_session = session is None
+        self._resource_id = str(resource_id or os.getenv("ARGOS_PROVIDER_RESOURCE_ID", "")).strip()
+        if not self._resource_id:
+            raise ValueError("Zenoh provider transport requires resource_id.")
+        self._manifest = manifest
         self._lock = threading.Lock()
         self._pending: dict[str, dict[str, Any]] = {}
         self._event_subscriber = None
@@ -107,6 +120,61 @@ class ZenohRobotClient:
             if callable(closer):
                 closer()
         self._session = None
+
+    def get_manifest(self) -> ProviderManifest | None:
+        return self._manifest
+
+    def request(
+        self,
+        *,
+        resource_id: str,
+        operation: str,
+        args: dict[str, Any] | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            operation,
+            dict(args or {}),
+            timeout_ms=timeout_ms,
+            resource_id=resource_id,
+        )
+
+    def publish_event(
+        self,
+        *,
+        resource_id: str,
+        event_type: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        self._publish_event(event_type, dict(data or {}), resource_id=resource_id)
+
+    def subscribe_event(
+        self,
+        *,
+        resource_id: str,
+        event_type: str,
+        callback: Callable[[dict[str, Any]], None],
+    ) -> Callable[[], None]:
+        session = self._ensure_session()
+
+        def _handle(sample: Any) -> None:
+            try:
+                event = decode_message(_sample_payload_bytes(sample))
+            except Exception:
+                return
+            if event.get("type") != "event":
+                return
+            callback(dict(event))
+
+        subscriber = session.declare_subscriber(
+            self._event_key(event_type, resource_id=resource_id),
+            _handle,
+        )
+
+        def unsubscribe() -> None:
+            _undeclare(subscriber)
+
+        return unsubscribe
 
     def perform_go2_action(
         self,
@@ -175,18 +243,22 @@ class ZenohRobotClient:
             },
         )
 
+    def stop(self) -> None:
+        self._request(OP_STOP_MOTION, {})
+
     def get_latest_image(
         self,
-        camera_topic: str,
+        resource_id: str | None = None,
         timeout: float = 2.0,
     ) -> ImageFrame | None:
+        rendered_resource = self._effective_resource_id(resource_id)
         result = self._request(
             OP_CAMERA_LATEST_IMAGE,
             {
-                "camera_topic": str(camera_topic or ""),
                 "timeout": float(timeout),
             },
             timeout_ms=max(_seconds_to_ms(timeout), DEFAULT_IMAGE_TIMEOUT_MS),
+            resource_id=rendered_resource,
         )
         if not result:
             return None
@@ -195,7 +267,7 @@ class ZenohRobotClient:
             return None
         return ImageFrame(
             image=image,
-            topic=str(result.get("topic", camera_topic) or ""),
+            resource_id=str(result.get("resource_id", rendered_resource) or ""),
             captured_at=float(result.get("captured_at", 0.0) or 0.0),
             stamp_s=float(result.get("stamp_s", 0.0) or 0.0),
         )
@@ -203,22 +275,21 @@ class ZenohRobotClient:
     def get_latest_rgbd(
         self,
         *,
-        color_topic: str,
-        depth_topic: str,
+        resource_id: str | None = None,
         timeout: float = 2.0,
         sync_slop_sec: float = 0.12,
         queue_size: int = 10,
     ) -> RGBDFrame | None:
+        rendered_resource = self._effective_resource_id(resource_id)
         result = self._request(
             OP_CAMERA_LATEST_RGBD,
             {
-                "color_topic": str(color_topic or ""),
-                "depth_topic": str(depth_topic or ""),
                 "timeout": float(timeout),
                 "sync_slop_sec": float(sync_slop_sec),
                 "queue_size": int(queue_size),
             },
             timeout_ms=max(_seconds_to_ms(timeout), DEFAULT_IMAGE_TIMEOUT_MS),
+            resource_id=rendered_resource,
         )
         if not result:
             return None
@@ -235,16 +306,17 @@ class ZenohRobotClient:
 
     def get_latest_intrinsics(
         self,
-        camera_info_topic: str,
+        resource_id: str | None = None,
         timeout: float = 0.05,
     ) -> CameraIntrinsics | None:
+        rendered_resource = self._effective_resource_id(resource_id)
         result = self._request(
             OP_CAMERA_INTRINSICS,
             {
-                "camera_info_topic": str(camera_info_topic or ""),
                 "timeout": float(timeout),
             },
             timeout_ms=max(_seconds_to_ms(timeout), self.timeout_ms),
+            resource_id=rendered_resource,
         )
         if not result:
             return None
@@ -419,6 +491,7 @@ class ZenohRobotClient:
         args: dict[str, Any],
         *,
         timeout_ms: int | None = None,
+        resource_id: str | None = None,
     ) -> dict[str, Any]:
         session = self._ensure_session()
         rendered_timeout_ms = int(timeout_ms or self.timeout_ms)
@@ -428,37 +501,43 @@ class ZenohRobotClient:
             timeout_ms=rendered_timeout_ms,
         )
         request_id = str(request["id"])
+        request_key = self._request_key(request_id, resource_id=resource_id)
+        response_key = self._response_key(request_id, resource_id=resource_id)
+        rendered_resource_id = self._effective_resource_id(resource_id)
         done = threading.Event()
         slot = {"event": done, "response": None}
         with self._lock:
             self._pending[request_id] = slot
 
         subscriber = session.declare_subscriber(
-            response_key(self.key_prefix, request_id),
+            response_key,
             lambda sample: self._handle_response_sample(request_id, sample),
         )
         try:
             session.put(
-                request_key(self.key_prefix, request_id),
+                request_key,
                 encode_message(request),
             )
             if not done.wait(rendered_timeout_ms / 1000.0):
-                raise RobotBridgeTimeout(
-                    f"Timed out waiting for bridge response op={op} id={request_id}"
+                raise ProviderTimeout(
+                    f"Timed out waiting for provider response op={op} id={request_id}"
                 )
             response = slot.get("response")
             if not isinstance(response, dict):
-                raise RobotBridgeError(
-                    f"Invalid bridge response op={op} id={request_id}"
+                raise ProviderError(
+                    f"Invalid provider response op={op} id={request_id}"
                 )
             if not bool(response.get("ok", False)):
-                raise RobotBridgeError(
-                    str(response.get("error") or f"Bridge request failed op={op}")
+                raise ProviderError(
+                    "Provider request failed "
+                    f"op={op} id={request_id} resource_id={rendered_resource_id} "
+                    f"request_key={request_key} response_key={response_key} "
+                    f"args={args} response={response}"
                 )
             result = response.get("result", {})
             if not isinstance(result, dict):
-                raise RobotBridgeError(
-                    f"Bridge response result must be an object op={op} id={request_id}"
+                raise ProviderError(
+                    f"Provider response result must be an object op={op} id={request_id}"
                 )
             return result
         finally:
@@ -466,10 +545,16 @@ class ZenohRobotClient:
             with self._lock:
                 self._pending.pop(request_id, None)
 
-    def _publish_event(self, op: str, data: dict[str, Any]) -> None:
+    def _publish_event(
+        self,
+        op: str,
+        data: dict[str, Any],
+        *,
+        resource_id: str | None = None,
+    ) -> None:
         session = self._ensure_session()
         session.put(
-            event_key(self.key_prefix, op),
+            self._event_key(op, resource_id=resource_id),
             encode_message(build_event(op=op, data=data)),
         )
 
@@ -479,12 +564,18 @@ class ZenohRobotClient:
         except Exception as exc:
             response = {
                 "ok": False,
-                "error": f"Failed to decode bridge response: {exc}",
+                "error": f"Failed to decode provider response: {exc}",
             }
         with self._lock:
             slot = self._pending.get(request_id)
             if slot is None:
                 return
+            if isinstance(response, dict) and not bool(response.get("ok", False)):
+                logger.warning(
+                    "Zenoh provider response failed id=%s response=%s",
+                    request_id,
+                    response,
+                )
             slot["response"] = response
             event = slot.get("event")
         if isinstance(event, threading.Event):
@@ -495,7 +586,7 @@ class ZenohRobotClient:
             return
         session = self._ensure_session()
         self._event_subscriber = session.declare_subscriber(
-            event_key(self.key_prefix),
+            self._event_key("*"),
             self._handle_event_sample,
         )
 
@@ -536,7 +627,7 @@ class ZenohRobotClient:
                 import zenoh  # type: ignore
             except ModuleNotFoundError as exc:
                 raise RuntimeError(
-                    "ARGOS_ROBOT_TRANSPORT=zenoh requires the Python 'zenoh' "
+                    "ARGOS_PROVIDER_TRANSPORT=zenoh requires the Python 'zenoh' "
                     "module. Install it with 'python3 -m pip install "
                     "eclipse-zenoh' in the Argos environment or use a "
                     "test-injected session."
@@ -550,6 +641,24 @@ class ZenohRobotClient:
             )
         self._session = self._zenoh.open(config)
         return self._session
+
+    def _effective_resource_id(self, resource_id: str | None = None) -> str:
+        rendered = str(resource_id or self._resource_id or "").strip()
+        if not rendered:
+            raise ValueError("resource_id must not be empty")
+        return rendered
+
+    def _request_key(self, request_id: str, *, resource_id: str | None = None) -> str:
+        rendered_resource = self._effective_resource_id(resource_id)
+        return provider_request_key(self.key_prefix, rendered_resource, request_id)
+
+    def _response_key(self, request_id: str, *, resource_id: str | None = None) -> str:
+        rendered_resource = self._effective_resource_id(resource_id)
+        return provider_response_key(self.key_prefix, rendered_resource, request_id)
+
+    def _event_key(self, op: str = "*", *, resource_id: str | None = None) -> str:
+        rendered_resource = self._effective_resource_id(resource_id)
+        return provider_event_key(self.key_prefix, rendered_resource, op)
 
 
 def _parse_endpoints(raw: str) -> tuple[str, ...]:
@@ -661,7 +770,7 @@ def _battery_from_payload(payload: dict[str, Any]) -> BatterySnapshot:
 
 
 __all__ = [
-    "RobotBridgeError",
-    "RobotBridgeTimeout",
-    "ZenohRobotClient",
+    "ProviderError",
+    "ProviderTimeout",
+    "ZenohProviderClient",
 ]

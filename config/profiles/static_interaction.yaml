@@ -1,40 +1,42 @@
 name: static_interaction
 
-robot:
-  id: puffle
-  family: unitree_go2
-  display_name: Puffle
-  bridge:
-    transport: zenoh
-    key_prefix: pair/robots/puffle
-    connect_endpoints: []
+manifest: puffle
+
+resources:
+  primary_robot: base
+  face_camera: arducam_001
+  scene_camera: arducam_001
+  interaction_display: interaction_display
+
+display:
+  enabled: true
 
 navigation:
   locations_file:
   startup_patrol_route: []
 
 tools:
-  enabled_tool_names:
-    - unitree_go2.actions.go2_damp
-    - unitree_go2.actions.go2_balance_stand
-    - unitree_go2.actions.go2_stop_move
-    - unitree_go2.actions.go2_sit
-    - unitree_go2.actions.go2_hello
-    - unitree_go2.actions.go2_stretch
-    - unitree_go2.actions.go2_content
-    - unitree_go2.actions.go2_dance1
-    - unitree_go2.actions.go2_dance2
-    - unitree_go2.actions.go2_scrape
-    - unitree_go2.actions.go2_front_jump
-    - unitree_go2.actions.go2_finger_heart
-    - unitree_go2.actions.go2_bow_down
-    - unitree_go2.actions.go2_look_up
-    - unitree_go2.actions.go2_left_tilt
-    - unitree_go2.actions.go2_right_tilt
-    - unitree_go2.locomotion.move_robot
-    - unitree_go2.vision.capture_scene
-    - unitree_go2.vision.enroll_visible_person
-    - unitree_go2.vision.resolve_employee_identity
+  enabled_tool_ids:
+    - posture.rest
+    - posture.stand
+    - posture.stop
+    - posture.sit
+    - embodiment.unitree_go2.hello
+    - embodiment.unitree_go2.stretch
+    - embodiment.unitree_go2.content
+    - embodiment.unitree_go2.dance1
+    - embodiment.unitree_go2.dance2
+    - embodiment.unitree_go2.scrape
+    - embodiment.unitree_go2.front_jump
+    - embodiment.unitree_go2.finger_heart
+    - embodiment.unitree_go2.bow_down
+    - embodiment.unitree_go2.look_up
+    - embodiment.unitree_go2.left_tilt
+    - embodiment.unitree_go2.right_tilt
+    - motion.move_robot
+    - vision.capture_scene
+    - identity.enroll_visible_person
+    - identity.resolve_employee_identity
 
 employee_directory:
   enabled: true
@@ -73,12 +75,10 @@ slack_memory:
 face_recognition:
   enabled: true
   db_path: var/face_recognition
-  camera_topic: /camera/color/image_raw/compressed
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
   owner_turn:
     enabled: true
-    camera_info_topic: /camera/color/camera_info
     camera_yaw_offset_rad: 0.0
     deadband_deg: 3.0
     turn_gain: 0.8
@@ -93,8 +93,7 @@ face_recognition:
     slow_zone_deg: 8.0
     min_angular_speed_rad_s: 0.25
   depth_gate:
-    enabled: true
-    depth_topic: /camera/aligned_depth_to_color/image_raw
+    enabled: false
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5
@@ -128,8 +127,8 @@ realtime:
   voice: cedar
   audio_output_speed: 1.0
   transcription_model: gpt-4o-mini-transcribe
-  input_device: pulse
-  output_device: pulse
+  input_device: pipewire
+  output_device: pipewire
   noise_reduction: near_field
   vad_threshold: 0.8
   silence_grace_period: 1.0

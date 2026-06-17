@@ -6,7 +6,7 @@ import math
 import threading
 from typing import Any, Callable, Optional
 
-from argos_src.robot_api.models import BatterySnapshot
+from argos_src.provider_api.models import BatterySnapshot
 
 _CHARGE_DOCK_NAME = "charge_dock"
 

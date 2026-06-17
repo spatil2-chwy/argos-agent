@@ -291,7 +291,7 @@ def test_build_scene_state_adds_robot_yaw_bearing(monkeypatch):
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     service._camera_intrinsics = types.SimpleNamespace(fx=100.0, cx=50.0)
     service._camera_yaw_offset_rad = 0.0
-    service._camera_info_topic = ""
+    service._camera_resource_id = "head_realsense"
     service._camera_info_capture = None
     service.site_code = ""
     service.memory_store = None
@@ -415,7 +415,7 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
             "business_function": "AI & Data",
             "tenure": "0 year(s), 3 month(s), 5 day(s)",
         },
-        camera_topic="/camera/color/image_raw/compressed",
+        camera_resource_id="head_realsense",
     )
 
     assert result["success"] is True
@@ -461,7 +461,7 @@ def test_enroll_visible_person_primes_presence_cache_for_voice_followup(monkeypa
     result = module.FaceRecognitionService.enroll_visible_person(
         service,
         official_name="Sakshee Patil",
-        camera_topic="/camera/color/image_raw/compressed",
+        camera_resource_id="head_realsense",
     )
 
     snapshot = service.get_presence_snapshot()

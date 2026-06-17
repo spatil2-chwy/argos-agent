@@ -74,10 +74,15 @@ unknown visible person
     -> FaceRecognitionService.enroll_visible_person()
     -> short camera burst
     -> quality and consistency gates
+    -> if display.enabled is true and interaction_display is configured, show face-capture preview
+    -> wait for Accept / Reject
     -> save averaged face embedding under person_id
     -> seed live presence cache
     -> agent_tools arms pending voice enrollment
 ```
+
+The LLM still calls only `enroll_visible_person`. It does not call a display
+tool. The review UI is handled inside the enrollment tool path.
 
 The LLM-facing enrollment schema is intentionally small:
 
@@ -96,7 +101,8 @@ result = self.face_service.enroll_visible_person(
     official_name=official_name,
     username=username or "",
     employee_profile=employee_profile,
-    camera_topic=self.default_camera_topic,
+    camera_resource_id=self.default_camera_resource,
+    display_runtime=self.display_runtime,  # present only when configured
 )
 ```
 
@@ -145,6 +151,17 @@ usable embedding. Current reasons are:
 - `no_detection`
 - `depth_rejected`
 - `no_embedding`
+
+After the burst passes quality and consistency checks, the service prepares a
+candidate object containing the averaged embedding, durable metadata, reference
+face, image shape, and preview image. The candidate is not saved yet.
+
+When `display.enabled` is true and the `interaction_display` resource is
+configured, Argos encodes the preview image as a `data:image/png;base64,...` URL
+and sends a blocking `face_capture_preview` command to the Puffle display. Only
+an Accept response commits the candidate to the face store. Reject, timeout, or
+display-unavailable responses return a failed tool result and do not save
+anything.
 
 ## Enrollment Quality Policy
 
@@ -213,6 +230,9 @@ Every failure includes `failure_reason`. Some responses also include
 | `retry_quality` | quality reason | Blur, lighting, contrast, clipped face, missing landmarks, side face, or too-small face. | The matching guidance from `_quality_response_for_reason()`. |
 | `retry_quality` | `embedding_inconsistent` | At least some frames passed, but not enough embeddings agreed. | `"Hold still and face me directly for a second."` |
 | `retry_already_known` | `already_known` | Accepted face already matches an enrolled person. | Includes `recognized_name`. |
+| `display_unavailable` | `display_unavailable` or `preview_encoding_failed` | A display review was required but the screen was unavailable or the preview could not be encoded. | Says the screen is not ready and asks to try again. |
+| `review_timeout` | `review_timeout` | The display preview was shown, but no Accept/Reject response arrived in time. | Says the review timed out and asks whether to retry. |
+| `user_rejected_preview` | `user_rejected_preview` | The person rejected the face-capture preview. | Confirms the capture was not saved and asks whether to retry. |
 | `enrolled` | none | Enrollment succeeded. | Includes `person_id` and `next_step_hint`. |
 
 On success, the tool returns:
@@ -344,12 +364,10 @@ Main config lives in:
 ```yaml
 face_recognition:
   enabled: true
-  camera_topic: /camera/color/image_raw/compressed
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
   depth_gate:
     enabled: true
-    depth_topic: /camera/aligned_depth_to_color/image_raw
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5

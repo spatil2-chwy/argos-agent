@@ -7,6 +7,7 @@ Read this with:
 - `argos_src/agent/agent_events/`
 - `argos_src/agent/orchestrator.py`
 - `argos_src/runtime/audio_admission.py`
+- `argos_src/display/runtime.py`
 - `argos_src/agent/factory.py`
 
 This document explains the live control flow of the Argos realtime runtime:
@@ -33,9 +34,11 @@ Realtime API response stream
         -> local playback buffer
         -> engagement state machine
         -> tool execution loop
+        -> optional display update worker
 ```
 
-The Realtime API is stateful, but the robot still owns turn boundaries, audio admission, engagement state, interruption, and history trimming.
+The Realtime API is stateful, but the robot still owns turn boundaries, audio
+admission, engagement state, display state, interruption, and history trimming.
 
 ## Main Components
 
@@ -44,6 +47,7 @@ The Realtime API is stateful, but the robot still owns turn boundaries, audio ad
 | `RealtimeRobotAgent` | Owns the websocket, mic capture, playback, turn queue, tool queue, and history bookkeeping. |
 | `RealtimeAgentAudioMixin` | Owns audio stream setup, local admission-driven capture, audio commit, and playback progress callbacks. |
 | `agent/agent_events/` | Shared parsing and dispatch helpers for OpenAI Realtime server payloads. |
+| `DisplayRuntime` | Optional interaction display facade for Puffle's screen. |
 | `EngagementStateMachine` | Tracks `idle -> alert -> engaged -> speaking -> cooldown` and decides when patrol or navigation should be suppressed or resumed. |
 | `EventCoalescer` | Debounces rapid internal events, merges them, and flushes them into turns. Human-triggered text flushes immediately. |
 | `FacePresenceGate` | Lightweight local cache of face-presence snapshots for audio admission. |
@@ -155,6 +159,7 @@ This is why the runtime can behave differently in `idle`, `alert`, `cooldown`, o
 When admission is open and voice is detected:
 
 - `_start_recording_locked()` marks recording active
+- the optional interaction display moves to the `think` face
 - the runtime sends `input_audio_buffer.clear`
 - raw PCM chunks start flowing into `_audio_send_queue`
 - a small pre-roll window is prepended so the first syllable is less likely to be clipped
@@ -224,6 +229,7 @@ The runtime learns the exact Realtime object ids incrementally:
 - `conversation.item.input_audio_transcription.completed`
 - `response.created`
 - `response.output_audio.delta`
+- `response.output_audio_transcript.delta`
 - `response.output_item.done`
 - `response.done`
 
@@ -244,6 +250,10 @@ On the first `response.output_audio.delta`:
 - `first_audio_latency_s` is logged
 - engagement gets `on_agent_output_started(...)`
 - engagement also gets `on_playback_event("playback_started", ...)`
+- the optional interaction display moves to the `happy` face
+
+Assistant transcript deltas are the only normal-turn subtitles sent to the
+display. Mic admission, recording, and thinking states change the face only.
 
 ### Step 10: Completion waits for both response and playback
 

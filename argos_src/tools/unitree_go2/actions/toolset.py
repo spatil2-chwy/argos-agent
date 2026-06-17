@@ -156,13 +156,13 @@ class Go2ActionTool(BaseTool):
 
 def get_go2_action_tools(
     robot_client: Any,
-    enabled_tool_names: Iterable[str] | None = None,
+    runtime_tool_names: Iterable[str] | None = None,
 ) -> List[BaseTool]:
     """Build one LangChain tool per selected Go2 action."""
     allowed = (
         None
-        if enabled_tool_names is None
-        else {str(name) for name in enabled_tool_names}
+        if runtime_tool_names is None
+        else {str(name) for name in runtime_tool_names}
     )
     tools: List[BaseTool] = []
     for tool_name, description, api_id in GO2_ACTIONS:

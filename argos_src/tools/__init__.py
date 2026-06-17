@@ -5,9 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 
 from .tool_ids import (
-    AMBIGUOUS_LEGACY_TOOL_NAMES,
     BUILT_IN_TOOL_NAMES,
-    CANONICAL_TOOL_NAME_BY_LEGACY,
     NAVIGATION_TOOL_NAMES,
     ROBOT_FAMILY_SPOT,
     ROBOT_FAMILY_UNITREE_GO2,
@@ -19,9 +17,7 @@ from .tool_ids import (
 )
 
 __all__ = [
-    "AMBIGUOUS_LEGACY_TOOL_NAMES",
     "BUILT_IN_TOOL_NAMES",
-    "CANONICAL_TOOL_NAME_BY_LEGACY",
     "NAVIGATION_TOOL_NAMES",
     "ROBOT_FAMILY_SPOT",
     "ROBOT_FAMILY_UNITREE_GO2",

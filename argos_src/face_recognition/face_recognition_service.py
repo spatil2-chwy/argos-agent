@@ -7,7 +7,9 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+from uuid import uuid4
 
+import cv2
 import numpy as np
 import torch
 
@@ -29,8 +31,9 @@ from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyz
 from argos_src.face_recognition.store import FaceRecognitionStore
 from argos_src.identity.prompting import format_identity_profile_lines
 from argos_src.memory.encounters import build_encounter_metadata
-from argos_src.robot_api.errors import is_robot_provider_error
-from argos_src.robot_api.models import CameraIntrinsics
+from argos_src.media.image_encoding import preprocess_image
+from argos_src.provider_api.errors import is_provider_error
+from argos_src.provider_api.models import CameraIntrinsics
 
 
 logger = logging.getLogger(__name__)
@@ -86,6 +89,16 @@ class FacePreparationResult:
     rejected_count: int = 0
 
 
+@dataclass(frozen=True)
+class FaceEnrollmentCandidate:
+    cleaned_name: str
+    verified_durable: dict[str, str]
+    averaged_embedding: np.ndarray
+    reference_face: dict[str, Any]
+    image_shape: tuple[int, ...]
+    preview_image: Any
+
+
 class FaceRecognitionService:
     """
     Face recognition service providing detection and recognition via robot API.
@@ -107,7 +120,7 @@ class FaceRecognitionService:
         identity_store: Any | None = None,
         memory_store: Any | None = None,
         site_code: str = "",
-        camera_info_topic: str = "/camera/color/camera_info",
+        camera_resource_id: str = "",
         camera_yaw_offset_rad: float = 0.0,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
@@ -128,7 +141,7 @@ class FaceRecognitionService:
         self.memory_store = memory_store
         self.site_code = str(site_code or "").strip()
         self._depth_gate_settings = depth_gate_settings
-        self._camera_info_topic = str(camera_info_topic or "").strip()
+        self._camera_resource_id = str(camera_resource_id or "").strip()
         self._camera_yaw_offset_rad = float(camera_yaw_offset_rad)
         self._camera_intrinsics: CameraIntrinsics | None = None
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
@@ -137,7 +150,7 @@ class FaceRecognitionService:
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
         self._latest_loop_frame = None
-        self._latest_loop_frame_topic: str | None = None
+        self._latest_loop_frame_resource_id: str | None = None
         self._latest_loop_frame_at = 0.0
         self._loop_log_heartbeat_at: dict[str, float] = {}
 
@@ -148,11 +161,14 @@ class FaceRecognitionService:
     # Image capture
     # ------------------------------------------------------------------
 
-    def get_latest_image(self, camera_topic: str, timeout: float = 2.0):
+    def get_latest_image(self, camera_resource_id: str, timeout: float = 2.0):
         """Receive one frame via the configured robot camera backend."""
         if self.robot_client is None:
             return None
-        frame = self.robot_client.get_latest_image(camera_topic, timeout=timeout)
+        frame = self.robot_client.get_latest_image(
+            resource_id=camera_resource_id,
+            timeout=timeout,
+        )
         if frame is None:
             return None
         return getattr(frame, "image", frame)
@@ -161,7 +177,7 @@ class FaceRecognitionService:
         self,
         *,
         image,
-        camera_topic: str,
+        camera_resource_id: str,
         captured_at: float,
     ) -> None:
         """Store the most recent color frame seen by the background face loop."""
@@ -169,13 +185,13 @@ class FaceRecognitionService:
             return
         with self._latest_loop_frame_lock:
             self._latest_loop_frame = image.copy()
-            self._latest_loop_frame_topic = camera_topic
+            self._latest_loop_frame_resource_id = camera_resource_id
             self._latest_loop_frame_at = float(captured_at)
 
     def get_cached_latest_frame(
         self,
         *,
-        camera_topic: str | None = None,
+        camera_resource_id: str | None = None,
         max_age_sec: float = 2.0,
     ) -> tuple[object | None, str | None, float | None]:
         """Return the latest cached face-loop color frame when it is recent enough."""
@@ -185,15 +201,15 @@ class FaceRecognitionService:
 
         with lock:
             image = getattr(self, "_latest_loop_frame", None)
-            cached_topic = getattr(self, "_latest_loop_frame_topic", None)
+            cached_resource_id = getattr(self, "_latest_loop_frame_resource_id", None)
             captured_at = float(getattr(self, "_latest_loop_frame_at", 0.0))
-            if image is None or cached_topic is None or captured_at <= 0.0:
+            if image is None or cached_resource_id is None or captured_at <= 0.0:
                 return None, None, None
-            if camera_topic and camera_topic != cached_topic:
+            if camera_resource_id and camera_resource_id != cached_resource_id:
                 return None, None, None
             if max_age_sec >= 0.0 and (time.time() - captured_at) > max_age_sec:
                 return None, None, None
-            return image.copy(), cached_topic, captured_at
+            return image.copy(), cached_resource_id, captured_at
 
     # ------------------------------------------------------------------
     # Detection + embedding
@@ -246,20 +262,20 @@ class FaceRecognitionService:
 
     def _capture_for_recognition(
         self,
-        camera_topic: str,
+        camera_resource_id: str,
         *,
         timeout: float,
     ) -> tuple[object | None, object | None]:
         """Capture the frame(s) needed for recognition."""
         if self._depth_gate_settings is None:
             try:
-                return self.get_latest_image(camera_topic, timeout=timeout), None
+                return self.get_latest_image(camera_resource_id, timeout=timeout), None
             except Exception as exc:
-                if is_robot_provider_error(exc):
+                if is_provider_error(exc):
                     self._log_loop_heartbeat(
                         "camera_image_provider_unavailable",
-                        "Robot provider image unavailable from %s: %s",
-                        camera_topic,
+                        "Provider image unavailable from camera resource %s: %s",
+                        camera_resource_id,
                         exc,
                         interval_sec=10.0,
                         level=logging.WARNING,
@@ -271,19 +287,17 @@ class FaceRecognitionService:
             return None, None
         try:
             rgbd = self.robot_client.get_latest_rgbd(
-                color_topic=camera_topic,
-                depth_topic=self._depth_gate_settings.depth_topic,
+                resource_id=camera_resource_id,
                 timeout=min(timeout, self._depth_gate_settings.capture_timeout_sec),
                 sync_slop_sec=self._depth_gate_settings.sync_slop_sec,
                 queue_size=self._depth_gate_settings.sync_queue_size,
             )
         except Exception as exc:
-            if is_robot_provider_error(exc):
+            if is_provider_error(exc):
                 self._log_loop_heartbeat(
                     "camera_rgbd_provider_unavailable",
-                    "Robot provider RGBD unavailable color=%s depth=%s: %s",
-                    camera_topic,
-                    self._depth_gate_settings.depth_topic,
+                    "Provider RGBD unavailable from camera resource %s: %s",
+                    camera_resource_id,
                     exc,
                     interval_sec=10.0,
                     level=logging.WARNING,
@@ -733,29 +747,35 @@ class FaceRecognitionService:
         cached = getattr(self, "_camera_intrinsics", None)
         if cached is not None:
             return cached
-        topic = str(getattr(self, "_camera_info_topic", "") or "").strip()
-        if not topic or self.robot_client is None:
+        resource_id = str(getattr(self, "_camera_resource_id", "") or "").strip()
+        if not resource_id or self.robot_client is None:
             return None
         try:
-            intrinsics = self.robot_client.get_latest_intrinsics(topic, timeout=0.02)
+            intrinsics = self.robot_client.get_latest_intrinsics(
+                resource_id=resource_id,
+                timeout=0.02,
+            )
         except Exception as exc:
-            if is_robot_provider_error(exc):
+            if is_provider_error(exc):
                 self._log_loop_heartbeat(
                     "camera_intrinsics_provider_unavailable",
-                    "Robot provider camera intrinsics unavailable from %s: %s",
-                    topic,
+                    "Provider camera intrinsics unavailable from camera resource %s: %s",
+                    resource_id,
                     exc,
                     interval_sec=10.0,
                     level=logging.WARNING,
                 )
             else:
-                logger.exception("Failed to capture camera intrinsics from %s", topic)
+                logger.exception(
+                    "Failed to capture camera intrinsics from resource %s",
+                    resource_id,
+                )
             return None
         if intrinsics is not None:
             self._camera_intrinsics = intrinsics
         return intrinsics
 
-    def recognize_faces(self, camera_topic: str = "/camera/color/image_raw/compressed") -> dict[str, Any]:
+    def recognize_faces(self, camera_resource_id: str | None = None) -> dict[str, Any]:
         """
         Capture frame → detect faces → match against DB.
 
@@ -778,14 +798,16 @@ class FaceRecognitionService:
             "unknown_faces": 0,
         }
 
-        image, depth_m = self._capture_for_recognition(camera_topic, timeout=2.0)
+        resource_id = str(
+            camera_resource_id or getattr(self, "_camera_resource_id", "") or ""
+        ).strip()
+        image, depth_m = self._capture_for_recognition(resource_id, timeout=2.0)
         if image is None:
             if self._depth_gate_settings is None:
-                result["error"] = f"Failed to get image from {camera_topic}"
+                result["error"] = f"Failed to get image from camera resource {resource_id}"
             else:
                 result["error"] = (
-                    f"Failed to get synced color/depth pair from {camera_topic} and "
-                    f"{self._depth_gate_settings.depth_topic}"
+                    f"Failed to get synced RGBD from camera resource {resource_id}"
                 )
             return result
 
@@ -868,9 +890,97 @@ class FaceRecognitionService:
         official_name: str = "",
         username: str = "",
         employee_profile: dict[str, Any] | None = None,
-        camera_topic: str = "/camera/color/image_raw/compressed",
+        camera_resource_id: str | None = None,
+        display_runtime: Any | None = None,
     ) -> dict[str, Any]:
         """Validate a short enrollment burst and save exactly one new visible person."""
+        candidate, failure = self._prepare_visible_person_enrollment(
+            official_name=official_name,
+            username=username,
+            employee_profile=employee_profile,
+            camera_resource_id=camera_resource_id,
+        )
+        if failure is not None:
+            return failure
+        if candidate is None:
+            return self._enrollment_response(
+                success=False,
+                status="error",
+                message="I couldn't prepare a face registration candidate.",
+                failure_reason="candidate_unavailable",
+            )
+
+        if display_runtime is not None and bool(
+            getattr(display_runtime, "is_configured", False)
+        ):
+            preview_url = self._enrollment_preview_data_url(candidate.preview_image)
+            if not preview_url:
+                return self._enrollment_response(
+                    success=False,
+                    status="display_unavailable",
+                    message=(
+                        "I captured a candidate face, but couldn't prepare the screen preview. "
+                        "Please try again."
+                    ),
+                    failure_reason="preview_encoding_failed",
+                )
+            try:
+                review = display_runtime.review_face_capture(
+                    request_id=f"enroll-{uuid4().hex[:12]}",
+                    image_url=preview_url,
+                    title="Face Capture Preview",
+                    accept_label="Accept",
+                    reject_label="Reject",
+                )
+            except Exception as exc:
+                logger.warning("Enrollment display review failed: %s", exc)
+                review = {
+                    "available": False,
+                    "accepted": False,
+                    "status": "display_unavailable",
+                }
+            status = str(review.get("status", "") or "").strip()
+            if not bool(review.get("available", False)):
+                return self._enrollment_response(
+                    success=False,
+                    status="display_unavailable",
+                    message=(
+                        "I captured a candidate face, but the review screen isn't available. "
+                        "Please try again when the screen is ready."
+                    ),
+                    failure_reason="display_unavailable",
+                )
+            if status == "review_timeout":
+                return self._enrollment_response(
+                    success=False,
+                    status="review_timeout",
+                    message=(
+                        "I didn't get an accept or reject on the screen in time. "
+                        "Please tell me if you'd like to try again."
+                    ),
+                    failure_reason="review_timeout",
+                )
+            if not bool(review.get("accepted", False)):
+                return self._enrollment_response(
+                    success=False,
+                    status="user_rejected_preview",
+                    message=(
+                        "No problem, I won't save that face capture. "
+                        "Please tell me if you'd like to try again."
+                    ),
+                    failure_reason="user_rejected_preview",
+                )
+
+        return self._commit_visible_person_enrollment(candidate)
+
+    def _prepare_visible_person_enrollment(
+        self,
+        *,
+        official_name: str = "",
+        username: str = "",
+        employee_profile: dict[str, Any] | None = None,
+        camera_resource_id: str | None = None,
+    ) -> tuple[FaceEnrollmentCandidate | None, dict[str, Any] | None]:
         verified_profile = {
             key: str(value or "").strip()
             for key, value in dict(employee_profile or {}).items()
@@ -880,26 +990,35 @@ class FaceRecognitionService:
             verified_profile.get("official_name") or official_name or ""
         ).strip()
         if not cleaned_name:
-            return self._enrollment_response(
-                success=False,
-                status="error",
-                message="I still need your name before I can save a new face.",
-                failure_reason="missing_name",
+            return (
+                None,
+                self._enrollment_response(
+                    success=False,
+                    status="error",
+                    message="I still need your name before I can save a new face.",
+                    failure_reason="missing_name",
+                ),
             )
 
         accepted_faces: list[dict[str, Any]] = []
         single_face_seen = False
         last_quality: FaceEnrollmentQuality | None = None
         last_prepare_reason = ""
+        resource_id = str(
+            camera_resource_id or getattr(self, "_camera_resource_id", "") or ""
+        ).strip()
 
         for attempt in range(ENROLLMENT_BURST_FRAMES):
-            image, depth_m = self._capture_for_recognition(camera_topic, timeout=1.5)
+            image, depth_m = self._capture_for_recognition(resource_id, timeout=1.5)
             if image is None:
-                return self._enrollment_response(
-                    success=False,
-                    status="error",
-                    message="I couldn't get a clear camera view right now. Please try again in a moment.",
-                    failure_reason="capture_failed",
+                return (
+                    None,
+                    self._enrollment_response(
+                        success=False,
+                        status="error",
+                        message="I couldn't get a clear camera view right now. Please try again in a moment.",
+                        failure_reason="capture_failed",
+                    ),
                 )
 
             prepared = self._prepare_faces_for_recognition_result(image, depth_m)
@@ -928,11 +1047,14 @@ class FaceRecognitionService:
                     len(usable_faces),
                     rejected_count,
                 )
-                return self._enrollment_response(
-                    success=False,
-                    status="retry_single_face",
-                    message="I can still see more than one face. Please make sure you're the only person in view and try again.",
-                    failure_reason="multiple_faces",
+                return (
+                    None,
+                    self._enrollment_response(
+                        success=False,
+                        status="retry_single_face",
+                        message="I can still see more than one face. Please make sure you're the only person in view and try again.",
+                        failure_reason="multiple_faces",
+                    ),
                 )
             if face is None:
                 if attempt < (ENROLLMENT_BURST_FRAMES - 1):
@@ -954,17 +1076,21 @@ class FaceRecognitionService:
                 continue
             match = self._recognize_face_match(face)
             if match is not None:
-                return self._enrollment_response(
-                    success=False,
-                    status="retry_already_known",
-                    message=f"I think I already know you as {match['name']}.",
-                    recognized_name=match["name"],
-                    failure_reason="already_known",
+                return (
+                    None,
+                    self._enrollment_response(
+                        success=False,
+                        status="retry_already_known",
+                        message=f"I think I already know you as {match['name']}.",
+                        recognized_name=match["name"],
+                        failure_reason="already_known",
+                    ),
                 )
 
             accepted_faces.append(
                 {
                     "image_shape": image.shape,
+                    "image": image.copy(),
                     "face": face,
                     "bbox_area": self._bbox_area(face),
                     "center_distance": self._center_distance(face, image.shape),
@@ -999,14 +1125,17 @@ class FaceRecognitionService:
                     "I couldn't get a stable face view. Please stand in front of me, "
                     "look at the camera, and try again."
                 )
-            return self._enrollment_response(
-                success=False,
-                status="retry_quality",
-                message=message,
-                failure_reason=failure_reason,
+            return (
+                None,
+                self._enrollment_response(
+                    success=False,
+                    status="retry_quality",
+                    message=message,
+                    failure_reason=failure_reason,
+                ),
             )
 
-        reference_face = min(
+        reference_item = min(
             accepted_faces,
             key=lambda item: (
                 item["face"].get("depth_m")
@@ -1015,7 +1144,8 @@ class FaceRecognitionService:
                 -float(item["bbox_area"]),
                 float(item["center_distance"]),
             ),
-        )["face"]
+        )
+        reference_face = reference_item["face"]
         consistent_faces = [
             item["face"]
             for item in accepted_faces
@@ -1037,11 +1167,14 @@ class FaceRecognitionService:
                 len(accepted_faces),
                 len(consistent_faces),
             )
-            return self._enrollment_response(
-                success=False,
-                status="retry_quality",
-                message=guidance,
-                failure_reason=reason,
+            return (
+                None,
+                self._enrollment_response(
+                    success=False,
+                    status="retry_quality",
+                    message=guidance,
+                    failure_reason=reason,
+                ),
             )
         averaged_embedding = self._average_embeddings(
             [face_payload["embedding"] for face_payload in consistent_faces]
@@ -1049,11 +1182,14 @@ class FaceRecognitionService:
         if averaged_embedding.size <= 0:
             reason, guidance = self._quality_response_for_reason("embedding_inconsistent")
             logger.info("Enrollment burst rejected reason=%s empty averaged embedding", reason)
-            return self._enrollment_response(
-                success=False,
-                status="retry_quality",
-                message=guidance,
-                failure_reason=reason,
+            return (
+                None,
+                self._enrollment_response(
+                    success=False,
+                    status="retry_quality",
+                    message=guidance,
+                    failure_reason=reason,
+                ),
             )
 
         base_profile = {
@@ -1065,28 +1201,55 @@ class FaceRecognitionService:
             for key, value in {**base_profile, **verified_profile}.items()
             if value
         }
+        return (
+            FaceEnrollmentCandidate(
+                cleaned_name=cleaned_name,
+                verified_durable=verified_durable,
+                averaged_embedding=averaged_embedding,
+                reference_face=reference_face,
+                image_shape=reference_item["image_shape"],
+                preview_image=reference_item["image"],
+            ),
+            None,
+        )
+
+    def _commit_visible_person_enrollment(
+        self,
+        candidate: FaceEnrollmentCandidate,
+    ) -> dict[str, Any]:
         person_id = self.db.add_person(
-            name=cleaned_name,
-            face_embedding=averaged_embedding,
-            metadata=verified_durable,
+            name=candidate.cleaned_name,
+            face_embedding=candidate.averaged_embedding,
+            metadata=candidate.verified_durable,
         )
         self._prime_presence_cache_after_enrollment(
             person_id=person_id,
-            name=cleaned_name,
-            face=reference_face,
-            image_shape=accepted_faces[0]["image_shape"],
-            metadata=verified_durable,
+            name=candidate.cleaned_name,
+            face=candidate.reference_face,
+            image_shape=candidate.image_shape,
+            metadata=candidate.verified_durable,
         )
         return self._enrollment_response(
             success=True,
             status="enrolled",
-            message=f"You're all set, {cleaned_name}. I'll remember you next time.",
+            message=f"You're all set, {candidate.cleaned_name}. I'll remember you next time.",
             person_id=person_id,
             next_step_hint=(
                 "Now continue with one short social follow-up to learn durable context. "
                 "Pets are usually the best default topic, then preferred name, team, or current work."
             ),
         )
+
+    @staticmethod
+    def _enrollment_preview_data_url(image: Any) -> str:
+        if image is None:
+            return ""
+        try:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            return "data:image/png;base64," + preprocess_image(rgb_image)
+        except Exception:
+            logger.exception("Failed to encode enrollment preview image")
+            return ""
 
     def _prime_presence_cache_after_enrollment(
         self,
@@ -1145,24 +1308,23 @@ class FaceRecognitionService:
     # Background loop (continuous recognition, zero latency at response time)
     # ------------------------------------------------------------------
 
-    def _loop_tick(self, camera_topic: str) -> None:
+    def _loop_tick(self, camera_resource_id: str) -> None:
         """Run one recognition cycle; update cache and session state."""
         now = time.time()
-        image, depth_m = self._capture_for_recognition(camera_topic, timeout=1.5)
+        image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
         if image is None:
             if self._depth_gate_settings is None:
                 self._log_loop_heartbeat(
                     "no_color_frame",
-                    "[FaceLoop] no color frame available from %s within %.2fs",
-                    camera_topic,
+                    "[FaceLoop] no color frame available from camera resource %s within %.2fs",
+                    camera_resource_id,
                     1.5,
                 )
             else:
                 self._log_loop_heartbeat(
                     "no_rgbd_pair",
-                    "[FaceLoop] no synced RGBD pair available from color=%s depth=%s within %.2fs",
-                    camera_topic,
-                    self._depth_gate_settings.depth_topic,
+                    "[FaceLoop] no synced RGBD pair available from camera resource %s within %.2fs",
+                    camera_resource_id,
                     min(1.5, self._depth_gate_settings.capture_timeout_sec),
                 )
             if self._presence_cache.clear_if_expired(now):
@@ -1171,7 +1333,7 @@ class FaceRecognitionService:
 
         self._cache_latest_loop_frame(
             image=image,
-            camera_topic=camera_topic,
+            camera_resource_id=camera_resource_id,
             captured_at=time.time(),
         )
         prepared = self._prepare_faces_for_recognition_result(image, depth_m)
@@ -1235,7 +1397,7 @@ class FaceRecognitionService:
 
     def start_loop(
         self,
-        camera_topic: str = "/camera/color/image_raw/compressed",
+        camera_resource_id: str | None = None,
         interval: float = 1.0,
     ) -> None:
         """Start background daemon thread that runs recognition every interval seconds."""
@@ -1243,13 +1405,17 @@ class FaceRecognitionService:
             logger.warning("[FaceLoop] already running")
             return
         self._loop_stop.clear()
+        resource_id = str(
+            camera_resource_id or getattr(self, "_camera_resource_id", "") or ""
+        ).strip()
+        self._camera_resource_id = resource_id
 
         def run() -> None:
             while not self._loop_stop.wait(interval):
                 try:
-                    self._loop_tick(camera_topic)
+                    self._loop_tick(resource_id)
                 except Exception as e:
-                    if is_robot_provider_error(e):
+                    if is_provider_error(e):
                         self._log_loop_heartbeat(
                             "robot_provider_unavailable",
                             "[FaceLoop] robot provider capability unavailable: %s",
@@ -1262,7 +1428,11 @@ class FaceRecognitionService:
 
         self._loop_thread = threading.Thread(target=run, daemon=True)
         self._loop_thread.start()
-        logger.info(f"[FaceLoop] started (interval={interval}s, topic={camera_topic})")
+        logger.info(
+            "[FaceLoop] started (interval=%ss, camera_resource=%s)",
+            interval,
+            resource_id,
+        )
 
     def stop_loop(self) -> None:
         """Stop the background recognition loop."""

@@ -34,7 +34,7 @@ def test_enroll_visible_person_tool_rehydrates_employee_profile_locally():
     tool = get_enroll_visible_person_tool(
         _FaceService(),
         employee_directory_service=_Directory(),
-        default_camera_topic="/camera/color/image_raw/compressed",
+        default_camera_resource="head_realsense",
     )
 
     payload = json.loads(
@@ -55,5 +55,5 @@ def test_enroll_visible_person_tool_rehydrates_employee_profile_locally():
             "username": "spatil2",
             "business_title": "AI Technologist II",
         },
-        "camera_topic": "/camera/color/image_raw/compressed",
+        "camera_resource_id": "head_realsense",
     }

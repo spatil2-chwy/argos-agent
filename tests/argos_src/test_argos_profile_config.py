@@ -6,7 +6,8 @@ from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
 from argos_src.profile_config import (
     DEFAULT_FACE_DB_PATH,
     ProfileValidationError,
-    _parse_profile,
+    _parse_profile as _raw_parse_profile,
+    load_scenario_profile,
     resolve_locations_file,
     resolve_profile_path,
     resolve_prompt_file,
@@ -14,60 +15,159 @@ from argos_src.profile_config import (
 )
 
 
-def test_robot_profile_parses_bridge_settings():
-    profile = _parse_profile(
-        {
-            "name": "robot-bridge",
-            "robot": {
-                "id": "puffle",
-                "family": "unitree_go2",
-                "display_name": "Puffle",
-                "bridge": {
-                    "transport": "zenoh",
-                    "key_prefix": "pair/robots/puffle",
-                    "connect_endpoints": ["tcp/127.0.0.1:7447"],
+def _parse_profile(payload, *, profile_path, framework_config):
+    merged = {"manifest": "puffle"}
+    merged.update(payload)
+    return _raw_parse_profile(
+        merged,
+        profile_path=profile_path,
+        framework_config=framework_config,
+    )
+
+
+def test_profile_requires_manifest():
+    with pytest.raises(ProfileValidationError, match="profile.manifest"):
+        _raw_parse_profile(
+            {"name": "missing-manifest"},
+            profile_path=Path("/tmp/missing-manifest.yaml"),
+            framework_config={},
+        )
+
+
+def test_robot_profile_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="profile.robot is no longer supported"):
+        _parse_profile(
+            {
+                "name": "robot-bridge",
+                "robot": {
+                    "id": "puffle",
+                    "family": "unitree_go2",
+                    "display_name": "Puffle",
+                    "bridge": {
+                        "transport": "zenoh",
+                        "key_prefix": "argos/providers/puffle-go2",
+                        "connect_endpoints": ["tcp/127.0.0.1:7447"],
+                    },
                 },
             },
+            profile_path=Path("/tmp/robot-bridge.yaml"),
+            framework_config={},
+        )
+
+
+def test_manifest_profile_derives_robot_and_bridge_settings():
+    profile = _parse_profile(
+        {
+            "name": "manifest-profile",
+            "resources": {
+                "primary_robot": "base",
+                "face_camera": "head_realsense",
+                "scene_camera": "head_realsense",
+            },
+            "tools": {
+                "enabled_tool_ids": [
+                    "posture.stand",
+                    "motion.move_robot",
+                    "vision.capture_scene",
+                    "identity.resolve_employee_identity",
+                ],
+            },
+            "employee_directory": {
+                "enabled": True,
+                "site_code": "BOS3",
+            },
         },
-        profile_path=Path("/tmp/robot-bridge.yaml"),
+        profile_path=Path("/tmp/manifest-profile.yaml"),
         framework_config={},
     )
 
+    assert profile.manifest_id == "puffle"
+    assert profile.manifest is not None
+    assert profile.resources.primary_robot == "base"
+    assert profile.resources.face_camera == "head_realsense"
+    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.display.enabled is True
     assert profile.robot_family == "unitree_go2"
     assert profile.robot.id == "puffle"
     assert profile.robot.family == "unitree_go2"
     assert profile.robot.display_name == "Puffle"
     assert profile.robot.bridge.transport == "zenoh"
-    assert profile.robot.bridge.key_prefix == "pair/robots/puffle"
-    assert profile.robot.bridge.connect_endpoints == ("tcp/127.0.0.1:7447",)
+    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
+    assert profile.robot.bridge.provider_id == "puffle-go2"
+    assert profile.robot.bridge.resource_id == "base"
+    assert profile.tools.enabled_tool_ids == (
+        "posture.stand",
+        "motion.move_robot",
+        "vision.capture_scene",
+        "identity.resolve_employee_identity",
+    )
 
 
-def test_legacy_robot_family_populates_robot_profile():
+def test_manifest_profile_rejects_missing_tool_capability():
+    with pytest.raises(ProfileValidationError, match="posture.command"):
+        _parse_profile(
+            {
+                "name": "manifest-missing-capability",
+                "manifest": "puffle",
+                "resources": {
+                    "primary_robot": "head_realsense",
+                    "scene_camera": "head_realsense",
+                },
+                "tools": {
+                    "enabled_tool_ids": ["posture.stand"],
+                },
+            },
+            profile_path=Path("/tmp/manifest-missing-capability.yaml"),
+            framework_config={},
+        )
+
+
+def test_static_interaction_profile_uses_manifest_shape():
+    profile = load_scenario_profile("static_interaction")
+
+    assert profile.manifest_id == "puffle"
+    assert profile.resources.primary_robot == "base"
+    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.display.enabled is True
+    assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
+    assert profile.robot.bridge.resource_id == "base"
+    assert "motion.move_robot" in profile.tools.enabled_tool_ids
+
+
+def test_display_can_be_disabled_even_when_manifest_has_display_resource():
     profile = _parse_profile(
         {
-            "name": "legacy-family",
-            "robot_family": "spot",
+            "name": "display-disabled",
+            "display": {"enabled": False},
         },
-        profile_path=Path("/tmp/legacy-family.yaml"),
+        profile_path=Path("/tmp/display-disabled.yaml"),
         framework_config={},
     )
 
-    assert profile.robot_family == "spot"
-    assert profile.robot.family == "spot"
-    assert profile.robot.bridge.key_prefix is None
+    assert profile.display.enabled is False
+    assert profile.resources.interaction_display == ""
 
 
-def test_robot_family_conflict_is_rejected():
-    with pytest.raises(ProfileValidationError, match="must match"):
+def test_display_section_rejects_unknown_keys():
+    with pytest.raises(ProfileValidationError, match="Unknown keys in display"):
         _parse_profile(
             {
-                "name": "family-conflict",
-                "robot_family": "spot",
-                "robot": {
-                    "family": "unitree_go2",
-                },
+                "name": "display-bad",
+                "display": {"enabled": True, "brightness": 0.5},
             },
-            profile_path=Path("/tmp/family-conflict.yaml"),
+            profile_path=Path("/tmp/display-bad.yaml"),
+            framework_config={},
+        )
+
+
+def test_robot_family_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="profile.robot_family"):
+        _parse_profile(
+            {
+                "name": "legacy-family",
+                "robot_family": "spot",
+            },
+            profile_path=Path("/tmp/legacy-family.yaml"),
             framework_config={},
         )
 
@@ -88,8 +188,8 @@ def test_realtime_defaults_do_not_inherit_legacy_asr_tts_config():
         },
     )
 
-    assert profile.realtime.input_device == "pulse"
-    assert profile.realtime.output_device == "pulse"
+    assert profile.realtime.input_device == "pipewire"
+    assert profile.realtime.output_device == "pipewire"
     assert profile.realtime.language is None
     assert profile.realtime.vad_threshold == 0.8
     assert profile.realtime.silence_grace_period == 0.3
@@ -265,8 +365,8 @@ def test_employee_directory_tool_is_removed_when_directory_disabled():
         {
             "name": "employee-directory-disabled-tool",
             "tools": {
-                "enabled_tool_names": [
-                    "unitree_go2.vision.resolve_employee_identity",
+                "enabled_tool_ids": [
+                    "identity.resolve_employee_identity",
                 ]
             },
             "employee_directory": {
@@ -278,7 +378,7 @@ def test_employee_directory_tool_is_removed_when_directory_disabled():
         framework_config={},
     )
 
-    assert profile.tools.enabled_tool_names == ()
+    assert profile.tools.enabled_tool_ids == ()
 
 
 def test_employee_directory_tool_is_kept_when_directory_enabled():
@@ -286,8 +386,8 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
         {
             "name": "employee-directory-enabled-tool",
             "tools": {
-                "enabled_tool_names": [
-                    "unitree_go2.vision.resolve_employee_identity",
+                "enabled_tool_ids": [
+                    "identity.resolve_employee_identity",
                 ]
             },
             "employee_directory": {
@@ -299,8 +399,8 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
         framework_config={},
     )
 
-    assert profile.tools.enabled_tool_names == (
-        "unitree_go2.vision.resolve_employee_identity",
+    assert profile.tools.enabled_tool_ids == (
+        "identity.resolve_employee_identity",
     )
     assert profile.employee_directory.site_code == "BOS3"
 
@@ -327,7 +427,6 @@ def test_face_owner_turn_profile_is_configurable():
             "face_recognition": {
                 "owner_turn": {
                     "enabled": True,
-                    "camera_info_topic": "/camera/color/camera_info",
                     "camera_yaw_offset_rad": 0.1,
                     "deadband_deg": 2.0,
                     "turn_gain": 0.7,
@@ -350,7 +449,6 @@ def test_face_owner_turn_profile_is_configurable():
 
     owner_turn = profile.face_recognition.owner_turn
     assert owner_turn.enabled is True
-    assert owner_turn.camera_info_topic == "/camera/color/camera_info"
     assert owner_turn.camera_yaw_offset_rad == pytest.approx(0.1)
     assert owner_turn.deadband_deg == pytest.approx(2.0)
     assert owner_turn.turn_gain == pytest.approx(0.7)
@@ -364,6 +462,48 @@ def test_face_owner_turn_profile_is_configurable():
     assert owner_turn.max_duration_sec == pytest.approx(1.4)
     assert owner_turn.slow_zone_deg == pytest.approx(7.0)
     assert owner_turn.min_angular_speed_rad_s == pytest.approx(0.2)
+
+
+def test_face_recognition_rejects_provider_internal_camera_keys():
+    with pytest.raises(ProfileValidationError, match="face_recognition"):
+        _parse_profile(
+            {
+                "name": "old-camera-topic",
+                "face_recognition": {
+                    "camera_topic": "/camera/color/image_raw/compressed",
+                },
+            },
+            profile_path=Path("/tmp/old-camera-topic.yaml"),
+            framework_config={},
+        )
+
+    with pytest.raises(ProfileValidationError, match="face_recognition.owner_turn"):
+        _parse_profile(
+            {
+                "name": "old-camera-info-topic",
+                "face_recognition": {
+                    "owner_turn": {
+                        "camera_info_topic": "/camera/color/camera_info",
+                    },
+                },
+            },
+            profile_path=Path("/tmp/old-camera-info-topic.yaml"),
+            framework_config={},
+        )
+
+    with pytest.raises(ProfileValidationError, match="face_recognition.depth_gate"):
+        _parse_profile(
+            {
+                "name": "old-depth-topic",
+                "face_recognition": {
+                    "depth_gate": {
+                        "depth_topic": "/camera/aligned_depth_to_color/image_raw",
+                    },
+                },
+            },
+            profile_path=Path("/tmp/old-depth-topic.yaml"),
+            framework_config={},
+        )
 
 
 def test_memory_store_path_defaults_and_resolves_from_repo_root():

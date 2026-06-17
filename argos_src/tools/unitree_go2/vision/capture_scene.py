@@ -11,25 +11,25 @@ from langchain_core.tools import tool
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.tools.common.tool_response import tool_response_json
 
-DEFAULT_CAMERA_TOPIC = "/camera/color/image_raw/compressed"
+DEFAULT_CAMERA_RESOURCE = "head_realsense"
 MAX_CACHED_FRAME_AGE_SEC = 2.0
 
 
 def get_capture_scene_tool(
     face_service: Any,
-    default_camera_topic: str = DEFAULT_CAMERA_TOPIC,
+    default_camera_resource: str = DEFAULT_CAMERA_RESOURCE,
 ) -> Callable:
     """Build a multimodal tool that captures one current camera frame."""
 
     @tool(response_format="content_and_artifact")
-    def capture_scene(camera_topic: str = default_camera_topic) -> tuple[str, dict]:
+    def capture_scene(camera_resource: str = default_camera_resource) -> tuple[str, dict]:
         """Capture a single current camera image and return it to the model for scene understanding.
 
         Use this when a user asks what is visible at a place (e.g. available snacks, items on a shelf,
         signs, room status). If needed, navigate first, then call this tool.
         """
-        image, cached_topic, captured_at_unix = face_service.get_cached_latest_frame(
-            camera_topic=camera_topic,
+        image, cached_resource, captured_at_unix = face_service.get_cached_latest_frame(
+            camera_resource_id=camera_resource,
             max_age_sec=MAX_CACHED_FRAME_AGE_SEC,
         )
         if image is None:
@@ -38,7 +38,7 @@ def get_capture_scene_tool(
                     success=False,
                     status="error",
                     message=(
-                        f"I don't have a recent cached camera frame from {camera_topic} right now. "
+                        f"I don't have a recent cached camera frame from {camera_resource} right now. "
                         "The face camera loop may still be starting up."
                     ),
                     result_source="immediate",
@@ -71,7 +71,7 @@ def get_capture_scene_tool(
             message="Captured one scene image for visual reasoning.",
             result_source="immediate",
             data={
-                "camera_topic": cached_topic,
+                "camera_resource": cached_resource,
                 "captured_at": captured_at,
                 "resolution": f"{width}x{height}",
                 "instruction": "Analyze this image to answer the user.",

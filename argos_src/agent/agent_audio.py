@@ -247,6 +247,10 @@ class RealtimeAgentAudioMixin:
                     nav_passive_listen_allowed=interaction.nav_passive_listen_allowed,
                 )
                 self._wake_window_until = wake_until
+                if allowed:
+                    display_mode = getattr(self, "_set_display_mode_async", None)
+                    if callable(display_mode):
+                        display_mode("alert")
                 if allowed and voice_detected:
                     self._candidate_voice_blocks = (
                         int(getattr(self, "_candidate_voice_blocks", 0) or 0) + 1
@@ -313,6 +317,9 @@ class RealtimeAgentAudioMixin:
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
         self._set_recording_gesture_async(True)
+        display_mode = getattr(self, "_set_display_mode_async", None)
+        if callable(display_mode):
+            display_mode("recording")
         try:
             self._send_event({"type": "input_audio_buffer.clear"})
         except Exception:
@@ -372,6 +379,9 @@ class RealtimeAgentAudioMixin:
         except Exception:
             self.logger.exception("Failed to commit input audio buffer")
             return
+        display_mode = getattr(self, "_set_display_mode_async", None)
+        if callable(display_mode):
+            display_mode("thinking")
         transcript_perf_s = perf_now()
         req_id = f"rt-{uuid4().hex[:12]}"
         self._latency.emit(event="audio_commit", req_id=req_id)

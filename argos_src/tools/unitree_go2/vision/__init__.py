@@ -1,6 +1,6 @@
 """Unitree Go2 vision tool exports."""
 
-from .capture_scene import DEFAULT_CAMERA_TOPIC, get_capture_scene_tool
+from .capture_scene import DEFAULT_CAMERA_RESOURCE, get_capture_scene_tool
 from .enroll_visible_person import (
     EnrollVisiblePersonTool,
     get_enroll_visible_person_tool,
@@ -11,7 +11,7 @@ from .resolve_employee_identity import (
 )
 
 __all__ = [
-    "DEFAULT_CAMERA_TOPIC",
+    "DEFAULT_CAMERA_RESOURCE",
     "EnrollVisiblePersonTool",
     "ResolveEmployeeIdentityTool",
     "get_capture_scene_tool",

@@ -21,6 +21,7 @@ That starts one process which owns:
 - engagement state publishing
 - tool calling
 - transcript side-channel for preference extraction
+- optional interaction display updates for Puffle's browser screen
 
 ## Prerequisites
 
@@ -69,7 +70,7 @@ Terminal 1: external robot provider
 
 Start the provider process that owns ROS, SDK, camera, navigation, or other
 robot-specific dependencies. Argos only talks to that provider through the
-configured robot transport.
+configured provider transport.
 
 Terminal 2: Argos realtime runtime
 
@@ -77,9 +78,14 @@ Terminal 2: Argos realtime runtime
 cd ~/argos-agent
 source setup_shell.sh
 export OPENAI_API_KEY=...
-export ARGOS_ROBOT_TRANSPORT=zenoh
+export ARGOS_PROVIDER_TRANSPORT=zenoh
 python3 run_profile.py --profile static_interaction
 ```
+
+Optional display: for Puffle's screen, start the local browser display server at
+`http://localhost:4173` before enrollment review or visual state testing. Argos
+talks to it through the `interaction_display` resource. Set
+`display.enabled: false` in the profile when running without the screen.
 
 If startup succeeds, you should see the runtime print:
 
@@ -105,6 +111,7 @@ python3 run_profile.py --profile static_interaction
 5. Confirm the robot speaks back through the speaker.
 6. Confirm face presence is updating in the Argos logs/provider events.
 7. Confirm the logs show `recording_started`, `response_create`, and `playback_completed` for a normal turn.
+8. If using the Puffle screen, confirm idle shows the happy face and assistant speech streams subtitles.
 
 ## Behavioral Baseline
 
@@ -188,6 +195,8 @@ That is still the best way to separate whether a failure is:
 
 Face enrollment happens through the live `enroll_visible_person` tool during a
 Argos interaction, after the person confirms their identity and consent.
+When the `interaction_display` resource is configured, the tool shows a blocking
+face-capture preview on the Puffle screen and saves only after Accept.
 
 ## Identity and Voice References
 

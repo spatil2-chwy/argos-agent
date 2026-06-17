@@ -27,15 +27,17 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `run_profile.py`
   Supported single-process launcher.
 - `argos_src/agent/factory.py`
-  Wires face runtime, nav state, battery cache, tools, bridges, coalescer, and engagement state.
+  Wires face runtime, nav state, battery cache, display runtime, tools, bridges, coalescer, and engagement state.
 - `argos_src/agent/agent_runtime.py`
-  Owns the websocket session, turn queue, playback, history bookkeeping, and tool loop.
+  Owns the websocket session, turn queue, playback, display update worker, history bookkeeping, and tool loop.
 - `argos_src/agent/agent_audio.py`
   Owns audio stream setup, local capture admission, audio commit, and playback callbacks.
 - `argos_src/agent/orchestrator.py`
   Contains `EventCoalescer` and `EngagementStateMachine`.
 - `argos_src/runtime/audio_admission.py`
   Pure local speech admission policy.
+- `argos_src/display/runtime.py`
+  Optional interaction-screen facade for faces, subtitles, and blocking review UI.
 - `argos_src/agent/runtime_context.py`
   Builds dynamic per-turn instruction blocks.
 
@@ -107,14 +109,16 @@ Realtime model
     -> audio deltas / transcripts / function calls
     -> local playback buffer + tool loop
     -> EngagementStateMachine updates
+    -> optional interaction display updates
 ```
 
 ## Boot Flow
 
 1. `run_profile.py` loads `static_interaction`.
 2. `factory.py` builds the robot-side runtime pieces.
-3. `RealtimeRobotAgent.start()` opens the websocket and sends `session.update`.
-4. After `session.updated`, mic capture and realtime turn handling become live.
+3. If `display.enabled` is true and a display resource is selected, `interaction_display` is wired through `DisplayRuntime`.
+4. `RealtimeRobotAgent.start()` opens the websocket and sends `session.update`.
+5. After `session.updated`, mic capture and realtime turn handling become live.
 
 ## Two Trigger Families
 
@@ -205,10 +209,16 @@ That state machine does more than UI:
 - controls passive-listening windows
 - decides when patrol may resume
 
+Display updates are derived from runtime state, not model tool calls. The
+default Puffle display maps idle to `happy`, listening/recording/thinking to
+`think`, and assistant playback to `happy`; only assistant transcript deltas are
+shown as subtitles.
+
 ## Read Next
 
 - Use `realtime_turn_flow.md` for exact event order, state transitions, interruptions, and edge cases.
 - Use `prompting_and_history.md` for prompt layering, history assembly, tool traces, and transcript ownership.
 - Use `speaker_recognition.md` for voice enrollment, audio ownership, strict face ownership, and voice-reference management.
+- Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.
 - Use `identity_store.md` for shared person records and face/speaker embedding-store management.

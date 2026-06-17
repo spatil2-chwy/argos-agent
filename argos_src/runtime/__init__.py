@@ -9,7 +9,6 @@ __all__ = [
     "CHARGING_READY_PCT",
     "CURRENT_CHARGE_A",
     "CURRENT_DISCHARGE_A",
-    "FACE_PRESENCE_TOPIC",
     "LOW_BATTERY_NAVIGATION_MSG",
     "LOW_BATTERY_PCT",
     "reports_charging",
@@ -26,10 +25,6 @@ _LAZY_EXPORTS = {
     ),
     "LOW_BATTERY_PCT": ("argos_src.runtime.battery_state", "LOW_BATTERY_PCT"),
     "reports_charging": ("argos_src.runtime.battery_state", "reports_charging"),
-    "FACE_PRESENCE_TOPIC": (
-        "argos_src.runtime.interaction_topics",
-        "FACE_PRESENCE_TOPIC",
-    ),
 }
 
 

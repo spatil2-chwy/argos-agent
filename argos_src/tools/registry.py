@@ -28,7 +28,7 @@ from argos_src.tools.unitree_go2.vision.resolve_employee_identity import (
 def build_builtin_tools(
     *,
     robot_family: str,
-    enabled_tool_names: Iterable[str],
+    enabled_tool_ids: Iterable[str],
     robot_client,
     face_service,
     employee_directory_service,
@@ -36,11 +36,12 @@ def build_builtin_tools(
     nav_state: NavigationState,
     on_nav_event,
     battery_cache,
-    default_camera_topic: str,
+    default_camera_resource: str,
+    display_runtime=None,
 ) -> list[BaseTool]:
     """Build selected built-in tools for the selected robot family."""
     requested = resolve_builtin_tool_names(
-        enabled_tool_names,
+        enabled_tool_ids,
         robot_family=robot_family,
     )
     requested_set = set(requested)
@@ -48,13 +49,13 @@ def build_builtin_tools(
     if robot_family == ROBOT_FAMILY_SPOT:
         return get_spot_tools(
             robot_client=robot_client,
-            enabled_tool_names=requested,
+            runtime_tool_names=requested,
         )
 
     tools: list[BaseTool] = []
 
     action_names = [name for name in GO2_ACTION_TOOL_NAMES if name in requested_set]
-    tools.extend(get_go2_action_tools(robot_client, enabled_tool_names=action_names))
+    tools.extend(get_go2_action_tools(robot_client, runtime_tool_names=action_names))
 
     if "move_robot" in requested_set:
         tools.append(get_move_robot_tool(robot_client))
@@ -62,7 +63,7 @@ def build_builtin_tools(
         tools.append(
             get_capture_scene_tool(
                 face_service,
-                default_camera_topic=default_camera_topic,
+                default_camera_resource=default_camera_resource,
             )
         )
     if "enroll_visible_person" in requested_set and face_service is not None:
@@ -70,7 +71,8 @@ def build_builtin_tools(
             get_enroll_visible_person_tool(
                 face_service,
                 employee_directory_service=employee_directory_service,
-                default_camera_topic=default_camera_topic,
+                default_camera_resource=default_camera_resource,
+                display_runtime=display_runtime,
             )
         )
     if (

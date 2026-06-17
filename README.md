@@ -22,6 +22,7 @@ Canonical operator guide: `docs/launch.md`
 ├── pyproject.toml
 ├── poetry.lock
 ├── config/
+│   ├── manifests/
 │   └── profiles/
 ├── resources/
 │   ├── nav_locations/
@@ -33,13 +34,15 @@ Canonical operator guide: `docs/launch.md`
 ├── docs/
 └── argos_src/
     ├── agent/
+    ├── capabilities/
+    ├── display/
     ├── face_recognition/
     ├── identity/
     │   └── embeddings/
     ├── integrations/
     ├── media/
     ├── memory/
-    ├── robot_api/
+    ├── provider_api/
     ├── runtime/
     └── tools/
         ├── common/
@@ -51,6 +54,7 @@ Canonical operator guide: `docs/launch.md`
 - Launch and testing: `docs/launch.md`
 - Architecture: `docs/architecture.md`
 - Voice/runtime notes: `docs/voice.md`
+- Puffle interaction display: `docs/interaction_display.md`
 - Face recognition: `docs/face_recognition.md`
 - Speaker recognition: `docs/speaker_recognition.md`
 - Identity store: `docs/identity_store.md`

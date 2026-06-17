@@ -18,4 +18,13 @@ fi
 # shellcheck disable=SC1091
 . "$POETRY_ENV_PATH/bin/activate"
 
+for ARGOS_NATIVE_LIB_PATH in \
+    "$POETRY_ENV_PATH"/lib/python*/site-packages/nvpl/lib \
+    "$POETRY_ENV_PATH"/lib/python*/site-packages/nvidia/*/lib; do
+    if [ -d "$ARGOS_NATIVE_LIB_PATH" ]; then
+        export LD_LIBRARY_PATH="$ARGOS_NATIVE_LIB_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+done
+unset ARGOS_NATIVE_LIB_PATH
+
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"

@@ -10,8 +10,8 @@ import threading
 import time
 from typing import Any, Callable
 
-from argos_src.robot_api.errors import is_robot_provider_error
-from argos_src.robot_api.motion import motion_lock_for_topic
+from argos_src.provider_api.errors import is_provider_error
+from argos_src.runtime.motion_locks import motion_lock_for_channel
 
 logger = logging.getLogger(__name__)
 CMD_VEL_TOPIC = "/cmd_vel"
@@ -351,7 +351,7 @@ class OwnerTurnController:
                 try:
                     self._publish_stop()
                 except Exception as exc:
-                    if is_robot_provider_error(exc):
+                    if is_provider_error(exc):
                         self._warn_throttled(
                             "publish_stop_provider",
                             "Owner turn robot provider stop publish failed req_id=%s person_id=%s: %s",
@@ -405,7 +405,7 @@ class OwnerTurnController:
         try:
             transform = getter(self.settings.odom_frame, self.settings.robot_frame)
         except Exception as exc:
-            self._last_transform_failure_provider = is_robot_provider_error(exc)
+            self._last_transform_failure_provider = is_provider_error(exc)
             if self._last_transform_failure_provider:
                 self._warn_throttled(
                     "read_transform_provider",
@@ -442,7 +442,7 @@ class OwnerTurnController:
             self._send_velocity_sample(angular_z=float(angular_z))
             return True
         except Exception as exc:
-            if is_robot_provider_error(exc):
+            if is_provider_error(exc):
                 self._warn_throttled(
                     "publish_velocity_provider",
                     "Owner turn robot provider velocity publish failed: %s",
@@ -466,7 +466,7 @@ class OwnerTurnController:
     def _acquire_motion_lock(self) -> bool:
         if getattr(self, "_motion_lock_acquired", False):
             return True
-        lock = motion_lock_for_topic(CMD_VEL_TOPIC)
+        lock = motion_lock_for_channel(CMD_VEL_TOPIC)
         acquired = lock.acquire(blocking=False)
         if acquired:
             self._motion_lock_acquired = True

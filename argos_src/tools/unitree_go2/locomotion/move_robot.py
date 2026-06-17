@@ -1,4 +1,4 @@
-"""Tool to move the Go2 robot through the transport-neutral RobotClient."""
+"""Tool to move the Go2 robot through provider-backed motion capabilities."""
 
 from __future__ import annotations
 
