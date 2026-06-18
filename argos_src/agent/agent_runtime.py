@@ -798,14 +798,14 @@ class RealtimeRobotAgent(
             )
             self._display_thread.start()
 
-    def _set_display_mode_async(self, mode: str) -> None:
+    def _set_display_mode_async(self, mode: str, *, force: bool = False) -> None:
         if getattr(self, "display_runtime", None) is None:
             return
         rendered = str(mode or "").strip()
         if not rendered:
             return
         with self._display_mode_lock:
-            if rendered == self._display_mode:
+            if not force and rendered == self._display_mode:
                 return
             self._display_mode = rendered
         self._display_queue.put(("mode", rendered))

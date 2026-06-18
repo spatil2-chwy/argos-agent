@@ -262,7 +262,13 @@ class RealtimeAgentAudioMixin:
                 self._wake_window_until = wake_until
                 if allowed:
                     display_mode = getattr(self, "_set_display_mode_async", None)
-                    if callable(display_mode):
+                    display_state_still_current = True
+                    if interaction_state in {"alert", "cooldown"}:
+                        current_state = str(
+                            getattr(self.engagement, "state_name", interaction_state) or ""
+                        ).strip()
+                        display_state_still_current = current_state == interaction_state
+                    if callable(display_mode) and display_state_still_current:
                         display_mode("alert")
                 if allowed and voice_detected:
                     self._candidate_voice_blocks = (

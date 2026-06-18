@@ -38,9 +38,6 @@ class RealtimeAgentPlaybackMixin:
             turn.req_id,
             stream_id=rendered_stream_id,
         )
-        display_mode = getattr(self, "_set_display_mode_async", None)
-        if callable(display_mode):
-            display_mode("idle")
         turn.playback_finished.set()
 
     def _force_complete_stalled_playback(self, turn: QueuedTurn, *, reason: str) -> None:
@@ -59,9 +56,6 @@ class RealtimeAgentPlaybackMixin:
             turn.req_id,
             stream_id=turn.response_id,
         )
-        display_mode = getattr(self, "_set_display_mode_async", None)
-        if callable(display_mode):
-            display_mode("idle")
         turn.playback_finished.set()
 
     def interrupt_current_response(self, *, reason: str) -> None:

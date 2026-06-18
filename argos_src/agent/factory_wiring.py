@@ -49,7 +49,7 @@ class FactoryRuntimeWireup:
             agent.flush_preference_segments(reason="idle")
             display_mode = getattr(agent, "_set_display_mode_async", None)
             if callable(display_mode):
-                display_mode("idle")
+                display_mode("idle", force=True)
         if self._nav_state is None or self._coalescer is None:
             return
         patrol = self._nav_state.get_patrol()
