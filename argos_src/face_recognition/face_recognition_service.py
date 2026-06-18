@@ -1466,10 +1466,18 @@ class FaceRecognitionService:
             if prepared.reason:
                 self._log_loop_heartbeat(
                     f"prepare_{prepared.reason}",
-                    "[FaceLoop] face preparation produced no usable faces reason=%s detected=%s rejected=%s",
+                    "[FaceLoop] summary reason=%s detected=%s rejected=%s "
+                    "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
+                    "primary_face=%s primary_attention=%s",
                     prepared.reason,
                     prepared.detected_count,
                     prepared.rejected_count,
+                    [],
+                    0,
+                    [],
+                    0,
+                    None,
+                    None,
                 )
             if self._presence_cache.clear_if_expired(now):
                 logger.info("[FaceLoop] no faces, cache expired and cleared")
@@ -1512,13 +1520,17 @@ class FaceRecognitionService:
         )
         self._log_loop_heartbeat(
             "attention_summary",
-            "[FaceLoop] attention summary detected=%s recognized=%s unknown=%s "
-            "attentive=%s attentive_unknown=%s primary_attention=%s",
+            "[FaceLoop] summary reason=%s detected=%s rejected=%s "
+            "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
+            "primary_face=%s primary_attention=%s",
+            "ok",
             len(detected_faces),
+            prepared.rejected_count,
             [p.name for p in persons],
             unknown_count,
             attentive_names,
             analysis.attentive_unknown_count,
+            analysis.attention_target.person_id if analysis.attention_target else None,
             (
                 primary_attention.person_id
                 if primary_attention and primary_attention.person_id
