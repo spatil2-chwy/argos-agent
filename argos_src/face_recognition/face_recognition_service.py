@@ -1510,6 +1510,21 @@ class FaceRecognitionService:
                 else (primary_attention.kind if primary_attention else None)
             ),
         )
+        self._log_loop_heartbeat(
+            "attention_summary",
+            "[FaceLoop] attention summary detected=%s recognized=%s unknown=%s "
+            "attentive=%s attentive_unknown=%s primary_attention=%s",
+            len(detected_faces),
+            [p.name for p in persons],
+            unknown_count,
+            attentive_names,
+            analysis.attentive_unknown_count,
+            (
+                primary_attention.person_id
+                if primary_attention and primary_attention.person_id
+                else (primary_attention.kind if primary_attention else None)
+            ),
+        )
 
     def _log_loop_heartbeat(
         self,

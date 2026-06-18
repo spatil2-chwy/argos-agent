@@ -93,7 +93,7 @@ face_recognition:
     slow_zone_deg: 8.0
     min_angular_speed_rad_s: 0.25
   depth_gate:
-    enabled: true
+    enabled: false
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5
