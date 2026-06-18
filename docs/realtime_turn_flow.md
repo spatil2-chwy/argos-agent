@@ -17,6 +17,9 @@ This document explains the live control flow of the Argos realtime runtime:
 - how engagement state changes over time
 - how interruptions, tool calls, and edge cases are handled
 
+For the camera attention signal that can open passive mic admission, see
+`docs/attention_gate.md`.
+
 ## Mental Model
 
 Think of the runtime as one long-lived realtime session with three local control layers around it:
@@ -147,12 +150,17 @@ For every chunk it:
 Admission uses:
 
 - face presence
+- attention presence, when enabled by profile
 - current engagement state
 - wake-window state
 - whether the robot is already speaking
 - whether navigation is active and interruptible
 
 This is why the runtime can behave differently in `idle`, `alert`, `cooldown`, or focused navigation even before the model sees anything.
+
+Attention and face presence are checked only when a recording is not already
+active. Once recording starts, admission closing does not stop the capture; local
+VAD and `silence_grace_period` decide when the active audio turn ends.
 
 ### Step 3: Recording starts locally
 

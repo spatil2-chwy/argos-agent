@@ -133,6 +133,13 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.robot.bridge.resource_id == "base"
     assert "motion.move_robot" in profile.tools.enabled_tool_ids
     assert profile.face_recognition.attention_gate.enabled is True
+    assert profile.face_recognition.attention_gate.min_face_area == 700
+    assert profile.face_recognition.attention_gate.distant_max_abs_yaw_deg == pytest.approx(
+        18.0
+    )
+    assert profile.face_recognition.attention_gate.max_center_offset_ratio == pytest.approx(
+        0.70
+    )
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
@@ -476,9 +483,17 @@ def test_face_attention_gate_profile_is_configurable():
                 "attention_gate": {
                     "enabled": True,
                     "min_face_area": 900,
+                    "min_face_area_ratio": 0.0005,
                     "max_abs_yaw_deg": 21.0,
                     "max_abs_pitch_deg": 17.0,
                     "max_abs_roll_deg": 31.0,
+                    "distant_max_abs_yaw_deg": 14.0,
+                    "distant_max_abs_pitch_deg": 29.0,
+                    "distant_max_abs_roll_deg": 24.0,
+                    "near_face_area_ratio": 0.03,
+                    "distant_face_area_ratio": 0.008,
+                    "near_depth_m": 0.7,
+                    "distant_depth_m": 2.3,
                     "max_center_offset_ratio": 0.4,
                     "min_confidence": 0.5,
                     "smoothing_window_sec": 0.8,
@@ -503,9 +518,17 @@ def test_face_attention_gate_profile_is_configurable():
     attention = profile.face_recognition.attention_gate
     assert attention.enabled is True
     assert attention.min_face_area == 900
+    assert attention.min_face_area_ratio == pytest.approx(0.0005)
     assert attention.max_abs_yaw_deg == pytest.approx(21.0)
     assert attention.max_abs_pitch_deg == pytest.approx(17.0)
     assert attention.max_abs_roll_deg == pytest.approx(31.0)
+    assert attention.distant_max_abs_yaw_deg == pytest.approx(14.0)
+    assert attention.distant_max_abs_pitch_deg == pytest.approx(29.0)
+    assert attention.distant_max_abs_roll_deg == pytest.approx(24.0)
+    assert attention.near_face_area_ratio == pytest.approx(0.03)
+    assert attention.distant_face_area_ratio == pytest.approx(0.008)
+    assert attention.near_depth_m == pytest.approx(0.7)
+    assert attention.distant_depth_m == pytest.approx(2.3)
     assert attention.max_center_offset_ratio == pytest.approx(0.4)
     assert attention.min_confidence == pytest.approx(0.5)
     assert attention.smoothing_window_sec == pytest.approx(0.8)

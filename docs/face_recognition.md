@@ -22,6 +22,9 @@ This document covers the current Argos face path:
 3. continuous recognition preprocessing
 4. multi-face scenes
 5. face identity vs audio speaker ownership
+
+For the dedicated attention-gate flow, thresholds, and mic-admission behavior,
+see `docs/attention_gate.md`.
 6. config knobs and threshold policy
 
 ## Short Answer
@@ -381,11 +384,19 @@ face_recognition:
     max_valid_depth_m: 10.0
   attention_gate:
     enabled: true
-    min_face_area: 1600
+    min_face_area: 700
+    min_face_area_ratio: 0.00035
     max_abs_yaw_deg: 25.0
-    max_abs_pitch_deg: 20.0
+    max_abs_pitch_deg: 22.0
     max_abs_roll_deg: 35.0
-    max_center_offset_ratio: 0.45
+    distant_max_abs_yaw_deg: 18.0
+    distant_max_abs_pitch_deg: 32.0
+    distant_max_abs_roll_deg: 28.0
+    near_face_area_ratio: 0.035
+    distant_face_area_ratio: 0.010
+    near_depth_m: 0.8
+    distant_depth_m: 2.0
+    max_center_offset_ratio: 0.70
     min_confidence: 0.55
     smoothing_window_sec: 1.0
     min_attentive_observations: 2
@@ -421,18 +432,30 @@ Attention gate settings:
 | Setting | Meaning | Keep it? |
 |---|---|---|
 | `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
-| `min_face_area: 1600` | Ignores very small faces before head-pose scoring. | Tune with camera resolution. |
-| `max_abs_yaw_deg: 25.0` | Max left/right head angle considered attentive. | Tune first if people are rejected while facing the robot. |
-| `max_abs_pitch_deg: 20.0` | Max up/down head angle considered attentive. | Tune with camera mounting height. |
-| `max_abs_roll_deg: 35.0` | Max head tilt considered attentive. | Usually keep. |
-| `max_center_offset_ratio: 0.45` | Rejects faces far from the optical center for attention. | Raise if users stand off-center. |
+| `min_face_area: 700` | Absolute minimum detected face bbox area before head-pose scoring. | Lower for mounted wide-view cameras; keep enrollment stricter. |
+| `min_face_area_ratio: 0.00035` | Resolution-scaled face area floor, combined with `min_face_area`. | Tune with camera resolution. |
+| `max_abs_yaw_deg: 25.0` | Near-face left/right head angle limit. | Tune for close interaction. |
+| `max_abs_pitch_deg: 22.0` | Near-face up/down head angle limit. | Tune with camera mounting height. |
+| `max_abs_roll_deg: 35.0` | Near-face head tilt limit. | Usually keep. |
+| `distant_max_abs_yaw_deg: 18.0` | Far/small-face left/right head angle limit. | Tighten if far side conversations falsely open admission. |
+| `distant_max_abs_pitch_deg: 32.0` | Far/small-face up/down head angle limit. | Mounted cameras often need this higher because users look down toward the robot. |
+| `distant_max_abs_roll_deg: 28.0` | Far/small-face head tilt limit. | Tune if tilted distant heads falsely count as attention. |
+| `near_face_area_ratio: 0.035` | Face area ratio treated as near when depth is unavailable. | Tune from live bbox logs. |
+| `distant_face_area_ratio: 0.010` | Face area ratio treated as distant when depth is unavailable. | Tune from live bbox logs. |
+| `near_depth_m: 0.8` | Depth treated as near when `depth_m` exists on the face. | Keep unless the camera is mounted unusually close. |
+| `distant_depth_m: 2.0` | Depth treated as distant when `depth_m` exists on the face. | Match the natural standing interaction distance. |
+| `max_center_offset_ratio: 0.70` | Rejects faces far from the optical center for attention. | Mounted wide cameras should be looser than webcams. |
 | `min_confidence: 0.55` | Confidence floor reported at the configured pose/center acceptance boundary. | Usually keep. |
 | `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
 | `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
 | `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
 
 The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
-replace FaceNet and does not add a second face detector. If `sixdrepnet` is not
+replace FaceNet and does not add a second face detector. Pose limits are
+interpolated between near and distant settings using face `depth_m` when present,
+or face bbox area ratio when depth is unavailable. This lets a mounted RealSense
+camera treat a person standing around two meters back differently from a close
+webcam-like face crop. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
 presence snapshot keeps the old face fields and adds:

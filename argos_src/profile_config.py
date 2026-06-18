@@ -112,9 +112,17 @@ class FaceDepthGateProfile:
 class FaceAttentionGateProfile:
     enabled: bool
     min_face_area: int
+    min_face_area_ratio: float
     max_abs_yaw_deg: float
     max_abs_pitch_deg: float
     max_abs_roll_deg: float
+    distant_max_abs_yaw_deg: float
+    distant_max_abs_pitch_deg: float
+    distant_max_abs_roll_deg: float
+    near_face_area_ratio: float
+    distant_face_area_ratio: float
+    near_depth_m: float
+    distant_depth_m: float
     max_center_offset_ratio: float
     min_confidence: float
     smoothing_window_sec: float
@@ -327,9 +335,17 @@ class ScenarioProfile:
             attention_gate=FaceAttentionGateProfile(
                 enabled=True,
                 min_face_area=1600,
+                min_face_area_ratio=0.0,
                 max_abs_yaw_deg=25.0,
                 max_abs_pitch_deg=20.0,
                 max_abs_roll_deg=35.0,
+                distant_max_abs_yaw_deg=25.0,
+                distant_max_abs_pitch_deg=20.0,
+                distant_max_abs_roll_deg=35.0,
+                near_face_area_ratio=0.04,
+                distant_face_area_ratio=0.012,
+                near_depth_m=0.8,
+                distant_depth_m=2.0,
                 max_center_offset_ratio=0.45,
                 min_confidence=0.55,
                 smoothing_window_sec=1.0,
@@ -1171,6 +1187,11 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     attention_gate = FaceAttentionGateProfile(
         enabled=_pop_bool(attention_gate_data, "enabled", default=True),
         min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1600),
+        min_face_area_ratio=_pop_float(
+            attention_gate_data,
+            "min_face_area_ratio",
+            default=0.0,
+        ),
         max_abs_yaw_deg=_pop_float(
             attention_gate_data,
             "max_abs_yaw_deg",
@@ -1185,6 +1206,41 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             attention_gate_data,
             "max_abs_roll_deg",
             default=35.0,
+        ),
+        distant_max_abs_yaw_deg=_pop_float(
+            attention_gate_data,
+            "distant_max_abs_yaw_deg",
+            default=25.0,
+        ),
+        distant_max_abs_pitch_deg=_pop_float(
+            attention_gate_data,
+            "distant_max_abs_pitch_deg",
+            default=20.0,
+        ),
+        distant_max_abs_roll_deg=_pop_float(
+            attention_gate_data,
+            "distant_max_abs_roll_deg",
+            default=35.0,
+        ),
+        near_face_area_ratio=_pop_float(
+            attention_gate_data,
+            "near_face_area_ratio",
+            default=0.04,
+        ),
+        distant_face_area_ratio=_pop_float(
+            attention_gate_data,
+            "distant_face_area_ratio",
+            default=0.012,
+        ),
+        near_depth_m=_pop_float(
+            attention_gate_data,
+            "near_depth_m",
+            default=0.8,
+        ),
+        distant_depth_m=_pop_float(
+            attention_gate_data,
+            "distant_depth_m",
+            default=2.0,
         ),
         max_center_offset_ratio=_pop_float(
             attention_gate_data,
@@ -1212,9 +1268,17 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         AttentionGateSettings(
             enabled=attention_gate.enabled,
             min_face_area=attention_gate.min_face_area,
+            min_face_area_ratio=attention_gate.min_face_area_ratio,
             max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
             max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
             max_abs_roll_deg=attention_gate.max_abs_roll_deg,
+            distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
+            distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
+            distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
+            near_face_area_ratio=attention_gate.near_face_area_ratio,
+            distant_face_area_ratio=attention_gate.distant_face_area_ratio,
+            near_depth_m=attention_gate.near_depth_m,
+            distant_depth_m=attention_gate.distant_depth_m,
             max_center_offset_ratio=attention_gate.max_center_offset_ratio,
             min_confidence=attention_gate.min_confidence,
             smoothing=AttentionSmoothingSettings(
