@@ -379,6 +379,19 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
+  attention_gate:
+    enabled: true
+    min_face_area: 1600
+    max_abs_yaw_deg: 25.0
+    max_abs_pitch_deg: 20.0
+    max_abs_roll_deg: 35.0
+    max_center_offset_ratio: 0.45
+    min_confidence: 0.55
+    smoothing_window_sec: 1.0
+    min_attentive_observations: 2
+    hold_sec: 0.8
+  proactive_greeting:
+    require_attention: true
 ```
 
 Depth gate settings:
@@ -402,6 +415,42 @@ are often rejected, tune in this order:
 2. raise `search_radius_px` if depth holes are common
 3. lower `min_valid_samples` only if the aligned depth image is consistently sparse
 4. disable `depth_gate.enabled` only if depth sync is unreliable in the deployment
+
+Attention gate settings:
+
+| Setting | Meaning | Keep it? |
+|---|---|---|
+| `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
+| `min_face_area: 1600` | Ignores very small faces before head-pose scoring. | Tune with camera resolution. |
+| `max_abs_yaw_deg: 25.0` | Max left/right head angle considered attentive. | Tune first if people are rejected while facing the robot. |
+| `max_abs_pitch_deg: 20.0` | Max up/down head angle considered attentive. | Tune with camera mounting height. |
+| `max_abs_roll_deg: 35.0` | Max head tilt considered attentive. | Usually keep. |
+| `max_center_offset_ratio: 0.45` | Rejects faces far from the optical center for attention. | Raise if users stand off-center. |
+| `min_confidence: 0.55` | Combined pose/center score required before smoothing. | Lower cautiously. |
+| `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
+| `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
+| `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
+
+The first implementation uses OpenCV PnP with the existing MTCNN landmarks and
+camera intrinsics. It does not replace FaceNet and does not add a second face
+detector. The presence snapshot keeps the old face fields and adds:
+
+- `attention_status`
+- `attention_count`
+- `attentive_recognized_count`
+- `attentive_unknown_count`
+- `primary_attention_person_id`
+- `primary_attention_name`
+- `attention_confidence`
+
+For passive listening, prefer:
+
+```yaml
+realtime:
+  admission:
+    open_on_face_presence: false
+    open_on_attention_presence: true
+```
 
 ## Thresholds Not Yet in YAML
 

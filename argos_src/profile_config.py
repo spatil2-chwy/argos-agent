@@ -74,6 +74,7 @@ class ProactiveGreetingProfile:
     unknown_enabled: bool
     recognized_cooldown_sec: float
     unknown_cooldown_sec: float
+    require_attention: bool
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,20 @@ class FaceDepthGateProfile:
 
 
 @dataclass(frozen=True)
+class FaceAttentionGateProfile:
+    enabled: bool
+    min_face_area: int
+    max_abs_yaw_deg: float
+    max_abs_pitch_deg: float
+    max_abs_roll_deg: float
+    max_center_offset_ratio: float
+    min_confidence: float
+    smoothing_window_sec: float
+    min_attentive_observations: int
+    hold_sec: float
+
+
+@dataclass(frozen=True)
 class PreferenceExtractionProfile:
     enabled: bool
 
@@ -119,6 +134,7 @@ class FaceRecognitionProfile:
     loop_interval_sec: float
     recognition_threshold: float
     depth_gate: FaceDepthGateProfile
+    attention_gate: FaceAttentionGateProfile
     owner_turn: FaceOwnerTurnProfile
     preference_extraction: PreferenceExtractionProfile
     proactive_greeting: ProactiveGreetingProfile
@@ -165,6 +181,7 @@ class SlackMemoryProfile:
 class RealtimeAdmissionProfile:
     block_during_speaking: bool
     open_on_face_presence: bool
+    open_on_attention_presence: bool
     open_on_interaction_states: tuple[str, ...]
     open_on_wake_window: bool
 
@@ -307,6 +324,18 @@ class ScenarioProfile:
                 search_radius_px=12,
                 max_valid_depth_m=10.0,
             ),
+            attention_gate=FaceAttentionGateProfile(
+                enabled=True,
+                min_face_area=1600,
+                max_abs_yaw_deg=25.0,
+                max_abs_pitch_deg=20.0,
+                max_abs_roll_deg=35.0,
+                max_center_offset_ratio=0.45,
+                min_confidence=0.55,
+                smoothing_window_sec=1.0,
+                min_attentive_observations=2,
+                hold_sec=0.8,
+            ),
             owner_turn=FaceOwnerTurnProfile(
                 enabled=False,
                 camera_yaw_offset_rad=0.0,
@@ -329,6 +358,7 @@ class ScenarioProfile:
                 unknown_enabled=True,
                 recognized_cooldown_sec=45.0,
                 unknown_cooldown_sec=30.0,
+                require_attention=False,
             ),
         )
     )
@@ -385,6 +415,7 @@ class ScenarioProfile:
             admission=RealtimeAdmissionProfile(
                 block_during_speaking=True,
                 open_on_face_presence=True,
+                open_on_attention_presence=False,
                 open_on_interaction_states=("alert", "cooldown"),
                 open_on_wake_window=True,
             ),
@@ -1064,10 +1095,15 @@ def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
 
 
 def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
+    from argos_src.face_recognition.attention_gate import (
+        AttentionGateSettings,
+        AttentionSmoothingSettings,
+    )
     from argos_src.face_recognition.depth_gate import DepthGateSettings
 
     proactive_data = _pop_section(data, "proactive_greeting")
     depth_gate_data = _pop_section(data, "depth_gate")
+    attention_gate_data = _pop_section(data, "attention_gate")
     owner_turn_data = _pop_section(data, "owner_turn")
     preference_extraction_data = _pop_section(data, "preference_extraction")
 
@@ -1083,6 +1119,11 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             proactive_data,
             "unknown_cooldown_sec",
             default=30.0,
+        ),
+        require_attention=_pop_bool(
+            proactive_data,
+            "require_attention",
+            default=False,
         ),
     )
     _reject_unknown(proactive_data, "face_recognition.proactive_greeting")
@@ -1126,6 +1167,67 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             f"face_recognition.depth_gate invalid: {exc}"
         ) from exc
     _reject_unknown(depth_gate_data, "face_recognition.depth_gate")
+
+    attention_gate = FaceAttentionGateProfile(
+        enabled=_pop_bool(attention_gate_data, "enabled", default=True),
+        min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1600),
+        max_abs_yaw_deg=_pop_float(
+            attention_gate_data,
+            "max_abs_yaw_deg",
+            default=25.0,
+        ),
+        max_abs_pitch_deg=_pop_float(
+            attention_gate_data,
+            "max_abs_pitch_deg",
+            default=20.0,
+        ),
+        max_abs_roll_deg=_pop_float(
+            attention_gate_data,
+            "max_abs_roll_deg",
+            default=35.0,
+        ),
+        max_center_offset_ratio=_pop_float(
+            attention_gate_data,
+            "max_center_offset_ratio",
+            default=0.45,
+        ),
+        min_confidence=_pop_float(
+            attention_gate_data,
+            "min_confidence",
+            default=0.55,
+        ),
+        smoothing_window_sec=_pop_float(
+            attention_gate_data,
+            "smoothing_window_sec",
+            default=1.0,
+        ),
+        min_attentive_observations=_pop_int(
+            attention_gate_data,
+            "min_attentive_observations",
+            default=2,
+        ),
+        hold_sec=_pop_float(attention_gate_data, "hold_sec", default=0.8),
+    )
+    try:
+        AttentionGateSettings(
+            enabled=attention_gate.enabled,
+            min_face_area=attention_gate.min_face_area,
+            max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
+            max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
+            max_abs_roll_deg=attention_gate.max_abs_roll_deg,
+            max_center_offset_ratio=attention_gate.max_center_offset_ratio,
+            min_confidence=attention_gate.min_confidence,
+            smoothing=AttentionSmoothingSettings(
+                window_sec=attention_gate.smoothing_window_sec,
+                min_observations=attention_gate.min_attentive_observations,
+                hold_sec=attention_gate.hold_sec,
+            ),
+        )
+    except ValueError as exc:
+        raise ProfileValidationError(
+            f"face_recognition.attention_gate invalid: {exc}"
+        ) from exc
+    _reject_unknown(attention_gate_data, "face_recognition.attention_gate")
 
     owner_turn = FaceOwnerTurnProfile(
         enabled=_pop_bool(owner_turn_data, "enabled", default=False),
@@ -1232,6 +1334,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             default=0.6,
         ),
         depth_gate=depth_gate,
+        attention_gate=attention_gate,
         owner_turn=owner_turn,
         preference_extraction=preference_extraction,
         proactive_greeting=proactive,
@@ -1387,6 +1490,11 @@ def _parse_realtime(
             "open_on_face_presence",
             default=True,
         ),
+        open_on_attention_presence=_pop_bool(
+            admission_data,
+            "open_on_attention_presence",
+            default=False,
+        ),
         open_on_interaction_states=tuple(
             _coerce_string_list(
                 _pop_list(
@@ -1540,6 +1648,14 @@ def _reconcile_profile_dependencies(
                 admission=replace(
                     realtime.admission,
                     open_on_face_presence=False,
+                ),
+            )
+        if realtime.admission.open_on_attention_presence:
+            realtime = replace(
+                realtime,
+                admission=replace(
+                    realtime.admission,
+                    open_on_attention_presence=False,
                 ),
             )
 

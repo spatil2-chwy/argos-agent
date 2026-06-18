@@ -102,19 +102,51 @@ class FacePresenceCache:
         persons: list[PersonContext],
         faces_detected: int,
         unknown_count: int,
+        attentive_unknown_count: int = 0,
         attention_target: AttentionTarget | None,
+        primary_attention_target: AttentionTarget | None = None,
         social_scene: SocialSceneContext,
         now: float,
     ) -> FacePresenceSnapshot:
         """Replace cached persons and recompute the exported presence snapshot."""
         ordered_persons = sorted(persons, key=lambda person: person.bbox_area, reverse=True)
         recognized_names = [person.name for person in ordered_persons]
+        attentive_persons = [person for person in ordered_persons if bool(person.attentive)]
+        attentive_recognized_names = [person.name for person in attentive_persons]
         recognized_count = len(ordered_persons)
+        attentive_recognized_count = len(attentive_persons)
+        attentive_unknown_count = max(0, int(attentive_unknown_count or 0))
+        attention_count = attentive_recognized_count + attentive_unknown_count
         primary_face_name = attention_target.name if attention_target and attention_target.name else ""
+        primary_attention_name = (
+            primary_attention_target.name
+            if primary_attention_target and primary_attention_target.name
+            else ""
+        )
+        primary_attention_person_id = (
+            primary_attention_target.person_id
+            if primary_attention_target and primary_attention_target.person_id
+            else ""
+        )
+        attention_confidence = 0.0
+        if primary_attention_person_id:
+            for person in attentive_persons:
+                if person.person_id == primary_attention_person_id:
+                    attention_confidence = float(person.attention_confidence)
+                    break
+        elif attention_count:
+            attention_confidence = max(
+                [float(person.attention_confidence) for person in attentive_persons] + [0.0]
+            )
         status = (
             "recognized"
             if recognized_count > 0
             else ("unknown" if unknown_count > 0 else "none")
+        )
+        attention_status = (
+            "attentive"
+            if attention_count > 0
+            else ("inattentive" if faces_detected > 0 else "none")
         )
         snapshot = FacePresenceSnapshot(
             status=status,
@@ -125,6 +157,20 @@ class FacePresenceCache:
             has_mixed_scene=recognized_count > 0 and unknown_count > 0,
             primary_face_kind=attention_target.kind if attention_target else "none",
             primary_face_name=primary_face_name,
+            attention_status=attention_status,
+            attention_count=attention_count,
+            attentive_recognized_count=attentive_recognized_count,
+            attentive_unknown_count=attentive_unknown_count,
+            attentive_recognized_names=attentive_recognized_names,
+            has_attentive_mixed_scene=(
+                attentive_recognized_count > 0 and attentive_unknown_count > 0
+            ),
+            primary_attention_kind=(
+                primary_attention_target.kind if primary_attention_target else "none"
+            ),
+            primary_attention_name=primary_attention_name,
+            primary_attention_person_id=primary_attention_person_id,
+            attention_confidence=attention_confidence,
             nearest_recognized_name=social_scene.nearest_recognized_name or "",
             social_scene=social_scene,
             updated_at=now,
@@ -153,6 +199,13 @@ class FacePresenceCache:
     def get_primary_face_person_id(self) -> str | None:
         """Return the current recognized primary visible person id, if any."""
         return self.get_attention_target_person_id()
+
+    def get_primary_attention_person_id(self) -> str | None:
+        """Return the current recognized primary attentive person id, if any."""
+        with self._cache_lock:
+            self._clear_if_expired_locked(time.time())
+            rendered = str(self._presence.primary_attention_person_id or "").strip()
+            return rendered or None
 
     def get_face_turn_target(self, person_id: str | None = None) -> FaceTurnTarget | None:
         """Return the latest bearing target for one recognized visible person."""

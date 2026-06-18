@@ -17,6 +17,10 @@ from argos_src.face_recognition.constants import (
     DEFAULT_FACE_DB_PATH,
     MIN_FACE_DETECTION_CONFIDENCE,
 )
+from argos_src.face_recognition.attention_gate import (
+    AttentionGateSettings,
+    FaceAttentionGate,
+)
 from argos_src.face_recognition.depth_gate import DepthGateSettings, filter_detections_by_depth
 from argos_src.face_recognition.models import (
     AttentionTarget,
@@ -114,6 +118,7 @@ class FaceRecognitionService:
         recognition_threshold: float = 0.6,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
+        attention_gate_settings: AttentionGateSettings | None = None,
         enrollment_policy: FaceEnrollmentPolicy | None = None,
         identity_db_path: str | None = None,
         identity_store: Any | None = None,
@@ -121,6 +126,9 @@ class FaceRecognitionService:
         site_code: str = "",
         camera_resource_id: str = "",
         camera_yaw_offset_rad: float = 0.0,
+        display_runtime: Any | None = None,
+        live_image_title: str = "Camera",
+        live_image_ttl_ms: int = 1000,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
         logger.info(f"Face recognition running on: {self.device}")
@@ -140,9 +148,13 @@ class FaceRecognitionService:
         self.memory_store = memory_store
         self.site_code = str(site_code or "").strip()
         self._depth_gate_settings = depth_gate_settings
+        self._attention_gate = FaceAttentionGate(attention_gate_settings)
         self._camera_resource_id = str(camera_resource_id or "").strip()
         self._camera_yaw_offset_rad = float(camera_yaw_offset_rad)
         self._camera_intrinsics: CameraIntrinsics | None = None
+        self._display_runtime = display_runtime
+        self._live_image_title = str(live_image_title or "Camera").strip() or "Camera"
+        self._live_image_ttl_ms = max(1, int(live_image_ttl_ms))
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
         self._presence_cache = FacePresenceCache(cache_expire_sec=CACHE_EXPIRE_SEC)
         self._loop_thread: Optional[threading.Thread] = None
@@ -681,6 +693,10 @@ class FaceRecognitionService:
         persons: list[PersonContext] = []
         candidates: list[FaceSceneCandidate] = []
         intrinsics = self._get_camera_intrinsics()
+        attention_gate = getattr(self, "_attention_gate", None)
+        if attention_gate is None:
+            attention_gate = FaceAttentionGate(AttentionGateSettings(enabled=False))
+            self._attention_gate = attention_gate
 
         for face in detected_faces:
             bbox_area = self._bbox_area(face)
@@ -694,6 +710,15 @@ class FaceRecognitionService:
             )
             face_center = face_center_px(face)
             match = self._recognize_face_match(face)
+            pid = match["person_id"] if match is not None else ""
+            track_id = pid or self._unknown_attention_track_id(face, image_shape)
+            attention = attention_gate.evaluate(
+                face,
+                image_shape=image_shape,
+                intrinsics=intrinsics,
+                track_id=track_id,
+                now=now,
+            )
             if match is None:
                 unknown_count += 1
                 candidates.append(
@@ -702,11 +727,12 @@ class FaceRecognitionService:
                         bbox_area=bbox_area,
                         center_distance=center_distance,
                         depth_m=face.get("depth_m"),
+                        attentive=attention.attentive,
+                        attention_confidence=attention.confidence,
                     )
                 )
                 continue
 
-            pid = match["person_id"]
             current_ids.add(pid)
             should_record_interaction = self._presence_cache.should_record_interaction(
                 pid,
@@ -758,6 +784,11 @@ class FaceRecognitionService:
                 face_center_x_px=face_center[0] if face_center is not None else None,
                 face_center_y_px=face_center[1] if face_center is not None else None,
                 center_distance=center_distance,
+                attentive=attention.attentive,
+                attention_confidence=attention.confidence,
+                head_yaw_deg=attention.yaw_deg,
+                head_pitch_deg=attention.pitch_deg,
+                head_roll_deg=attention.roll_deg,
                 directory_profile_lines=format_identity_profile_lines(meta),
             )
             persons.append(person)
@@ -769,11 +800,27 @@ class FaceRecognitionService:
                     depth_m=face.get("depth_m"),
                     person_id=pid,
                     name=match["name"],
+                    attentive=attention.attentive,
+                    attention_confidence=attention.confidence,
                 )
             )
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
+
+    @staticmethod
+    def _unknown_attention_track_id(
+        face: dict[str, Any],
+        image_shape: tuple[int, ...],
+    ) -> str:
+        """Return a coarse stable key for smoothing unknown attentive faces."""
+        center = face_center_px(face)
+        if center is None:
+            return "unknown"
+        height, width = image_shape[:2]
+        bucket_w = max(1, int(width / 8)) if width else 1
+        bucket_h = max(1, int(height / 6)) if height else 1
+        return f"unknown:{int(center[0] // bucket_w)}:{int(center[1] // bucket_h)}"
 
     def _get_camera_intrinsics(self) -> CameraIntrinsics | None:
         """Return cached color camera intrinsics when available."""
@@ -1286,6 +1333,47 @@ class FaceRecognitionService:
             logger.exception("Failed to encode enrollment preview image")
             return ""
 
+    @staticmethod
+    def _live_frame_data_url(image: Any) -> str:
+        if image is None:
+            return ""
+        try:
+            return "data:image/png;base64," + preprocess_image(image)
+        except Exception:
+            logger.exception("Failed to encode live camera frame for display")
+            return ""
+
+    def _publish_live_image_frame(self, image: Any) -> None:
+        display = getattr(self, "_display_runtime", None)
+        if display is None or not bool(getattr(display, "is_configured", False)):
+            return
+        data_url = self._live_frame_data_url(image)
+        if not data_url:
+            return
+        show_live_image = getattr(display, "show_live_image", None)
+        if not callable(show_live_image):
+            return
+        try:
+            show_live_image(
+                data_url=data_url,
+                title=getattr(self, "_live_image_title", "Camera"),
+                ttl_ms=int(getattr(self, "_live_image_ttl_ms", 1000)),
+            )
+        except Exception:
+            logger.debug("Display live image update failed", exc_info=True)
+
+    def _clear_live_image_frame(self) -> None:
+        display = getattr(self, "_display_runtime", None)
+        if display is None or not bool(getattr(display, "is_configured", False)):
+            return
+        clear_live_image = getattr(display, "clear_live_image", None)
+        if not callable(clear_live_image):
+            return
+        try:
+            clear_live_image()
+        except Exception:
+            logger.debug("Display live image clear failed", exc_info=True)
+
     def _prime_presence_cache_after_enrollment(
         self,
         *,
@@ -1371,6 +1459,7 @@ class FaceRecognitionService:
             camera_resource_id=camera_resource_id,
             captured_at=time.time(),
         )
+        self._publish_live_image_frame(image)
         prepared = self._prepare_faces_for_recognition_result(image, depth_m)
         detected_faces = prepared.faces
         if not detected_faces:
@@ -1398,16 +1487,28 @@ class FaceRecognitionService:
             persons=persons,
             faces_detected=len(detected_faces),
             unknown_count=unknown_count,
+            attentive_unknown_count=analysis.attentive_unknown_count,
             attention_target=analysis.attention_target,
+            primary_attention_target=analysis.primary_attention_target,
             social_scene=analysis.social_scene,
             now=now,
         )
+        attentive_names = [p.name for p in persons if bool(p.attentive)]
+        primary_attention = analysis.primary_attention_target
         logger.debug(
-            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s primary_face=%s",
+            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
+            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s",
             len(detected_faces),
             [p.name for p in persons],
             unknown_count,
+            attentive_names,
+            analysis.attentive_unknown_count,
             analysis.attention_target.person_id if analysis.attention_target else None,
+            (
+                primary_attention.person_id
+                if primary_attention and primary_attention.person_id
+                else (primary_attention.kind if primary_attention else None)
+            ),
         )
 
     def _log_loop_heartbeat(
@@ -1475,6 +1576,7 @@ class FaceRecognitionService:
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=3.0)
             self._loop_thread = None
+        self._clear_live_image_frame()
         logger.info("[FaceLoop] stopped")
 
     def shutdown(self) -> None:
@@ -1495,6 +1597,10 @@ class FaceRecognitionService:
     def get_primary_face_person_id(self) -> str | None:
         """Return the current recognized primary visible person id, if any."""
         return self._presence_cache.get_primary_face_person_id()
+
+    def get_primary_attention_person_id(self) -> str | None:
+        """Return the current recognized primary attentive person id, if any."""
+        return self._presence_cache.get_primary_attention_person_id()
 
     def get_face_turn_target(self, person_id: str | None = None):
         """Return the current recognized face-bearing target for a person id."""

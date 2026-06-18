@@ -12,6 +12,7 @@ from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
     OP_DISPLAY_COMMAND,
     OP_DISPLAY_HEALTH,
+    OP_DISPLAY_IMAGE,
     OP_DISPLAY_STATE,
 )
 
@@ -111,6 +112,32 @@ class DisplayRuntime:
     def show_countdown(self, seconds: int) -> bool:
         return self.command({"type": "countdown", "seconds": int(seconds)})
 
+    def show_live_image(
+        self,
+        *,
+        data_url: str = "",
+        image_url: str = "",
+        title: str = "Camera",
+        ttl_ms: int = 1000,
+        timeout_ms: int = 250,
+    ) -> bool:
+        payload: dict[str, Any] = {
+            "title": str(title or "").strip() or "Camera",
+            "ttlMs": int(ttl_ms),
+        }
+        rendered_data_url = str(data_url or "").strip()
+        rendered_image_url = str(image_url or "").strip()
+        if rendered_data_url:
+            payload["dataUrl"] = rendered_data_url
+        elif rendered_image_url:
+            payload["imageUrl"] = rendered_image_url
+        else:
+            return False
+        return self._image(payload, timeout_ms=timeout_ms)
+
+    def clear_live_image(self, *, timeout_ms: int = 250) -> bool:
+        return self._image({"type": "clear"}, timeout_ms=timeout_ms)
+
     def clear(self) -> bool:
         self._last_subtitle = ""
         return self.command({"type": "clear"})
@@ -152,6 +179,19 @@ class DisplayRuntime:
                 logger.warning("Display command failed: %s", exc)
             else:
                 logger.debug("Display command failed: %s", exc)
+            return False
+
+    def _image(self, payload: dict[str, Any], *, timeout_ms: int = 250) -> bool:
+        if not self._enabled:
+            return False
+        try:
+            self._request(OP_DISPLAY_IMAGE, dict(payload or {}), timeout_ms=timeout_ms)
+            return True
+        except Exception as exc:
+            if not is_provider_error(exc):
+                logger.warning("Display image update failed: %s", exc)
+            else:
+                logger.debug("Display image update failed: %s", exc)
             return False
 
     def review_face_capture(

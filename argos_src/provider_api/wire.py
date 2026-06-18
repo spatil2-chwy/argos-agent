@@ -28,6 +28,7 @@ OP_SPOT_COMMAND = "spot.command"
 OP_DISPLAY_COMMAND = "display.command"
 OP_DISPLAY_AWAIT_RESPONSE = "display.await_response"
 OP_DISPLAY_HEALTH = "display.health"
+OP_DISPLAY_IMAGE = "display.image"
 OP_DISPLAY_STATE = "display.state"
 
 REQUEST_TYPE = "request"
@@ -128,6 +129,7 @@ __all__ = [
     "OP_DISPLAY_AWAIT_RESPONSE",
     "OP_DISPLAY_COMMAND",
     "OP_DISPLAY_HEALTH",
+    "OP_DISPLAY_IMAGE",
     "OP_DISPLAY_STATE",
     "OP_FOLLOW_WAYPOINTS",
     "OP_GO2_ACTION",

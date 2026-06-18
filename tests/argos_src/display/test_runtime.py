@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from argos_src.display import DisplayRuntime
-from argos_src.provider_api.wire import OP_DISPLAY_AWAIT_RESPONSE, OP_DISPLAY_COMMAND
+from argos_src.provider_api.wire import (
+    OP_DISPLAY_AWAIT_RESPONSE,
+    OP_DISPLAY_COMMAND,
+    OP_DISPLAY_IMAGE,
+)
 
 
 class _Client:
@@ -72,3 +76,24 @@ def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
         {"type": "face", "face": "happy"},
         {"type": "face", "face": "think"},
     ]
+
+
+def test_display_runtime_live_image_posts_image_payload_and_clear():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    assert runtime.show_live_image(
+        data_url="data:image/png;base64,abc",
+        title="Camera",
+        ttl_ms=1000,
+    )
+    assert runtime.clear_live_image()
+
+    assert client.requests[0]["operation"] == OP_DISPLAY_IMAGE
+    assert client.requests[0]["args"] == {
+        "title": "Camera",
+        "ttlMs": 1000,
+        "dataUrl": "data:image/png;base64,abc",
+    }
+    assert client.requests[1]["operation"] == OP_DISPLAY_IMAGE
+    assert client.requests[1]["args"] == {"type": "clear"}

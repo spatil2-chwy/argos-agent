@@ -25,6 +25,11 @@ class PersonContext:
     face_center_x_px: float | None = None
     face_center_y_px: float | None = None
     center_distance: float = 0.0
+    attentive: bool = False
+    attention_confidence: float = 0.0
+    head_yaw_deg: float | None = None
+    head_pitch_deg: float | None = None
+    head_roll_deg: float | None = None
     directory_profile_lines: tuple[str, ...] = ()
     memory_profile_lines: tuple[str, ...] = ()
     preferred_language: str = ""
@@ -77,6 +82,16 @@ class FacePresenceSnapshot:
     has_mixed_scene: bool
     primary_face_kind: str
     primary_face_name: str
+    attention_status: str  # one of: none | inattentive | attentive
+    attention_count: int
+    attentive_recognized_count: int
+    attentive_unknown_count: int
+    attentive_recognized_names: list[str]
+    has_attentive_mixed_scene: bool
+    primary_attention_kind: str
+    primary_attention_name: str
+    primary_attention_person_id: str
+    attention_confidence: float
     nearest_recognized_name: str
     social_scene: SocialSceneContext
     updated_at: float
@@ -98,6 +113,16 @@ def empty_presence_snapshot(
         has_mixed_scene=False,
         primary_face_kind="none",
         primary_face_name="",
+        attention_status="none",
+        attention_count=0,
+        attentive_recognized_count=0,
+        attentive_unknown_count=0,
+        attentive_recognized_names=[],
+        has_attentive_mixed_scene=False,
+        primary_attention_kind="none",
+        primary_attention_name="",
+        primary_attention_person_id="",
+        attention_confidence=0.0,
         nearest_recognized_name="",
         social_scene=SocialSceneContext(
             has_unrecognized_people=False,

@@ -99,6 +99,30 @@ def _face(
     }
 
 
+def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    updates = []
+
+    class _Display:
+        is_configured = True
+
+        def show_live_image(self, **kwargs):
+            updates.append(kwargs)
+            return True
+
+    service._display_runtime = _Display()
+    service._live_image_title = "Camera"
+    service._live_image_ttl_ms = 1000
+
+    module.FaceRecognitionService._publish_live_image_frame(service, _good_image(8))
+
+    assert len(updates) == 1
+    assert updates[0]["title"] == "Camera"
+    assert updates[0]["ttl_ms"] == 1000
+    assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
 def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)

@@ -27,14 +27,6 @@ resources:
       - presence.face.publish
       - voice_command.publish
 
-  - id: arducam_001
-    kind: camera
-    hardware: arducam
-    provider: puffle-go2
-    capabilities:
-      - camera.rgb
-      - camera.intrinsics
-
   - id: realsense_001
     kind: camera
     hardware: realsense

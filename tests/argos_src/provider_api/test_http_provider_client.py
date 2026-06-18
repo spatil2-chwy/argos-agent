@@ -10,6 +10,7 @@ from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
     OP_DISPLAY_COMMAND,
     OP_DISPLAY_HEALTH,
+    OP_DISPLAY_IMAGE,
     OP_DISPLAY_STATE,
 )
 
@@ -82,6 +83,40 @@ def test_http_display_health_and_state_use_get_endpoints():
         "http://localhost:4173/health",
         "http://localhost:4173/state",
     ]
+
+
+def test_http_display_image_posts_to_image_endpoint():
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _Response({"ok": True})
+
+    client = HttpProviderClient(
+        base_url="http://localhost:4173",
+        resource_id="interaction_display",
+        urlopen_fn=fake_urlopen,
+    )
+
+    result = client.request(
+        resource_id="interaction_display",
+        operation=OP_DISPLAY_IMAGE,
+        args={
+            "dataUrl": "data:image/png;base64,abc",
+            "title": "Camera",
+            "ttlMs": 1000,
+        },
+    )
+
+    assert result == {"ok": True}
+    request, _timeout = calls[-1]
+    assert request.full_url == "http://localhost:4173/image"
+    assert request.get_method() == "POST"
+    assert json.loads(request.data.decode("utf-8")) == {
+        "dataUrl": "data:image/png;base64,abc",
+        "title": "Camera",
+        "ttlMs": 1000,
+    }
 
 
 def test_http_display_await_response_matches_request_id():

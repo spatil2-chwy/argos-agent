@@ -61,8 +61,8 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
             "name": "manifest-profile",
             "resources": {
                 "primary_robot": "base",
-                "face_camera": "head_realsense",
-                "scene_camera": "head_realsense",
+                "face_camera": "realsense_001",
+                "scene_camera": "realsense_001",
             },
             "tools": {
                 "enabled_tool_ids": [
@@ -84,7 +84,7 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
     assert profile.manifest_id == "puffle"
     assert profile.manifest is not None
     assert profile.resources.primary_robot == "base"
-    assert profile.resources.face_camera == "head_realsense"
+    assert profile.resources.face_camera == "realsense_001"
     assert profile.resources.interaction_display == "interaction_display"
     assert profile.display.enabled is True
     assert profile.robot_family == "unitree_go2"
@@ -110,8 +110,8 @@ def test_manifest_profile_rejects_missing_tool_capability():
                 "name": "manifest-missing-capability",
                 "manifest": "puffle",
                 "resources": {
-                    "primary_robot": "head_realsense",
-                    "scene_camera": "head_realsense",
+                    "primary_robot": "realsense_001",
+                    "scene_camera": "realsense_001",
                 },
                 "tools": {
                     "enabled_tool_ids": ["posture.stand"],
@@ -132,6 +132,10 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
     assert profile.robot.bridge.resource_id == "base"
     assert "motion.move_robot" in profile.tools.enabled_tool_ids
+    assert profile.face_recognition.attention_gate.enabled is True
+    assert profile.face_recognition.proactive_greeting.require_attention is True
+    assert profile.realtime.admission.open_on_face_presence is False
+    assert profile.realtime.admission.open_on_attention_presence is True
 
 
 def test_display_can_be_disabled_even_when_manifest_has_display_resource():
@@ -462,6 +466,54 @@ def test_face_owner_turn_profile_is_configurable():
     assert owner_turn.max_duration_sec == pytest.approx(1.4)
     assert owner_turn.slow_zone_deg == pytest.approx(7.0)
     assert owner_turn.min_angular_speed_rad_s == pytest.approx(0.2)
+
+
+def test_face_attention_gate_profile_is_configurable():
+    profile = _parse_profile(
+        {
+            "name": "attention-gate",
+            "face_recognition": {
+                "attention_gate": {
+                    "enabled": True,
+                    "min_face_area": 900,
+                    "max_abs_yaw_deg": 21.0,
+                    "max_abs_pitch_deg": 17.0,
+                    "max_abs_roll_deg": 31.0,
+                    "max_center_offset_ratio": 0.4,
+                    "min_confidence": 0.5,
+                    "smoothing_window_sec": 0.8,
+                    "min_attentive_observations": 3,
+                    "hold_sec": 0.6,
+                },
+                "proactive_greeting": {
+                    "require_attention": True,
+                },
+            },
+            "realtime": {
+                "admission": {
+                    "open_on_face_presence": False,
+                    "open_on_attention_presence": True,
+                },
+            },
+        },
+        profile_path=Path("/tmp/attention-gate.yaml"),
+        framework_config={},
+    )
+
+    attention = profile.face_recognition.attention_gate
+    assert attention.enabled is True
+    assert attention.min_face_area == 900
+    assert attention.max_abs_yaw_deg == pytest.approx(21.0)
+    assert attention.max_abs_pitch_deg == pytest.approx(17.0)
+    assert attention.max_abs_roll_deg == pytest.approx(31.0)
+    assert attention.max_center_offset_ratio == pytest.approx(0.4)
+    assert attention.min_confidence == pytest.approx(0.5)
+    assert attention.smoothing_window_sec == pytest.approx(0.8)
+    assert attention.min_attentive_observations == 3
+    assert attention.hold_sec == pytest.approx(0.6)
+    assert profile.face_recognition.proactive_greeting.require_attention is True
+    assert profile.realtime.admission.open_on_face_presence is False
+    assert profile.realtime.admission.open_on_attention_presence is True
 
 
 def test_face_recognition_rejects_provider_internal_camera_keys():

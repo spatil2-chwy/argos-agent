@@ -270,6 +270,7 @@ def create_agent(
     needs_navigation_state = runtime_flags["needs_navigation_state"]
     needs_face_runtime = runtime_flags["needs_face_runtime"]
     self_charge_available = runtime_flags["self_charge_available"]
+    display_runtime = _create_display_runtime(scenario_profile=scenario_profile)
 
     face_service = None
     speaker_service = None
@@ -296,10 +297,15 @@ def create_agent(
         )
 
     if needs_face_runtime:
+        from argos_src.face_recognition.attention_gate import (
+            AttentionGateSettings,
+            AttentionSmoothingSettings,
+        )
         from argos_src.face_recognition.depth_gate import DepthGateSettings
         from argos_src.face_recognition.face_recognition_service import (
             FaceRecognitionService,
         )
+        attention_gate = scenario_profile.face_recognition.attention_gate
 
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
@@ -312,6 +318,7 @@ def create_agent(
             camera_yaw_offset_rad=(
                 scenario_profile.face_recognition.owner_turn.camera_yaw_offset_rad
             ),
+            display_runtime=display_runtime,
             depth_gate_settings=(
                 DepthGateSettings(
                     sync_slop_sec=scenario_profile.face_recognition.depth_gate.sync_slop_sec,
@@ -325,6 +332,20 @@ def create_agent(
                 )
                 if scenario_profile.face_recognition.depth_gate.enabled
                 else None
+            ),
+            attention_gate_settings=AttentionGateSettings(
+                enabled=attention_gate.enabled,
+                min_face_area=attention_gate.min_face_area,
+                max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
+                max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
+                max_abs_roll_deg=attention_gate.max_abs_roll_deg,
+                max_center_offset_ratio=attention_gate.max_center_offset_ratio,
+                min_confidence=attention_gate.min_confidence,
+                smoothing=AttentionSmoothingSettings(
+                    window_sec=attention_gate.smoothing_window_sec,
+                    min_observations=attention_gate.min_attentive_observations,
+                    hold_sec=attention_gate.hold_sec,
+                ),
             ),
         )
         if scenario_profile.face_recognition.preference_extraction.enabled:
@@ -400,8 +421,6 @@ def create_agent(
             on_charging_ready=wiring.notify_charging_ready,
         )
         wiring.bind_battery_cache(battery_cache)
-
-    display_runtime = _create_display_runtime(scenario_profile=scenario_profile)
 
     tools = build_builtin_tools(
         robot_family=robot_family,
@@ -550,6 +569,7 @@ def create_agent(
             presence_callback=agent.update_face_presence_snapshot,
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,
+            require_attention=scenario_profile.face_recognition.proactive_greeting.require_attention,
             recognized_greet_cooldown_sec=scenario_profile.face_recognition.proactive_greeting.recognized_cooldown_sec,
             unknown_greet_cooldown_sec=scenario_profile.face_recognition.proactive_greeting.unknown_cooldown_sec,
         )

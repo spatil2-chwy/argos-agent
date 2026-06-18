@@ -59,6 +59,7 @@ The HTTP provider transport maps display operations to the local display server:
 |---|---|---|
 | `display.command` | `POST /display` | Send face, subtitle, clear/reset, message, countdown, Rive, or preview commands. |
 | `display.health` | `GET /health` | Check whether the display control server is reachable. |
+| `display.image` | `POST /image` | Show or clear the small live camera image panel. |
 | `display.state` | `GET /state` | Read current display state. |
 | `display.await_response` | `GET /response` polling | Wait for an interactive response matching `requestId`. |
 

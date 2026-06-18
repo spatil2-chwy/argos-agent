@@ -16,6 +16,7 @@ from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
     OP_DISPLAY_COMMAND,
     OP_DISPLAY_HEALTH,
+    OP_DISPLAY_IMAGE,
     OP_DISPLAY_STATE,
 )
 
@@ -75,6 +76,8 @@ class HttpProviderClient:
         rendered_timeout_ms = int(timeout_ms or payload.pop("timeout_ms", self.timeout_ms))
         if op == OP_DISPLAY_COMMAND:
             return self._post_json("/display", payload, timeout_ms=rendered_timeout_ms)
+        if op == OP_DISPLAY_IMAGE:
+            return self._post_json("/image", payload, timeout_ms=rendered_timeout_ms)
         if op == OP_DISPLAY_STATE:
             return self._get_json("/state", timeout_ms=rendered_timeout_ms)
         if op == OP_DISPLAY_HEALTH:
