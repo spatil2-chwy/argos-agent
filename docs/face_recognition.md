@@ -426,14 +426,16 @@ Attention gate settings:
 | `max_abs_pitch_deg: 20.0` | Max up/down head angle considered attentive. | Tune with camera mounting height. |
 | `max_abs_roll_deg: 35.0` | Max head tilt considered attentive. | Usually keep. |
 | `max_center_offset_ratio: 0.45` | Rejects faces far from the optical center for attention. | Raise if users stand off-center. |
-| `min_confidence: 0.55` | Combined pose/center score required before smoothing. | Lower cautiously. |
+| `min_confidence: 0.55` | Confidence floor reported at the configured pose/center acceptance boundary. | Usually keep. |
 | `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
 | `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
 | `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
 
-The first implementation uses OpenCV PnP with the existing MTCNN landmarks and
-camera intrinsics. It does not replace FaceNet and does not add a second face
-detector. The presence snapshot keeps the old face fields and adds:
+The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
+replace FaceNet and does not add a second face detector. If `sixdrepnet` is not
+installed or the model cannot initialize, attention returns
+`sixdrepnet_unavailable` and passive attention admission remains closed. The
+presence snapshot keeps the old face fields and adds:
 
 - `attention_status`
 - `attention_count`

@@ -5,13 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from argos_src.face_recognition.attention_gate.head_pose import estimate_head_pose
-from argos_src.face_recognition.attention_gate.models import FaceAttentionObservation
+from argos_src.face_recognition.attention_gate.models import (
+    FaceAttentionObservation,
+    HeadPoseObservation,
+)
 from argos_src.face_recognition.attention_gate.smoothing import (
     AttentionSmoother,
     AttentionSmoothingSettings,
 )
-from argos_src.provider_api.models import CameraIntrinsics
+from argos_src.face_recognition.attention_gate.sixdrepnet import SixDRepNetHeadPoseEstimator
 
 
 @dataclass(frozen=True)
@@ -45,16 +47,22 @@ class AttentionGateSettings:
 class FaceAttentionGate:
     """Evaluate whether a detected face appears to be attending to the robot."""
 
-    def __init__(self, settings: AttentionGateSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: AttentionGateSettings | None = None,
+        *,
+        head_pose_estimator: Any | None = None,
+    ) -> None:
         self.settings = settings or AttentionGateSettings()
         self._smoother = AttentionSmoother(self.settings.smoothing)
+        self._head_pose_estimator = head_pose_estimator or SixDRepNetHeadPoseEstimator()
 
     def evaluate(
         self,
+        image,
         face: dict[str, Any],
         *,
         image_shape: tuple[int, ...],
-        intrinsics: CameraIntrinsics | None,
         track_id: str,
         now: float,
     ) -> FaceAttentionObservation:
@@ -68,9 +76,9 @@ class FaceAttentionGate:
             )
 
         raw_attentive, raw_confidence, reason, pose = self._evaluate_raw(
+            image,
             face,
             image_shape=image_shape,
-            intrinsics=intrinsics,
         )
         attentive, confidence = self._smoother.update(
             track_id=track_id,
@@ -93,10 +101,10 @@ class FaceAttentionGate:
 
     def _evaluate_raw(
         self,
+        image,
         face: dict[str, Any],
         *,
         image_shape: tuple[int, ...],
-        intrinsics: CameraIntrinsics | None,
     ):
         bbox = face.get("bbox") or {}
         width = float(bbox.get("w", 0.0) or 0.0)
@@ -108,23 +116,28 @@ class FaceAttentionGate:
         center_score = self._center_score(face, image_shape=image_shape)
         if center_score is None:
             return False, 0.0, "invalid_bbox", _empty_pose()
-        if center_score <= 0.0:
+        if center_score < 0.0:
             return False, 0.0, "off_axis", _empty_pose()
 
-        pose = estimate_head_pose(face, intrinsics=intrinsics)
+        pose = self._head_pose_estimator.estimate(image, face)
         if not pose.success:
             return False, 0.0, pose.reason or "head_pose_unavailable", pose
 
         yaw_score = _axis_score(pose.yaw_deg, self.settings.max_abs_yaw_deg)
         pitch_score = _axis_score(pose.pitch_deg, self.settings.max_abs_pitch_deg)
         roll_score = _axis_score(pose.roll_deg, self.settings.max_abs_roll_deg)
-        confidence = min(yaw_score, pitch_score, roll_score, center_score)
-        attentive = confidence >= float(self.settings.min_confidence)
-        if not attentive:
-            reason = "head_pose_outside_threshold"
-        else:
-            reason = "attentive"
-        return attentive, confidence, reason, pose
+        if min(yaw_score, pitch_score, roll_score) < 0.0:
+            confidence = _confidence_from_margin(
+                min(yaw_score, pitch_score, roll_score, center_score),
+                min_confidence=float(self.settings.min_confidence),
+            )
+            return False, confidence, "head_pose_outside_threshold", pose
+
+        confidence = _confidence_from_margin(
+            min(yaw_score, pitch_score, roll_score, center_score),
+            min_confidence=float(self.settings.min_confidence),
+        )
+        return True, confidence, "attentive", pose
 
     def _center_score(
         self,
@@ -150,16 +163,20 @@ class FaceAttentionGate:
         max_ratio = float(self.settings.max_center_offset_ratio)
         if max_ratio <= 0.0:
             return 1.0 if offset_ratio <= 0.0 else 0.0
-        return max(0.0, 1.0 - (offset_ratio / max_ratio))
+        return 1.0 - (offset_ratio / max_ratio)
 
 
 def _axis_score(value: float | None, limit: float) -> float:
     if value is None:
-        return 0.0
-    return max(0.0, 1.0 - (abs(float(value)) / float(limit)))
+        return -1.0
+    return 1.0 - (abs(float(value)) / float(limit))
+
+
+def _confidence_from_margin(margin: float, *, min_confidence: float) -> float:
+    bounded_margin = max(0.0, min(1.0, float(margin)))
+    floor = max(0.0, min(1.0, float(min_confidence)))
+    return floor + ((1.0 - floor) * bounded_margin)
 
 
 def _empty_pose():
-    from argos_src.face_recognition.attention_gate.head_pose import HeadPoseObservation
-
     return HeadPoseObservation(success=False)

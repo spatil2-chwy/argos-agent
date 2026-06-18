@@ -6,6 +6,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class HeadPoseObservation:
+    """Yaw/pitch/roll estimate for one face."""
+
+    success: bool
+    yaw_deg: float | None = None
+    pitch_deg: float | None = None
+    roll_deg: float | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class FaceAttentionObservation:
     """Attention estimate for one visible face."""
 

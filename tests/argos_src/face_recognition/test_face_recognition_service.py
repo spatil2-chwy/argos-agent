@@ -7,6 +7,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+from argos_src.face_recognition.attention_gate.models import FaceAttentionObservation
 
 
 def _load_face_service_module(monkeypatch):
@@ -121,6 +122,70 @@ def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
     assert updates[0]["title"] == "Camera"
     assert updates[0]["ttl_ms"] == 1000
     assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
+def test_publish_live_image_frame_draws_attention_overlay(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    updates = []
+
+    class _Display:
+        is_configured = True
+
+        def show_live_image(self, **kwargs):
+            updates.append(kwargs)
+            return True
+
+    service._display_runtime = _Display()
+    service._live_image_title = "Camera"
+    service._live_image_ttl_ms = 1000
+    image = np.zeros((80, 80, 3), dtype=np.uint8)
+    face = {
+        "bbox": {"x": 20, "y": 20, "w": 30, "h": 30},
+        "landmarks": {"nose": (35.0, 35.0)},
+        "attention": FaceAttentionObservation(
+            attentive=True,
+            confidence=0.9,
+            yaw_deg=0.0,
+            pitch_deg=0.0,
+            roll_deg=0.0,
+        ),
+    }
+
+    module.FaceRecognitionService._publish_live_image_frame(
+        service,
+        image,
+        faces=[face],
+    )
+
+    assert len(updates) == 1
+    assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
+def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    details = module.FaceRecognitionService._format_attention_log_details(
+        [
+            {
+                "recognized_name": "Sakshee Patil",
+                "attention": FaceAttentionObservation(
+                    attentive=False,
+                    confidence=0.74,
+                    reason="smoothing",
+                    yaw_deg=8.25,
+                    pitch_deg=-3.5,
+                    roll_deg=1.0,
+                    raw_attentive=True,
+                    raw_confidence=0.74,
+                ),
+            }
+        ]
+    )
+
+    assert details == [
+        "Sakshee_Patil:att=no,raw=yes,reason=smoothing,"
+        "conf=0.74,raw_conf=0.74,yaw=8.2,pitch=-3.5,roll=1.0"
+    ]
 
 
 def test_build_scene_state_dedupes_interaction_updates(monkeypatch):

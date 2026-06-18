@@ -20,6 +20,7 @@ from argos_src.face_recognition.constants import (
 from argos_src.face_recognition.attention_gate import (
     AttentionGateSettings,
     FaceAttentionGate,
+    draw_attention_overlay,
 )
 from argos_src.face_recognition.depth_gate import DepthGateSettings, filter_detections_by_depth
 from argos_src.face_recognition.models import (
@@ -61,6 +62,15 @@ class FaceEnrollmentPolicy:
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()
+
+
+def _format_optional_float(value: Any) -> str:
+    if value is None:
+        return "na"
+    try:
+        return f"{float(value):.1f}"
+    except Exception:
+        return "na"
 
 
 @dataclass(frozen=True)
@@ -684,6 +694,7 @@ class FaceRecognitionService:
     def _build_scene_state(
         self,
         *,
+        image=None,
         detected_faces: list[dict[str, Any]],
         image_shape: tuple[int, ...],
         now: float,
@@ -713,12 +724,13 @@ class FaceRecognitionService:
             pid = match["person_id"] if match is not None else ""
             track_id = pid or self._unknown_attention_track_id(face, image_shape)
             attention = attention_gate.evaluate(
+                image,
                 face,
                 image_shape=image_shape,
-                intrinsics=intrinsics,
                 track_id=track_id,
                 now=now,
             )
+            face["attention"] = attention
             if match is None:
                 unknown_count += 1
                 candidates.append(
@@ -734,6 +746,7 @@ class FaceRecognitionService:
                 continue
 
             current_ids.add(pid)
+            face["recognized_name"] = match["name"]
             should_record_interaction = self._presence_cache.should_record_interaction(
                 pid,
                 now,
@@ -1343,11 +1356,23 @@ class FaceRecognitionService:
             logger.exception("Failed to encode live camera frame for display")
             return ""
 
-    def _publish_live_image_frame(self, image: Any) -> None:
+    def _publish_live_image_frame(
+        self,
+        image: Any,
+        *,
+        faces: list[dict[str, Any]] | None = None,
+    ) -> None:
         display = getattr(self, "_display_runtime", None)
         if display is None or not bool(getattr(display, "is_configured", False)):
             return
-        data_url = self._live_frame_data_url(image)
+        display_image = image
+        if faces:
+            try:
+                display_image = draw_attention_overlay(image, faces)
+            except Exception:
+                logger.debug("Failed to draw attention overlay", exc_info=True)
+                display_image = image
+        data_url = self._live_frame_data_url(display_image)
         if not data_url:
             return
         show_live_image = getattr(display, "show_live_image", None)
@@ -1459,10 +1484,10 @@ class FaceRecognitionService:
             camera_resource_id=camera_resource_id,
             captured_at=time.time(),
         )
-        self._publish_live_image_frame(image)
         prepared = self._prepare_faces_for_recognition_result(image, depth_m)
         detected_faces = prepared.faces
         if not detected_faces:
+            self._publish_live_image_frame(image)
             if prepared.reason:
                 self._log_loop_heartbeat(
                     f"prepare_{prepared.reason}",
@@ -1485,10 +1510,12 @@ class FaceRecognitionService:
 
         self._presence_cache.mark_faces_seen(now)
         persons, unknown_count, current_ids, analysis = self._build_scene_state(
+            image=image,
             detected_faces=detected_faces,
             image_shape=image.shape,
             now=now,
         )
+        self._publish_live_image_frame(image, faces=detected_faces)
 
         self._presence_cache.expire_inactive(current_ids, now)
         self._presence_cache.update(
@@ -1503,9 +1530,11 @@ class FaceRecognitionService:
         )
         attentive_names = [p.name for p in persons if bool(p.attentive)]
         primary_attention = analysis.primary_attention_target
+        attention_details = self._format_attention_log_details(detected_faces)
         logger.debug(
             "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
-            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s",
+            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
+            "attention_details=%s",
             len(detected_faces),
             [p.name for p in persons],
             unknown_count,
@@ -1517,12 +1546,13 @@ class FaceRecognitionService:
                 if primary_attention and primary_attention.person_id
                 else (primary_attention.kind if primary_attention else None)
             ),
+            attention_details,
         )
         self._log_loop_heartbeat(
             "attention_summary",
             "[FaceLoop] summary reason=%s detected=%s rejected=%s "
             "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-            "primary_face=%s primary_attention=%s",
+            "primary_face=%s primary_attention=%s attention_details=%s",
             "ok",
             len(detected_faces),
             prepared.rejected_count,
@@ -1536,7 +1566,32 @@ class FaceRecognitionService:
                 if primary_attention and primary_attention.person_id
                 else (primary_attention.kind if primary_attention else None)
             ),
+            attention_details,
         )
+
+    @staticmethod
+    def _format_attention_log_details(faces: list[dict[str, Any]]) -> list[str]:
+        details: list[str] = []
+        for index, face in enumerate(faces):
+            attention = face.get("attention")
+            if attention is None:
+                details.append(f"face{index}:missing")
+                continue
+            label = str(face.get("recognized_name") or f"face{index}").replace(" ", "_")
+            reason = str(getattr(attention, "reason", "") or "unknown")
+            attentive = "yes" if bool(getattr(attention, "attentive", False)) else "no"
+            raw = "yes" if bool(getattr(attention, "raw_attentive", False)) else "no"
+            confidence = float(getattr(attention, "confidence", 0.0) or 0.0)
+            raw_confidence = float(getattr(attention, "raw_confidence", 0.0) or 0.0)
+            yaw = _format_optional_float(getattr(attention, "yaw_deg", None))
+            pitch = _format_optional_float(getattr(attention, "pitch_deg", None))
+            roll = _format_optional_float(getattr(attention, "roll_deg", None))
+            details.append(
+                f"{label}:att={attentive},raw={raw},reason={reason},"
+                f"conf={confidence:.2f},raw_conf={raw_confidence:.2f},"
+                f"yaw={yaw},pitch={pitch},roll={roll}"
+            )
+        return details
 
     def _log_loop_heartbeat(
         self,
