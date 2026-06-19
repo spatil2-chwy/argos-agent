@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.labs.openai_say_lab import (
     build_speech_payload,
     default_output_path,
+    resolve_output_device,
     resolve_text,
 )
 
@@ -55,3 +56,9 @@ def test_default_output_path_uses_lab_var_directory() -> None:
 
     assert path.name == "say_20260619_134530.wav"
     assert path.parts[-4:] == ("var", "labs", "openai_say", path.name)
+
+
+def test_resolve_output_device_converts_numeric_ids() -> None:
+    assert resolve_output_device("43") == 43
+    assert resolve_output_device("pipewire") == "pipewire"
+    assert resolve_output_device(" ") is None

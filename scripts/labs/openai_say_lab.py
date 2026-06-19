@@ -22,6 +22,7 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "cedar"
 DEFAULT_FORMAT = "wav"
 DEFAULT_INSTRUCTIONS = "Speak naturally and clearly."
+DEFAULT_OUTPUT_DEVICE = "pipewire"
 SUPPORTED_FORMATS = ("wav", "mp3", "flac", "opus", "aac", "pcm")
 
 
@@ -77,8 +78,11 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-device",
-        default=None,
-        help="Optional sounddevice output device name or index for --play.",
+        default=DEFAULT_OUTPUT_DEVICE,
+        help=(
+            "Optional sounddevice output device name or index for --play "
+            f"(default: {DEFAULT_OUTPUT_DEVICE})."
+        ),
     )
     parser.add_argument(
         "--list-devices",
@@ -163,6 +167,18 @@ def write_audio_file(path: Path, audio: bytes) -> None:
     path.write_bytes(audio)
 
 
+def resolve_output_device(value: str | None) -> str | int | None:
+    if value is None:
+        return None
+
+    rendered = str(value).strip()
+    if not rendered:
+        return None
+    if rendered.isdigit():
+        return int(rendered)
+    return rendered
+
+
 def list_audio_devices() -> None:
     try:
         import sounddevice as sd
@@ -172,7 +188,7 @@ def list_audio_devices() -> None:
     print(sd.query_devices())
 
 
-def play_wav(path: Path, output_device: str | None = None) -> None:
+def play_wav(path: Path, output_device: str | int | None = None) -> None:
     try:
         import sounddevice as sd
     except Exception as exc:  # pragma: no cover - depends on local audio stack.
@@ -264,7 +280,10 @@ def main() -> int:
 
     if args.play:
         try:
-            play_wav(output_path, output_device=args.output_device)
+            play_wav(
+                output_path,
+                output_device=resolve_output_device(args.output_device),
+            )
         except (RuntimeError, ValueError) as exc:
             print(f"Could not play audio: {exc}", file=sys.stderr)
             return 1

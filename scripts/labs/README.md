@@ -97,6 +97,7 @@ poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --lan
 One-off OpenAI speech without starting the realtime agent:
 
 ```bash
+# Playback defaults to the local pipewire sounddevice output.
 poetry run python -m scripts.labs.openai_say_lab "Hello from Puffle." --play
 
 # Save an mp3 instead of playing locally.
