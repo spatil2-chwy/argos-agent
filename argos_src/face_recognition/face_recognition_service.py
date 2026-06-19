@@ -36,6 +36,7 @@ from argos_src.face_recognition.store import FaceRecognitionStore
 from argos_src.identity.prompting import format_identity_profile_lines
 from argos_src.memory.encounters import build_encounter_metadata
 from argos_src.media.image_encoding import preprocess_image
+from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
 from argos_src.provider_api.models import CameraIntrinsics
 
@@ -174,6 +175,8 @@ class FaceRecognitionService:
         self._latest_loop_frame_resource_id: str | None = None
         self._latest_loop_frame_at = 0.0
         self._loop_log_heartbeat_at: dict[str, float] = {}
+        self._loop_metric_heartbeat_at: dict[str, float] = {}
+        self._loop_latency = LatencyLogger("face_loop")
 
         logger.info("Face Recognition Service initialized")
         logger.info(f"Device: {self.device} | DB: {self.db.collection.count()} people enrolled")
@@ -1456,10 +1459,65 @@ class FaceRecognitionService:
     # Background loop (continuous recognition, zero latency at response time)
     # ------------------------------------------------------------------
 
-    def _loop_tick(self, camera_resource_id: str) -> None:
-        """Run one recognition cycle; update cache and session state."""
+    def _emit_loop_timing(
+        self,
+        *,
+        tick_started: float,
+        camera_resource_id: str,
+        interval_sec: float | None,
+        outcome: str,
+        capture_s: float | None = None,
+        prepare_s: float | None = None,
+        scene_s: float | None = None,
+        publish_s: float | None = None,
+        detected_count: int | None = None,
+        recognized_count: int | None = None,
+        unknown_count: int | None = None,
+        rejected_count: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        latency = getattr(self, "_loop_latency", None)
+        if latency is None:
+            return
+        heartbeat_at = getattr(self, "_loop_metric_heartbeat_at", None)
+        if heartbeat_at is None:
+            heartbeat_at = {}
+            self._loop_metric_heartbeat_at = heartbeat_at
         now = time.time()
+        key = f"timing:{outcome}"
+        last = float(heartbeat_at.get(key, 0.0))
+        if last and (now - last) < LOOP_HEARTBEAT_LOG_SEC:
+            return
+        heartbeat_at[key] = now
+        latency.timing(
+            "tick",
+            perf_now() - tick_started,
+            camera_resource=camera_resource_id,
+            interval_s=interval_sec,
+            outcome=outcome,
+            capture_s=capture_s,
+            prepare_s=prepare_s,
+            scene_s=scene_s,
+            publish_s=publish_s,
+            detected=detected_count,
+            recognized=recognized_count,
+            unknown=unknown_count,
+            rejected=rejected_count,
+            reason=reason,
+        )
+
+    def _loop_tick(
+        self,
+        camera_resource_id: str,
+        *,
+        interval_sec: float | None = None,
+    ) -> None:
+        """Run one recognition cycle; update cache and session state."""
+        tick_started = perf_now()
+        now = time.time()
+        capture_started = perf_now()
         image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
+        capture_s = perf_now() - capture_started
         if image is None:
             if self._depth_gate_settings is None:
                 self._log_loop_heartbeat(
@@ -1477,6 +1535,13 @@ class FaceRecognitionService:
                 )
             if self._presence_cache.clear_if_expired(now):
                 logger.info("[FaceLoop] no image, cache expired and cleared")
+            self._emit_loop_timing(
+                tick_started=tick_started,
+                camera_resource_id=camera_resource_id,
+                interval_sec=interval_sec,
+                outcome="no_image",
+                capture_s=capture_s,
+            )
             return
 
         self._cache_latest_loop_frame(
@@ -1484,10 +1549,14 @@ class FaceRecognitionService:
             camera_resource_id=camera_resource_id,
             captured_at=time.time(),
         )
+        prepare_started = perf_now()
         prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
         if not detected_faces:
+            publish_started = perf_now()
             self._publish_live_image_frame(image)
+            publish_s = perf_now() - publish_started
             if prepared.reason:
                 self._log_loop_heartbeat(
                     f"prepare_{prepared.reason}",
@@ -1506,16 +1575,34 @@ class FaceRecognitionService:
                 )
             if self._presence_cache.clear_if_expired(now):
                 logger.info("[FaceLoop] no faces, cache expired and cleared")
+            self._emit_loop_timing(
+                tick_started=tick_started,
+                camera_resource_id=camera_resource_id,
+                interval_sec=interval_sec,
+                outcome="no_faces",
+                capture_s=capture_s,
+                prepare_s=prepare_s,
+                publish_s=publish_s,
+                detected_count=prepared.detected_count,
+                recognized_count=0,
+                unknown_count=0,
+                rejected_count=prepared.rejected_count,
+                reason=prepared.reason,
+            )
             return
 
         self._presence_cache.mark_faces_seen(now)
+        scene_started = perf_now()
         persons, unknown_count, current_ids, analysis = self._build_scene_state(
             image=image,
             detected_faces=detected_faces,
             image_shape=image.shape,
             now=now,
         )
+        scene_s = perf_now() - scene_started
+        publish_started = perf_now()
         self._publish_live_image_frame(image, faces=detected_faces)
+        publish_s = perf_now() - publish_started
 
         self._presence_cache.expire_inactive(current_ids, now)
         self._presence_cache.update(
@@ -1547,6 +1634,21 @@ class FaceRecognitionService:
                 else (primary_attention.kind if primary_attention else None)
             ),
             attention_details,
+        )
+        self._emit_loop_timing(
+            tick_started=tick_started,
+            camera_resource_id=camera_resource_id,
+            interval_sec=interval_sec,
+            outcome="ok",
+            capture_s=capture_s,
+            prepare_s=prepare_s,
+            scene_s=scene_s,
+            publish_s=publish_s,
+            detected_count=len(detected_faces),
+            recognized_count=len(persons),
+            unknown_count=unknown_count,
+            rejected_count=prepared.rejected_count,
+            reason="ok",
         )
         self._log_loop_heartbeat(
             "attention_summary",
@@ -1631,7 +1733,7 @@ class FaceRecognitionService:
         def run() -> None:
             while not self._loop_stop.wait(interval):
                 try:
-                    self._loop_tick(resource_id)
+                    self._loop_tick(resource_id, interval_sec=interval)
                 except Exception as e:
                     if is_provider_error(e):
                         self._log_loop_heartbeat(

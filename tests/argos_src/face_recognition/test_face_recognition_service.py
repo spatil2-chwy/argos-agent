@@ -188,6 +188,59 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
     ]
 
 
+def test_loop_tick_emits_timing_metric(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    image = _good_image()
+    events = []
+
+    class _FakeLatency:
+        def timing(self, metric, duration_s, **fields):
+            events.append({"metric": metric, "duration_s": duration_s, **fields})
+
+    service._loop_latency = _FakeLatency()
+    service._loop_metric_heartbeat_at = {}
+    service._depth_gate_settings = None
+    service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
+    service._latest_loop_frame_lock = module.threading.Lock()
+    service._latest_loop_frame = None
+    service._latest_loop_frame_resource_id = None
+    service._latest_loop_frame_at = 0.0
+    service._display_runtime = None
+    service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
+    service._prepare_faces_for_recognition_result = (
+        lambda *_args, **_kwargs: module.FacePreparationResult(
+            faces=[],
+            reason="no_detection",
+            detected_count=0,
+        )
+    )
+    service._log_loop_heartbeat = lambda *_args, **_kwargs: None
+
+    module.FaceRecognitionService._loop_tick(
+        service,
+        "head_realsense",
+        interval_sec=0.3,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["metric"] == "tick"
+    assert event["duration_s"] >= 0.0
+    assert event["camera_resource"] == "head_realsense"
+    assert event["interval_s"] == 0.3
+    assert event["outcome"] == "no_faces"
+    assert event["reason"] == "no_detection"
+    assert event["detected"] == 0
+    assert event["recognized"] == 0
+    assert event["unknown"] == 0
+    assert event["capture_s"] >= 0.0
+    assert event["prepare_s"] >= 0.0
+    assert event["publish_s"] >= 0.0
+    assert service._latest_loop_frame_resource_id == "head_realsense"
+    assert service._latest_loop_frame is not None
+
+
 def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
