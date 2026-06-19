@@ -5,6 +5,7 @@ import json
 import pytest
 
 from argos_src.provider_api.errors import ProviderTimeout
+from argos_src.provider_api.factory import create_provider_client
 from argos_src.provider_api.transports.http import HttpProviderClient
 from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
@@ -13,6 +14,11 @@ from argos_src.provider_api.wire import (
     OP_DISPLAY_IMAGE,
     OP_DISPLAY_STATE,
 )
+
+
+KEY_PREFIX = "argos/providers/puffle-go2-display"
+RESOURCE_ID = "screen_001"
+RESOURCE_PREFIX = f"{KEY_PREFIX}/resources/{RESOURCE_ID}"
 
 
 class _Response:
@@ -38,19 +44,20 @@ def test_http_display_command_posts_to_display():
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
-        resource_id="interaction_display",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
         urlopen_fn=fake_urlopen,
     )
 
     result = client.request(
-        resource_id="interaction_display",
+        resource_id=RESOURCE_ID,
         operation=OP_DISPLAY_COMMAND,
         args={"type": "face", "face": "happy"},
     )
 
     assert result == {"ok": True}
     request, _timeout = calls[-1]
-    assert request.full_url == "http://localhost:4173/display"
+    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/display"
     assert request.get_method() == "POST"
     assert json.loads(request.data.decode("utf-8")) == {
         "type": "face",
@@ -67,21 +74,22 @@ def test_http_display_health_and_state_use_get_endpoints():
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
-        resource_id="interaction_display",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
         urlopen_fn=fake_urlopen,
     )
 
     assert client.request(
-        resource_id="interaction_display",
+        resource_id=RESOURCE_ID,
         operation=OP_DISPLAY_HEALTH,
     )["path"].endswith("/health")
     assert client.request(
-        resource_id="interaction_display",
+        resource_id=RESOURCE_ID,
         operation=OP_DISPLAY_STATE,
     )["path"].endswith("/state")
     assert paths == [
-        "http://localhost:4173/health",
-        "http://localhost:4173/state",
+        f"http://localhost:4173/{RESOURCE_PREFIX}/health",
+        f"http://localhost:4173/{RESOURCE_PREFIX}/state",
     ]
 
 
@@ -94,12 +102,13 @@ def test_http_display_image_posts_to_image_endpoint():
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
-        resource_id="interaction_display",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
         urlopen_fn=fake_urlopen,
     )
 
     result = client.request(
-        resource_id="interaction_display",
+        resource_id=RESOURCE_ID,
         operation=OP_DISPLAY_IMAGE,
         args={
             "dataUrl": "data:image/png;base64,abc",
@@ -110,7 +119,7 @@ def test_http_display_image_posts_to_image_endpoint():
 
     assert result == {"ok": True}
     request, _timeout = calls[-1]
-    assert request.full_url == "http://localhost:4173/image"
+    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/image"
     assert request.get_method() == "POST"
     assert json.loads(request.data.decode("utf-8")) == {
         "dataUrl": "data:image/png;base64,abc",
@@ -120,22 +129,25 @@ def test_http_display_image_posts_to_image_endpoint():
 
 
 def test_http_display_await_response_matches_request_id():
+    paths = []
     responses = [
         {"requestId": "other", "accepted": False},
         {"requestId": "capture-1", "accepted": True, "action": "accept"},
     ]
 
     def fake_urlopen(request, timeout):
+        paths.append(request.full_url)
         return _Response(responses.pop(0))
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
-        resource_id="interaction_display",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
         urlopen_fn=fake_urlopen,
     )
 
     result = client.request(
-        resource_id="interaction_display",
+        resource_id=RESOURCE_ID,
         operation=OP_DISPLAY_AWAIT_RESPONSE,
         args={"requestId": "capture-1", "poll_sec": 0.001},
         timeout_ms=200,
@@ -143,6 +155,10 @@ def test_http_display_await_response_matches_request_id():
 
     assert result["accepted"] is True
     assert result["action"] == "accept"
+    assert paths == [
+        f"http://localhost:4173/{RESOURCE_PREFIX}/response",
+        f"http://localhost:4173/{RESOURCE_PREFIX}/response",
+    ]
 
 
 def test_http_display_await_response_times_out():
@@ -151,14 +167,29 @@ def test_http_display_await_response_times_out():
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
-        resource_id="interaction_display",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
         urlopen_fn=fake_urlopen,
     )
 
     with pytest.raises(ProviderTimeout):
         client.request(
-            resource_id="interaction_display",
+            resource_id=RESOURCE_ID,
             operation=OP_DISPLAY_AWAIT_RESPONSE,
             args={"requestId": "capture-1", "poll_sec": 0.001},
             timeout_ms=1,
         )
+
+
+def test_factory_passes_http_provider_routing_options():
+    client = create_provider_client(
+        transport="http",
+        key_prefix=KEY_PREFIX,
+        connect_endpoints=("http://localhost:4173",),
+        resource_id=RESOURCE_ID,
+    )
+
+    assert isinstance(client, HttpProviderClient)
+    assert client.base_url == "http://localhost:4173"
+    assert client.key_prefix == KEY_PREFIX
+    assert client._resource_id == RESOURCE_ID

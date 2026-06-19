@@ -84,7 +84,7 @@ python3 run_profile.py --profile static_interaction
 
 Optional display: for Puffle's screen, start the local browser display server at
 `http://localhost:4173` before enrollment review or visual state testing. Argos
-talks to it through the `interaction_display` resource. Set
+talks to the selected `resources.interaction_display` screen resource. Set
 `display.enabled: false` in the profile when running without the screen.
 
 If startup succeeds, you should see the runtime print:

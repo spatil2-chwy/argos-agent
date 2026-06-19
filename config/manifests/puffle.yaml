@@ -36,7 +36,7 @@ resources:
       - camera.rgbd
       - camera.intrinsics
 
-  - id: interaction_display
+  - id: screen_001
     kind: display
     hardware: puffle_screen
     provider: puffle-go2-display

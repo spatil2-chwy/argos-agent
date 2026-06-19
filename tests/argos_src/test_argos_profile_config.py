@@ -85,7 +85,7 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
     assert profile.manifest is not None
     assert profile.resources.primary_robot == "base"
     assert profile.resources.face_camera == "realsense_001"
-    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.resources.interaction_display == "screen_001"
     assert profile.display.enabled is True
     assert profile.robot_family == "unitree_go2"
     assert profile.robot.id == "puffle"
@@ -127,7 +127,7 @@ def test_static_interaction_profile_uses_manifest_shape():
 
     assert profile.manifest_id == "puffle"
     assert profile.resources.primary_robot == "base"
-    assert profile.resources.interaction_display == "interaction_display"
+    assert profile.resources.interaction_display == "screen_001"
     assert profile.display.enabled is True
     assert profile.robot.bridge.key_prefix == "argos/providers/puffle-go2"
     assert profile.robot.bridge.resource_id == "base"

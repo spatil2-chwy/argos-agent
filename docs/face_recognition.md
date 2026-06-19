@@ -77,7 +77,7 @@ unknown visible person
     -> FaceRecognitionService.enroll_visible_person()
     -> short camera burst
     -> quality and consistency gates
-    -> if display.enabled is true and interaction_display is configured, show face-capture preview
+    -> if display.enabled is true and a screen resource is selected, show face-capture preview
     -> wait for Accept / Reject
     -> save averaged face embedding under person_id
     -> seed live presence cache
@@ -162,8 +162,8 @@ from the selected reference face bbox, so the review screen shows the face regio
 used for embedding with a little surrounding context. The candidate is not saved
 yet.
 
-When `display.enabled` is true and the `interaction_display` resource is
-configured, Argos encodes the preview image as a `data:image/png;base64,...` URL
+When `display.enabled` is true and `resources.interaction_display` selects a
+screen resource, Argos encodes the preview image as a `data:image/png;base64,...` URL
 and sends a blocking `face_capture_preview` command to the Puffle display. Only
 an Accept response commits the candidate to the face store. Reject, timeout, or
 display-unavailable responses return a failed tool result and do not save

@@ -6,7 +6,7 @@ resources:
   primary_robot: base
   face_camera: realsense_001
   scene_camera: realsense_001
-  interaction_display: interaction_display
+  interaction_display: screen_001
 
 display:
   enabled: true

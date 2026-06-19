@@ -27,10 +27,16 @@ def create_provider_client(
     if selected == "fake":
         return FakeProviderClient()
     if selected == "http":
+        if not key_prefix or not resource_id:
+            raise ValueError(
+                "HTTP provider transport requires manifest-derived key_prefix "
+                "and resource_id."
+            )
         from argos_src.provider_api.transports.http import HttpProviderClient
 
         return HttpProviderClient(
             connect_endpoints=connect_endpoints,
+            key_prefix=key_prefix,
             resource_id=resource_id,
             manifest=manifest,
         )
