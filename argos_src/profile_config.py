@@ -188,6 +188,7 @@ class SlackMemoryProfile:
 @dataclass(frozen=True)
 class RealtimeAdmissionProfile:
     block_during_speaking: bool
+    block_during_engaged: bool
     open_on_face_presence: bool
     open_on_attention_presence: bool
     open_on_interaction_states: tuple[str, ...]
@@ -430,6 +431,7 @@ class ScenarioProfile:
             max_output_tokens=None,
             admission=RealtimeAdmissionProfile(
                 block_during_speaking=True,
+                block_during_engaged=False,
                 open_on_face_presence=True,
                 open_on_attention_presence=False,
                 open_on_interaction_states=("alert", "cooldown"),
@@ -1548,6 +1550,11 @@ def _parse_realtime(
             admission_data,
             "block_during_speaking",
             default=True,
+        ),
+        block_during_engaged=_pop_bool(
+            admission_data,
+            "block_during_engaged",
+            default=False,
         ),
         open_on_face_presence=_pop_bool(
             admission_data,

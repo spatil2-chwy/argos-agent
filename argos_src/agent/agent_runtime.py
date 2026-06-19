@@ -1800,6 +1800,7 @@ class RealtimeRobotAgent(
                 turn.req_id,
                 stream_id=turn.response_id,
             )
+            self._set_display_mode_async("idle")
         turn.response_finished.set()
         turn.playback_finished.set()
 

@@ -143,6 +143,8 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
+    assert profile.realtime.admission.block_during_engaged is True
+    assert profile.realtime.admission.open_on_interaction_states == ("alert",)
 
 
 def test_display_can_be_disabled_even_when_manifest_has_display_resource():

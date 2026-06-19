@@ -58,7 +58,7 @@ def test_display_runtime_deduplicates_faces_and_subtitles():
     assert len(commands) == 2
 
 
-def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
+def test_display_runtime_state_modes_send_expected_commands():
     client = _Client()
     runtime = DisplayRuntime(client=client, resource_id="interaction_display")
 
@@ -66,6 +66,7 @@ def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
     runtime.show_alert()
     runtime.show_recording()
     runtime.show_thinking()
+    runtime.show_speaking()
 
     commands = [
         request["args"]
@@ -73,8 +74,40 @@ def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
         if request["operation"] == OP_DISPLAY_COMMAND
     ]
     assert commands == [
+        {"type": "clear"},
         {"type": "face", "face": "happy"},
+        {"type": "clear"},
         {"type": "face", "face": "think"},
+        {"type": "clear"},
+        {"type": "face", "face": "think"},
+        {"type": "subtitle", "text": "Recording...", "durationMs": 5000},
+        {"type": "clear"},
+        {"type": "message", "text": "Thinking..."},
+        {"type": "clear"},
+        {"type": "face", "face": "excited"},
+    ]
+
+
+def test_display_runtime_clear_transient_view_resets_face_cache():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    runtime.show_idle()
+    runtime.show_thinking()
+    runtime.show_idle()
+
+    commands = [
+        request["args"]
+        for request in client.requests
+        if request["operation"] == OP_DISPLAY_COMMAND
+    ]
+    assert commands == [
+        {"type": "clear"},
+        {"type": "face", "face": "happy"},
+        {"type": "clear"},
+        {"type": "message", "text": "Thinking..."},
+        {"type": "clear"},
+        {"type": "face", "face": "happy"},
     ]
 
 

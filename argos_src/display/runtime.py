@@ -147,20 +147,31 @@ class DisplayRuntime:
         self._last_subtitle = ""
         return self.command({"type": "reset"})
 
+    def _clear_transient_view(self) -> None:
+        self._last_face = ""
+        self._last_subtitle = ""
+        self.command({"type": "clear"})
+
     def show_idle(self) -> None:
+        self._clear_transient_view()
         self.set_face("happy")
 
     def show_alert(self) -> None:
+        self._clear_transient_view()
         self.set_face("think")
 
     def show_recording(self) -> None:
+        self._clear_transient_view()
         self.set_face("think")
+        self.show_subtitle("Recording...")
 
     def show_thinking(self) -> None:
-        self.set_face("think")
+        self._clear_transient_view()
+        self.show_message("Thinking...")
 
     def show_speaking(self) -> None:
-        self.set_face("happy")
+        self._clear_transient_view()
+        self.set_face("excited")
 
     def command(
         self,

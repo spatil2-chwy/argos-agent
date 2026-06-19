@@ -245,6 +245,13 @@ class RealtimeAgentAudioMixin:
                     wake_detected=bool(wake_detected),
                     wake_window_sec=self.realtime_profile.wake_window_sec,
                     block_during_speaking=self.realtime_profile.admission.block_during_speaking,
+                    block_during_engaged=bool(
+                        getattr(
+                            self.realtime_profile.admission,
+                            "block_during_engaged",
+                            False,
+                        )
+                    ),
                     open_on_face_presence=self.realtime_profile.admission.open_on_face_presence,
                     open_on_attention_presence=bool(
                         getattr(
@@ -367,6 +374,9 @@ class RealtimeAgentAudioMixin:
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
         self._set_recording_gesture_async(False)
+        display_mode = getattr(self, "_set_display_mode_async", None)
+        if callable(display_mode):
+            display_mode("thinking")
         speech_end_perf_s = perf_now()
         speech_end_unix_s = now_s
         self._latency.emit(event="speech_end", speech_end_unix_s=speech_end_unix_s)

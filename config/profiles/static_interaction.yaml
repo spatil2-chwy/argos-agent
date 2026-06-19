@@ -160,11 +160,11 @@ realtime:
   input_block_size: 2400
   admission:
     block_during_speaking: true
+    block_during_engaged: true
     open_on_face_presence: false
     open_on_attention_presence: true
     open_on_interaction_states:
       - alert
-      - cooldown
     open_on_wake_window: true
 
 engagement:

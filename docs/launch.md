@@ -107,11 +107,11 @@ python3 run_profile.py --profile static_interaction
 1. Start the robot.
 2. Start `run_profile.py`.
 3. Stand in front of the camera.
-4. Say the wake word or speak while face presence is active.
+4. Say the wake word or speak while attention-gated face admission is active.
 5. Confirm the robot speaks back through the speaker.
 6. Confirm face presence is updating in the Argos logs/provider events.
 7. Confirm the logs show `recording_started`, `response_create`, and `playback_completed` for a normal turn.
-8. If using the Puffle screen, confirm idle shows the happy face and assistant speech streams subtitles.
+8. If using the Puffle screen, confirm idle shows the happy face, recording shows `Recording...`, thinking shows `Thinking...`, and assistant speech streams subtitles.
 
 ## Behavioral Baseline
 

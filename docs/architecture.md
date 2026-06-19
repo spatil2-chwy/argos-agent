@@ -144,8 +144,8 @@ audio input -> audio output
 Used for:
 
 - wake-word turns from `idle`
-- passive follow-up turns during `alert` / `cooldown`
-- face-presence turns when someone is in front of the robot
+- passive follow-up turns during `alert`
+- attention-gated turns when someone is actively facing the robot
 
 ## Prompting Model
 

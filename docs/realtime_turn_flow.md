@@ -167,7 +167,7 @@ VAD and `silence_grace_period` decide when the active audio turn ends.
 When admission is open and voice is detected:
 
 - `_start_recording_locked()` marks recording active
-- the optional interaction display moves to the `think` face
+- the optional interaction display moves to the `think` face with `Recording...`
 - the runtime sends `input_audio_buffer.clear`
 - raw PCM chunks start flowing into `_audio_send_queue`
 - a small pre-roll window is prepended so the first syllable is less likely to be clipped
@@ -183,6 +183,7 @@ and out of the `speech_end -> commit` path.
 When voice has been absent for `silence_grace_period`:
 
 - `_finalize_recording_locked()` ends the local capture
+- the optional interaction display shows the centered `Thinking...` message
 - `_commit_audio_turn()` waits for `_audio_send_queue` to drain
 - the runtime sends `input_audio_buffer.commit`
 - a new `QueuedTurn(kind="audio")` is created
@@ -258,10 +259,11 @@ On the first `response.output_audio.delta`:
 - `first_audio_latency_s` is logged
 - engagement gets `on_agent_output_started(...)`
 - engagement also gets `on_playback_event("playback_started", ...)`
-- the optional interaction display moves to the `happy` face
+- the optional interaction display moves to the `excited` face
 
-Assistant transcript deltas are the only normal-turn subtitles sent to the
-display. Mic admission, recording, and thinking states change the face only.
+Assistant transcript deltas stream as response subtitles. Recording uses a fixed
+status subtitle, while the post-recording thinking phase uses a centered message
+instead of a face.
 
 ### Step 10: Completion waits for both response and playback
 
@@ -326,7 +328,7 @@ The engagement states are:
 | `alert` | A proactive interaction has claimed attention but no human turn is committed yet. | Face event while idle. |
 | `engaged` | A human turn has been committed and the robot is waiting to answer. | `on_human_input(...)`. |
 | `speaking` | The robot is actively outputting or awaiting the terminal playback event for a spoken answer. | First audio delta or playback start. |
-| `cooldown` | The reply just ended; passive follow-up listening is still open for a short period. | Playback completed/stopped or text-only no-reply completion. |
+| `cooldown` | The reply just ended; patrol and proactive greetings stay suppressed briefly while the display returns to idle. | Playback completed/stopped or text-only no-reply completion. |
 
 ### State Transitions in Practice
 

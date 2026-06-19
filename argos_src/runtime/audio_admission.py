@@ -72,6 +72,7 @@ def resolve_record_admission(
     wake_window_sec: float,
     attention_present: bool = False,
     block_during_speaking: bool = True,
+    block_during_engaged: bool = False,
     open_on_face_presence: bool = True,
     open_on_attention_presence: bool = False,
     open_on_interaction_states: tuple[str, ...] = ("alert", "cooldown"),
@@ -82,6 +83,8 @@ def resolve_record_admission(
 ) -> Tuple[bool, str, float]:
     """Resolve whether speech should start recording for this sample."""
     if block_during_speaking and interaction_state == "speaking":
+        return False, interaction_state, wake_window_until_s
+    if block_during_engaged and interaction_state == "engaged":
         return False, interaction_state, wake_window_until_s
     if nav_active and (not nav_interruptible) and (not nav_passive_listen_allowed):
         if wake_detected:

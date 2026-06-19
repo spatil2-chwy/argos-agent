@@ -206,8 +206,10 @@ attention controls whether passive recording may start
 VAD/silence controls when active recording ends
 ```
 
-Wake word and alert/cooldown state can also open admission depending on profile
-settings. Those paths are separate from attention.
+Wake word and selected interaction states can also open admission depending on
+profile settings. In the static interaction profile, `alert` can open admission
+by state, while `cooldown` no longer opens the mic by itself; a cooldown
+follow-up still needs attention or wake word.
 
 ## Why This Design
 

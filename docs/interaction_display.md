@@ -81,13 +81,14 @@ Current state mapping:
 |---|---|
 | idle | face `happy` |
 | mic admission / alert | face `think` |
-| recording | face `think` |
-| audio committed / waiting for model | face `think` |
-| assistant speaking | face `happy` |
+| recording | face `think` plus subtitle `Recording...` |
+| audio committed / waiting for model | centered message `Thinking...` |
+| assistant speaking | face `excited` |
 | assistant transcript deltas | subtitle updates |
 
-State modes do not send subtitles. Subtitles are only streamed from the
-assistant's spoken transcript.
+Cooldown is an internal engagement state and normally displays as idle/happy.
+Recording is the only state mode that sends a status subtitle; assistant
+transcript subtitles still stream from the spoken response.
 
 Display updates are queued through a background worker in `RealtimeRobotAgent`.
 HTTP calls do not run inside the microphone callback.
