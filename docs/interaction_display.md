@@ -17,7 +17,7 @@ providers:
       - http://localhost:4173
 
 resources:
-  - id: interaction_display
+  - id: screen_001
     kind: display
     hardware: puffle_screen
     provider: puffle-go2-display
@@ -33,7 +33,7 @@ display:
   enabled: true
 
 resources:
-  interaction_display: interaction_display
+  interaction_display: screen_001
 ```
 
 `display.enabled` defaults to `true`. If it is true and the selected manifest
@@ -57,15 +57,23 @@ The HTTP provider transport maps display operations to the local display server:
 
 | Operation | Endpoint | Purpose |
 |---|---|---|
-| `display.command` | `POST /display` | Send face, subtitle, clear/reset, message, countdown, Rive, or preview commands. |
-| `display.health` | `GET /health` | Check whether the display control server is reachable. |
-| `display.state` | `GET /state` | Read current display state. |
-| `display.await_response` | `GET /response` polling | Wait for an interactive response matching `requestId`. |
+| `display.command` | `POST /argos/providers/puffle-go2-display/resources/screen_001/display` | Send face, subtitle, clear/reset, message, countdown, Rive, or preview commands. |
+| `display.health` | `GET /argos/providers/puffle-go2-display/resources/screen_001/health` | Check whether the display control server is reachable. |
+| `display.image` | `POST /argos/providers/puffle-go2-display/resources/screen_001/image` | Show or clear the small live camera image panel. |
+| `display.state` | `GET /argos/providers/puffle-go2-display/resources/screen_001/state` | Read current display state. |
+| `display.await_response` | `GET /argos/providers/puffle-go2-display/resources/screen_001/response` polling | Wait for an interactive response matching `requestId`. |
 
 The display server is expected at:
 
 ```text
 http://localhost:4173
+```
+
+The base URL stays short; Argos appends the provider/resource namespace from the
+manifest. For the default Puffle manifest, all display control routes live under:
+
+```text
+/argos/providers/puffle-go2-display/resources/screen_001
 ```
 
 ## Runtime Behavior
@@ -80,13 +88,14 @@ Current state mapping:
 |---|---|
 | idle | face `happy` |
 | mic admission / alert | face `think` |
-| recording | face `think` |
-| audio committed / waiting for model | face `think` |
-| assistant speaking | face `happy` |
+| recording | face `think` plus subtitle `Recording...` |
+| audio committed / waiting for model | centered message `Thinking...` |
+| assistant speaking | face `excited` |
 | assistant transcript deltas | subtitle updates |
 
-State modes do not send subtitles. Subtitles are only streamed from the
-assistant's spoken transcript.
+Cooldown is an internal engagement state and normally displays as idle/happy.
+Recording is the only state mode that sends a status subtitle; assistant
+transcript subtitles still stream from the spoken response.
 
 Display updates are queued through a background worker in `RealtimeRobotAgent`.
 HTTP calls do not run inside the microphone callback.
@@ -101,7 +110,7 @@ When the display is configured, face enrollment does:
 ```text
 capture and validate burst
     -> prepare candidate embedding and padded reference-face preview
-    -> send face_capture_preview to interaction_display
+    -> send face_capture_preview to screen_001
     -> wait for Accept / Reject
     -> save only after Accept
 ```
@@ -123,8 +132,10 @@ The preview command sent to the display is:
 }
 ```
 
-The browser posts the response to `/response`; Argos waits for a matching
-`requestId`.
+The browser posts or stores the response for the namespaced response endpoint;
+Argos polls
+`/argos/providers/puffle-go2-display/resources/screen_001/response`
+until it sees a matching `requestId`.
 
 ## Tests
 

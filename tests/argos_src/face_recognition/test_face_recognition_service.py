@@ -7,6 +7,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+from argos_src.face_recognition.attention_gate.models import FaceAttentionObservation
 
 
 def _load_face_service_module(monkeypatch):
@@ -97,6 +98,147 @@ def _face(
         "embedding": embedding if embedding is not None else [0.1, 0.2, 0.3],
         "depth_m": depth_m,
     }
+
+
+def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    updates = []
+
+    class _Display:
+        is_configured = True
+
+        def show_live_image(self, **kwargs):
+            updates.append(kwargs)
+            return True
+
+    service._display_runtime = _Display()
+    service._live_image_title = "Camera"
+    service._live_image_ttl_ms = 1000
+
+    module.FaceRecognitionService._publish_live_image_frame(service, _good_image(8))
+
+    assert len(updates) == 1
+    assert updates[0]["title"] == "Camera"
+    assert updates[0]["ttl_ms"] == 1000
+    assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
+def test_publish_live_image_frame_draws_attention_overlay(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    updates = []
+
+    class _Display:
+        is_configured = True
+
+        def show_live_image(self, **kwargs):
+            updates.append(kwargs)
+            return True
+
+    service._display_runtime = _Display()
+    service._live_image_title = "Camera"
+    service._live_image_ttl_ms = 1000
+    image = np.zeros((80, 80, 3), dtype=np.uint8)
+    face = {
+        "bbox": {"x": 20, "y": 20, "w": 30, "h": 30},
+        "landmarks": {"nose": (35.0, 35.0)},
+        "attention": FaceAttentionObservation(
+            attentive=True,
+            confidence=0.9,
+            yaw_deg=0.0,
+            pitch_deg=0.0,
+            roll_deg=0.0,
+        ),
+    }
+
+    module.FaceRecognitionService._publish_live_image_frame(
+        service,
+        image,
+        faces=[face],
+    )
+
+    assert len(updates) == 1
+    assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
+def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    details = module.FaceRecognitionService._format_attention_log_details(
+        [
+            {
+                "recognized_name": "Sakshee Patil",
+                "attention": FaceAttentionObservation(
+                    attentive=False,
+                    confidence=0.74,
+                    reason="smoothing",
+                    yaw_deg=8.25,
+                    pitch_deg=-3.5,
+                    roll_deg=1.0,
+                    raw_attentive=True,
+                    raw_confidence=0.74,
+                ),
+            }
+        ]
+    )
+
+    assert details == [
+        "Sakshee_Patil:att=no,raw=yes,reason=smoothing,"
+        "conf=0.74,raw_conf=0.74,yaw=8.2,pitch=-3.5,roll=1.0"
+    ]
+
+
+def test_loop_tick_emits_timing_metric(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    image = _good_image()
+    events = []
+
+    class _FakeLatency:
+        def timing(self, metric, duration_s, **fields):
+            events.append({"metric": metric, "duration_s": duration_s, **fields})
+
+    service._loop_latency = _FakeLatency()
+    service._loop_metric_heartbeat_at = {}
+    service._depth_gate_settings = None
+    service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
+    service._latest_loop_frame_lock = module.threading.Lock()
+    service._latest_loop_frame = None
+    service._latest_loop_frame_resource_id = None
+    service._latest_loop_frame_at = 0.0
+    service._display_runtime = None
+    service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
+    service._prepare_faces_for_recognition_result = (
+        lambda *_args, **_kwargs: module.FacePreparationResult(
+            faces=[],
+            reason="no_detection",
+            detected_count=0,
+        )
+    )
+    service._log_loop_heartbeat = lambda *_args, **_kwargs: None
+
+    module.FaceRecognitionService._loop_tick(
+        service,
+        "head_realsense",
+        interval_sec=0.3,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["metric"] == "tick"
+    assert event["duration_s"] >= 0.0
+    assert event["camera_resource"] == "head_realsense"
+    assert event["interval_s"] == 0.3
+    assert event["outcome"] == "no_faces"
+    assert event["reason"] == "no_detection"
+    assert event["detected"] == 0
+    assert event["recognized"] == 0
+    assert event["unknown"] == 0
+    assert event["capture_s"] >= 0.0
+    assert event["prepare_s"] >= 0.0
+    assert event["publish_s"] >= 0.0
+    assert service._latest_loop_frame_resource_id == "head_realsense"
+    assert service._latest_loop_frame is not None
 
 
 def test_build_scene_state_dedupes_interaction_updates(monkeypatch):

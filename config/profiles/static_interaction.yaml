@@ -4,9 +4,9 @@ manifest: puffle
 
 resources:
   primary_robot: base
-  face_camera: arducam_001
-  scene_camera: arducam_001
-  interaction_display: interaction_display
+  face_camera: realsense_001
+  scene_camera: realsense_001
+  interaction_display: screen_001
 
 display:
   enabled: true
@@ -24,11 +24,6 @@ tools:
     - embodiment.unitree_go2.hello
     - embodiment.unitree_go2.stretch
     - embodiment.unitree_go2.content
-    - embodiment.unitree_go2.dance1
-    - embodiment.unitree_go2.dance2
-    - embodiment.unitree_go2.scrape
-    - embodiment.unitree_go2.front_jump
-    - embodiment.unitree_go2.finger_heart
     - embodiment.unitree_go2.bow_down
     - embodiment.unitree_go2.look_up
     - embodiment.unitree_go2.left_tilt
@@ -58,7 +53,7 @@ identity_store:
   db_path: var/identity/identity.sqlite3
 
 slack_memory:
-  enabled: false
+  enabled: true
   start_with_agent: false
   bot_token_env: SLACK_BOT_TOKEN
   poll_interval_sec: 1800.0
@@ -102,11 +97,31 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
+  attention_gate:
+    enabled: true
+    min_face_area: 700
+    min_face_area_ratio: 0.00035
+    max_abs_yaw_deg: 25.0
+    max_abs_pitch_deg: 22.0
+    max_abs_roll_deg: 35.0
+    distant_max_abs_yaw_deg: 18.0
+    distant_max_abs_pitch_deg: 32.0
+    distant_max_abs_roll_deg: 28.0
+    near_face_area_ratio: 0.035
+    distant_face_area_ratio: 0.010
+    near_depth_m: 0.8
+    distant_depth_m: 2.0
+    max_center_offset_ratio: 0.70
+    min_confidence: 0.55
+    smoothing_window_sec: 1.0
+    min_attentive_observations: 2
+    hold_sec: 0.8
   preference_extraction:
     enabled: true
   proactive_greeting:
     recognized_enabled: true
     unknown_enabled: true
+    require_attention: true
     recognized_cooldown_sec: 45.0
     unknown_cooldown_sec: 30.0
 
@@ -140,10 +155,11 @@ realtime:
   input_block_size: 2400
   admission:
     block_during_speaking: true
-    open_on_face_presence: true
+    block_during_engaged: true
+    open_on_face_presence: false
+    open_on_attention_presence: true
     open_on_interaction_states:
       - alert
-      - cooldown
     open_on_wake_window: true
 
 engagement:

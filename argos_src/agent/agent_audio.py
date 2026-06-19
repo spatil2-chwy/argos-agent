@@ -231,15 +231,35 @@ class RealtimeAgentAudioMixin:
 
         with self._recording_lock:
             if not self._recording_active:
+                is_attention_present = getattr(
+                    self._face_gate,
+                    "is_attention_present",
+                    lambda: False,
+                )
                 allowed, admission_reason, wake_until = resolve_record_admission(
                     face_present=self._face_gate.is_face_present(),
+                    attention_present=bool(is_attention_present()),
                     interaction_state=interaction_state,
                     now_s=now,
                     wake_window_until_s=self._wake_window_until,
                     wake_detected=bool(wake_detected),
                     wake_window_sec=self.realtime_profile.wake_window_sec,
                     block_during_speaking=self.realtime_profile.admission.block_during_speaking,
+                    block_during_engaged=bool(
+                        getattr(
+                            self.realtime_profile.admission,
+                            "block_during_engaged",
+                            False,
+                        )
+                    ),
                     open_on_face_presence=self.realtime_profile.admission.open_on_face_presence,
+                    open_on_attention_presence=bool(
+                        getattr(
+                            self.realtime_profile.admission,
+                            "open_on_attention_presence",
+                            False,
+                        )
+                    ),
                     open_on_interaction_states=self.realtime_profile.admission.open_on_interaction_states,
                     open_on_wake_window=self.realtime_profile.admission.open_on_wake_window,
                     nav_active=interaction.nav_active,
@@ -249,7 +269,13 @@ class RealtimeAgentAudioMixin:
                 self._wake_window_until = wake_until
                 if allowed:
                     display_mode = getattr(self, "_set_display_mode_async", None)
-                    if callable(display_mode):
+                    display_state_still_current = True
+                    if interaction_state in {"alert", "cooldown"}:
+                        current_state = str(
+                            getattr(self.engagement, "state_name", interaction_state) or ""
+                        ).strip()
+                        display_state_still_current = current_state == interaction_state
+                    if callable(display_mode) and display_state_still_current:
                         display_mode("alert")
                 if allowed and voice_detected:
                     self._candidate_voice_blocks = (
@@ -348,6 +374,9 @@ class RealtimeAgentAudioMixin:
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
         self._set_recording_gesture_async(False)
+        display_mode = getattr(self, "_set_display_mode_async", None)
+        if callable(display_mode):
+            display_mode("thinking")
         speech_end_perf_s = perf_now()
         speech_end_unix_s = now_s
         self._latency.emit(event="speech_end", speech_end_unix_s=speech_end_unix_s)

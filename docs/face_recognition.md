@@ -22,6 +22,9 @@ This document covers the current Argos face path:
 3. continuous recognition preprocessing
 4. multi-face scenes
 5. face identity vs audio speaker ownership
+
+For the dedicated attention-gate flow, thresholds, and mic-admission behavior,
+see `docs/attention_gate.md`.
 6. config knobs and threshold policy
 
 ## Short Answer
@@ -74,7 +77,7 @@ unknown visible person
     -> FaceRecognitionService.enroll_visible_person()
     -> short camera burst
     -> quality and consistency gates
-    -> if display.enabled is true and interaction_display is configured, show face-capture preview
+    -> if display.enabled is true and a screen resource is selected, show face-capture preview
     -> wait for Accept / Reject
     -> save averaged face embedding under person_id
     -> seed live presence cache
@@ -159,8 +162,8 @@ from the selected reference face bbox, so the review screen shows the face regio
 used for embedding with a little surrounding context. The candidate is not saved
 yet.
 
-When `display.enabled` is true and the `interaction_display` resource is
-configured, Argos encodes the preview image as a `data:image/png;base64,...` URL
+When `display.enabled` is true and `resources.interaction_display` selects a
+screen resource, Argos encodes the preview image as a `data:image/png;base64,...` URL
 and sends a blocking `face_capture_preview` command to the Puffle display. Only
 an Accept response commits the candidate to the face store. Reject, timeout, or
 display-unavailable responses return a failed tool result and do not save
@@ -379,6 +382,27 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
+  attention_gate:
+    enabled: true
+    min_face_area: 700
+    min_face_area_ratio: 0.00035
+    max_abs_yaw_deg: 25.0
+    max_abs_pitch_deg: 22.0
+    max_abs_roll_deg: 35.0
+    distant_max_abs_yaw_deg: 18.0
+    distant_max_abs_pitch_deg: 32.0
+    distant_max_abs_roll_deg: 28.0
+    near_face_area_ratio: 0.035
+    distant_face_area_ratio: 0.010
+    near_depth_m: 0.8
+    distant_depth_m: 2.0
+    max_center_offset_ratio: 0.70
+    min_confidence: 0.55
+    smoothing_window_sec: 1.0
+    min_attentive_observations: 2
+    hold_sec: 0.8
+  proactive_greeting:
+    require_attention: true
 ```
 
 Depth gate settings:
@@ -402,6 +426,56 @@ are often rejected, tune in this order:
 2. raise `search_radius_px` if depth holes are common
 3. lower `min_valid_samples` only if the aligned depth image is consistently sparse
 4. disable `depth_gate.enabled` only if depth sync is unreliable in the deployment
+
+Attention gate settings:
+
+| Setting | Meaning | Keep it? |
+|---|---|---|
+| `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
+| `min_face_area: 700` | Absolute minimum detected face bbox area before head-pose scoring. | Lower for mounted wide-view cameras; keep enrollment stricter. |
+| `min_face_area_ratio: 0.00035` | Resolution-scaled face area floor, combined with `min_face_area`. | Tune with camera resolution. |
+| `max_abs_yaw_deg: 25.0` | Near-face left/right head angle limit. | Tune for close interaction. |
+| `max_abs_pitch_deg: 22.0` | Near-face up/down head angle limit. | Tune with camera mounting height. |
+| `max_abs_roll_deg: 35.0` | Near-face head tilt limit. | Usually keep. |
+| `distant_max_abs_yaw_deg: 18.0` | Far/small-face left/right head angle limit. | Tighten if far side conversations falsely open admission. |
+| `distant_max_abs_pitch_deg: 32.0` | Far/small-face up/down head angle limit. | Mounted cameras often need this higher because users look down toward the robot. |
+| `distant_max_abs_roll_deg: 28.0` | Far/small-face head tilt limit. | Tune if tilted distant heads falsely count as attention. |
+| `near_face_area_ratio: 0.035` | Face area ratio treated as near when depth is unavailable. | Tune from live bbox logs. |
+| `distant_face_area_ratio: 0.010` | Face area ratio treated as distant when depth is unavailable. | Tune from live bbox logs. |
+| `near_depth_m: 0.8` | Depth treated as near when `depth_m` exists on the face. | Keep unless the camera is mounted unusually close. |
+| `distant_depth_m: 2.0` | Depth treated as distant when `depth_m` exists on the face. | Match the natural standing interaction distance. |
+| `max_center_offset_ratio: 0.70` | Rejects faces far from the optical center for attention. | Mounted wide cameras should be looser than webcams. |
+| `min_confidence: 0.55` | Confidence floor reported at the configured pose/center acceptance boundary. | Usually keep. |
+| `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
+| `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
+| `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
+
+The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
+replace FaceNet and does not add a second face detector. Pose limits are
+interpolated between near and distant settings using face `depth_m` when present,
+or face bbox area ratio when depth is unavailable. This lets a mounted RealSense
+camera treat a person standing around two meters back differently from a close
+webcam-like face crop. If `sixdrepnet` is not
+installed or the model cannot initialize, attention returns
+`sixdrepnet_unavailable` and passive attention admission remains closed. The
+presence snapshot keeps the old face fields and adds:
+
+- `attention_status`
+- `attention_count`
+- `attentive_recognized_count`
+- `attentive_unknown_count`
+- `primary_attention_person_id`
+- `primary_attention_name`
+- `attention_confidence`
+
+For passive listening, prefer:
+
+```yaml
+realtime:
+  admission:
+    open_on_face_presence: false
+    open_on_attention_presence: true
+```
 
 ## Thresholds Not Yet in YAML
 

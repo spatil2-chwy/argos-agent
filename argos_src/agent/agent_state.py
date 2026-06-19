@@ -225,11 +225,19 @@ class RealtimeAgentStateMixin:
                 if person is not None:
                     persons.append(person)
             if primary_face_person_id is None:
-                getter = getattr(self.face_service, "get_primary_face_person_id", None)
-                if callable(getter):
-                    primary_face_person_id = getter()
-                else:
-                    primary_face_person_id = self.face_service.get_attention_target_person_id()
+                attention_getter = getattr(
+                    self.face_service,
+                    "get_primary_attention_person_id",
+                    None,
+                )
+                if callable(attention_getter):
+                    primary_face_person_id = attention_getter()
+                if primary_face_person_id is None:
+                    getter = getattr(self.face_service, "get_primary_face_person_id", None)
+                    if callable(getter):
+                        primary_face_person_id = getter()
+                    else:
+                        primary_face_person_id = self.face_service.get_attention_target_person_id()
             return FrozenTurnContext(
                 persons=persons,
                 face_snapshot=face_snapshot,
@@ -656,6 +664,15 @@ class RealtimeAgentStateMixin:
         if self.face_service is None:
             return None
         try:
+            attention_getter = getattr(
+                self.face_service,
+                "get_primary_attention_person_id",
+                None,
+            )
+            if callable(attention_getter):
+                attention_person_id = attention_getter()
+                if attention_person_id:
+                    return attention_person_id
             getter = getattr(self.face_service, "get_primary_face_person_id", None)
             if callable(getter):
                 return getter()

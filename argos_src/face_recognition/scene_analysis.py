@@ -18,6 +18,8 @@ class FaceSceneCandidate:
     depth_m: float | None = None
     person_id: str | None = None
     name: str | None = None
+    attentive: bool = False
+    attention_confidence: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,8 @@ class FaceSceneAnalysis:
     """Output of scene analysis for prompting and memory ownership."""
 
     attention_target: AttentionTarget | None
+    primary_attention_target: AttentionTarget | None
+    attentive_unknown_count: int
     social_scene: SocialSceneContext
 
 
@@ -61,12 +65,25 @@ def _select_primary_face_person(
     return candidate
 
 
+def _select_single_candidate(
+    candidates: list[FaceSceneCandidate],
+) -> FaceSceneCandidate | None:
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
 def analyze_face_scene(candidates: list[FaceSceneCandidate]) -> FaceSceneAnalysis:
     """Select attention and speaker targets plus prompt-facing social context."""
     primary_person = _select_primary_face_person(candidates)
+    attentive_candidates = [candidate for candidate in candidates if candidate.attentive]
+    primary_attention_person = _select_single_candidate(attentive_candidates)
 
     recognized = [candidate for candidate in candidates if candidate.kind == "recognized"]
     unknown_count = sum(1 for candidate in candidates if candidate.kind == "unknown")
+    attentive_unknown_count = sum(
+        1 for candidate in attentive_candidates if candidate.kind == "unknown"
+    )
     closest = min(candidates, key=_candidate_sort_key) if candidates else None
     nearest_recognized = min(recognized, key=_candidate_sort_key) if recognized else None
     social_scene = SocialSceneContext(
@@ -76,5 +93,7 @@ def analyze_face_scene(candidates: list[FaceSceneCandidate]) -> FaceSceneAnalysi
     )
     return FaceSceneAnalysis(
         attention_target=_to_attention_target(primary_person),
+        primary_attention_target=_to_attention_target(primary_attention_person),
+        attentive_unknown_count=attentive_unknown_count,
         social_scene=social_scene,
     )

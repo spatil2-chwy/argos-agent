@@ -50,6 +50,7 @@ class FaceEventBridge:
         presence_callback=None,
         recognized_greet_enabled: bool = True,
         unknown_greet_enabled: bool = True,
+        require_attention: bool = False,
         recognized_greet_cooldown_sec: float = RECOGNIZED_GREET_COOLDOWN_SEC,
         unknown_greet_cooldown_sec: float = UNKNOWN_GREET_COOLDOWN_SEC,
     ):
@@ -61,6 +62,7 @@ class FaceEventBridge:
         self._presence_callback = presence_callback
         self._recognized_greet_enabled = recognized_greet_enabled
         self._unknown_greet_enabled = unknown_greet_enabled
+        self._require_attention = bool(require_attention)
         self._recognized_greet_cooldown_sec = float(recognized_greet_cooldown_sec)
         self._unknown_greet_cooldown_sec = float(unknown_greet_cooldown_sec)
         self._stop = threading.Event()
@@ -124,10 +126,24 @@ class FaceEventBridge:
         persons: list,
         now: float,
     ) -> None:
-        unknown_count = int(snapshot.get("unknown_count", 0) or 0)
-        has_mixed_scene = bool(snapshot.get("has_mixed_scene", False))
-        nearest_recognized_name = str(snapshot.get("nearest_recognized_name", "") or "").strip()
-        ids_now = {p.person_id for p in persons}
+        require_attention = bool(getattr(self, "_require_attention", False))
+        if require_attention:
+            unknown_count = int(snapshot.get("attentive_unknown_count", 0) or 0)
+            has_mixed_scene = bool(snapshot.get("has_attentive_mixed_scene", False))
+            nearest_recognized_name = str(
+                snapshot.get("primary_attention_name")
+                or snapshot.get("nearest_recognized_name", "")
+                or ""
+            ).strip()
+            event_persons = [
+                p for p in persons if bool(getattr(p, "attentive", False))
+            ]
+        else:
+            unknown_count = int(snapshot.get("unknown_count", 0) or 0)
+            has_mixed_scene = bool(snapshot.get("has_mixed_scene", False))
+            nearest_recognized_name = str(snapshot.get("nearest_recognized_name", "") or "").strip()
+            event_persons = list(persons)
+        ids_now = {p.person_id for p in event_persons}
         new_ids = ids_now - self._previous_ids
         is_recording_active = getattr(self._engagement, "is_recording_active", None)
         recording_active = False
@@ -199,7 +215,7 @@ class FaceEventBridge:
 
         if self._recognized_greet_enabled and not emitted_mixed:
             allow_recognized_greet = bool(new_ids) and allow_face_attention
-            for p in persons:
+            for p in event_persons:
                 if p.person_id not in new_ids:
                     continue
                 if not allow_recognized_greet:

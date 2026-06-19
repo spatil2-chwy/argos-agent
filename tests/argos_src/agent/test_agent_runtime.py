@@ -414,6 +414,18 @@ def test_handle_server_event_routes_output_text_delta_through_dispatch():
     assert calls == [{"type": "response.output_text.delta", "delta": "hello"}]
 
 
+def test_forced_idle_display_mode_requeues_even_when_cached():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "idle"
+
+    agent._set_display_mode_async("idle", force=True)
+
+    assert agent._display_queue.get_nowait() == ("mode", "idle")
+
+
 def test_superseded_turn_is_canceled_and_old_audio_is_ignored():
     agent = _make_agent()
     old_turn = _make_turn("rt-old")
@@ -511,6 +523,20 @@ def test_recording_hooks_update_gesture_runtime():
         time.sleep(0.01)
 
     assert agent.gesture_runtime.recording_active == [True, False]
+
+
+def test_recording_display_moves_from_recording_to_thinking():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = ""
+
+    agent._start_recording_locked(now_s=10.0)
+    agent._finalize_recording_locked(now_s=11.0)
+
+    assert agent._display_queue.get_nowait() == ("mode", "recording")
+    assert agent._display_queue.get_nowait() == ("mode", "thinking")
 
 
 def test_recording_gesture_does_not_block_audio_finalize():
@@ -746,6 +772,43 @@ def test_output_audio_does_not_request_duplicate_owner_turn():
     )
 
     assert owner_turn.requests == []
+
+
+def test_playback_completion_returns_display_to_idle():
+    agent = _make_agent()
+    display_modes = []
+    agent._set_display_mode_async = lambda mode: display_modes.append(mode)
+    turn = _make_turn("rt-playback-display")
+    turn.response_id = "resp-playback-display"
+    turn.response_finished.set()
+
+    agent._wait_for_playback_and_complete(turn, "resp-playback-display")
+
+    assert agent.engagement.playback_events[-1] == (
+        "playback_completed",
+        turn.req_id,
+        "resp-playback-display",
+    )
+    assert display_modes == ["idle"]
+
+
+def test_playback_stopped_returns_display_to_idle():
+    agent = _make_agent()
+    display_modes = []
+    agent._set_display_mode_async = lambda mode: display_modes.append(mode)
+    turn = _make_turn("rt-playback-stopped-display")
+    turn.response_id = "resp-playback-stopped-display"
+    with agent._turn_lock:
+        agent._playback_req_id = turn.req_id
+
+    agent._force_complete_stalled_playback(turn, reason="test")
+
+    assert agent.engagement.playback_events[-1] == (
+        "playback_stopped",
+        turn.req_id,
+        "resp-playback-stopped-display",
+    )
+    assert display_modes == ["idle"]
 
 
 def test_function_call_cancels_queued_owner_turn():
@@ -1425,6 +1488,7 @@ def test_active_recording_survives_admission_closing_mid_capture():
     agent.realtime_profile.wake_window_sec = 5.0
     agent.realtime_profile.admission = SimpleNamespace(
         block_during_speaking=True,
+        block_during_engaged=False,
         open_on_face_presence=True,
         open_on_interaction_states=("alert", "cooldown"),
         open_on_wake_window=True,
@@ -1466,6 +1530,63 @@ def test_active_recording_survives_admission_closing_mid_capture():
     assert agent._recording_active is True
     assert len(agent._current_turn_audio_chunks) == 3
     assert agent._current_turn_vad_positive_blocks == 3
+
+
+def test_stale_cooldown_admission_does_not_override_idle_display():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent.realtime_profile.wake_window_sec = 5.0
+    agent.realtime_profile.admission = SimpleNamespace(
+        block_during_speaking=True,
+        block_during_engaged=False,
+        open_on_face_presence=False,
+        open_on_attention_presence=False,
+        open_on_interaction_states=("alert", "cooldown"),
+        open_on_wake_window=False,
+    )
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._wake_window_until = 0.0
+    agent._recording_active = False
+    agent._recording_started_at = 0.0
+    agent._last_voice_at = 0.0
+    agent._face_gate = SimpleNamespace(
+        is_face_present=lambda: False,
+        is_attention_present=lambda: False,
+    )
+    agent._vad = lambda *_args, **_kwargs: (False, {})
+    agent._wake_word = lambda *_args, **_kwargs: (False, {})
+    display_modes = []
+    agent._set_display_mode_async = lambda mode: display_modes.append(mode)
+
+    states = deque(["cooldown", "idle"])
+
+    class _Engagement:
+        @property
+        def state_name(self):
+            return "idle"
+
+        def snapshot(self):
+            return SimpleNamespace(
+                state=states.popleft() if states else "idle",
+                req_id="",
+                entered_at=0.0,
+                expires_at=None,
+                nav_active=False,
+                nav_source="",
+                nav_interruptible=True,
+                nav_passive_listen_allowed=True,
+            )
+
+    agent.engagement = _Engagement()
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert display_modes == []
 
 
 def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():

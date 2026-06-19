@@ -28,8 +28,8 @@ def test_puffle_manifest_loads_resources_and_capabilities():
     assert base is not None
     assert base.family == "unitree_go2"
     assert base.has_capability("motion.velocity")
-    assert manifest.resource_by_id("head_realsense").has_capability("camera.rgbd")
-    display = manifest.resource_by_id("interaction_display")
+    assert manifest.resource_by_id("realsense_001").has_capability("camera.rgbd")
+    display = manifest.resource_by_id("screen_001")
     assert display is not None
     assert display.kind == "display"
     assert display.has_capability("display.command")

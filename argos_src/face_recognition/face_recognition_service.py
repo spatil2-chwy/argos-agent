@@ -17,6 +17,11 @@ from argos_src.face_recognition.constants import (
     DEFAULT_FACE_DB_PATH,
     MIN_FACE_DETECTION_CONFIDENCE,
 )
+from argos_src.face_recognition.attention_gate import (
+    AttentionGateSettings,
+    FaceAttentionGate,
+    draw_attention_overlay,
+)
 from argos_src.face_recognition.depth_gate import DepthGateSettings, filter_detections_by_depth
 from argos_src.face_recognition.models import (
     AttentionTarget,
@@ -31,6 +36,7 @@ from argos_src.face_recognition.store import FaceRecognitionStore
 from argos_src.identity.prompting import format_identity_profile_lines
 from argos_src.memory.encounters import build_encounter_metadata
 from argos_src.media.image_encoding import preprocess_image
+from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
 from argos_src.provider_api.models import CameraIntrinsics
 
@@ -57,6 +63,15 @@ class FaceEnrollmentPolicy:
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()
+
+
+def _format_optional_float(value: Any) -> str:
+    if value is None:
+        return "na"
+    try:
+        return f"{float(value):.1f}"
+    except Exception:
+        return "na"
 
 
 @dataclass(frozen=True)
@@ -114,6 +129,7 @@ class FaceRecognitionService:
         recognition_threshold: float = 0.6,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
+        attention_gate_settings: AttentionGateSettings | None = None,
         enrollment_policy: FaceEnrollmentPolicy | None = None,
         identity_db_path: str | None = None,
         identity_store: Any | None = None,
@@ -121,6 +137,9 @@ class FaceRecognitionService:
         site_code: str = "",
         camera_resource_id: str = "",
         camera_yaw_offset_rad: float = 0.0,
+        display_runtime: Any | None = None,
+        live_image_title: str = "Camera",
+        live_image_ttl_ms: int = 1000,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
         logger.info(f"Face recognition running on: {self.device}")
@@ -140,9 +159,13 @@ class FaceRecognitionService:
         self.memory_store = memory_store
         self.site_code = str(site_code or "").strip()
         self._depth_gate_settings = depth_gate_settings
+        self._attention_gate = FaceAttentionGate(attention_gate_settings)
         self._camera_resource_id = str(camera_resource_id or "").strip()
         self._camera_yaw_offset_rad = float(camera_yaw_offset_rad)
         self._camera_intrinsics: CameraIntrinsics | None = None
+        self._display_runtime = display_runtime
+        self._live_image_title = str(live_image_title or "Camera").strip() or "Camera"
+        self._live_image_ttl_ms = max(1, int(live_image_ttl_ms))
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
         self._presence_cache = FacePresenceCache(cache_expire_sec=CACHE_EXPIRE_SEC)
         self._loop_thread: Optional[threading.Thread] = None
@@ -152,6 +175,8 @@ class FaceRecognitionService:
         self._latest_loop_frame_resource_id: str | None = None
         self._latest_loop_frame_at = 0.0
         self._loop_log_heartbeat_at: dict[str, float] = {}
+        self._loop_metric_heartbeat_at: dict[str, float] = {}
+        self._loop_latency = LatencyLogger("face_loop")
 
         logger.info("Face Recognition Service initialized")
         logger.info(f"Device: {self.device} | DB: {self.db.collection.count()} people enrolled")
@@ -672,6 +697,7 @@ class FaceRecognitionService:
     def _build_scene_state(
         self,
         *,
+        image=None,
         detected_faces: list[dict[str, Any]],
         image_shape: tuple[int, ...],
         now: float,
@@ -681,6 +707,10 @@ class FaceRecognitionService:
         persons: list[PersonContext] = []
         candidates: list[FaceSceneCandidate] = []
         intrinsics = self._get_camera_intrinsics()
+        attention_gate = getattr(self, "_attention_gate", None)
+        if attention_gate is None:
+            attention_gate = FaceAttentionGate(AttentionGateSettings(enabled=False))
+            self._attention_gate = attention_gate
 
         for face in detected_faces:
             bbox_area = self._bbox_area(face)
@@ -694,6 +724,16 @@ class FaceRecognitionService:
             )
             face_center = face_center_px(face)
             match = self._recognize_face_match(face)
+            pid = match["person_id"] if match is not None else ""
+            track_id = pid or self._unknown_attention_track_id(face, image_shape)
+            attention = attention_gate.evaluate(
+                image,
+                face,
+                image_shape=image_shape,
+                track_id=track_id,
+                now=now,
+            )
+            face["attention"] = attention
             if match is None:
                 unknown_count += 1
                 candidates.append(
@@ -702,12 +742,14 @@ class FaceRecognitionService:
                         bbox_area=bbox_area,
                         center_distance=center_distance,
                         depth_m=face.get("depth_m"),
+                        attentive=attention.attentive,
+                        attention_confidence=attention.confidence,
                     )
                 )
                 continue
 
-            pid = match["person_id"]
             current_ids.add(pid)
+            face["recognized_name"] = match["name"]
             should_record_interaction = self._presence_cache.should_record_interaction(
                 pid,
                 now,
@@ -758,6 +800,11 @@ class FaceRecognitionService:
                 face_center_x_px=face_center[0] if face_center is not None else None,
                 face_center_y_px=face_center[1] if face_center is not None else None,
                 center_distance=center_distance,
+                attentive=attention.attentive,
+                attention_confidence=attention.confidence,
+                head_yaw_deg=attention.yaw_deg,
+                head_pitch_deg=attention.pitch_deg,
+                head_roll_deg=attention.roll_deg,
                 directory_profile_lines=format_identity_profile_lines(meta),
             )
             persons.append(person)
@@ -769,11 +816,27 @@ class FaceRecognitionService:
                     depth_m=face.get("depth_m"),
                     person_id=pid,
                     name=match["name"],
+                    attentive=attention.attentive,
+                    attention_confidence=attention.confidence,
                 )
             )
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
+
+    @staticmethod
+    def _unknown_attention_track_id(
+        face: dict[str, Any],
+        image_shape: tuple[int, ...],
+    ) -> str:
+        """Return a coarse stable key for smoothing unknown attentive faces."""
+        center = face_center_px(face)
+        if center is None:
+            return "unknown"
+        height, width = image_shape[:2]
+        bucket_w = max(1, int(width / 8)) if width else 1
+        bucket_h = max(1, int(height / 6)) if height else 1
+        return f"unknown:{int(center[0] // bucket_w)}:{int(center[1] // bucket_h)}"
 
     def _get_camera_intrinsics(self) -> CameraIntrinsics | None:
         """Return cached color camera intrinsics when available."""
@@ -1286,6 +1349,59 @@ class FaceRecognitionService:
             logger.exception("Failed to encode enrollment preview image")
             return ""
 
+    @staticmethod
+    def _live_frame_data_url(image: Any) -> str:
+        if image is None:
+            return ""
+        try:
+            return "data:image/png;base64," + preprocess_image(image)
+        except Exception:
+            logger.exception("Failed to encode live camera frame for display")
+            return ""
+
+    def _publish_live_image_frame(
+        self,
+        image: Any,
+        *,
+        faces: list[dict[str, Any]] | None = None,
+    ) -> None:
+        display = getattr(self, "_display_runtime", None)
+        if display is None or not bool(getattr(display, "is_configured", False)):
+            return
+        display_image = image
+        if faces:
+            try:
+                display_image = draw_attention_overlay(image, faces)
+            except Exception:
+                logger.debug("Failed to draw attention overlay", exc_info=True)
+                display_image = image
+        data_url = self._live_frame_data_url(display_image)
+        if not data_url:
+            return
+        show_live_image = getattr(display, "show_live_image", None)
+        if not callable(show_live_image):
+            return
+        try:
+            show_live_image(
+                data_url=data_url,
+                title=getattr(self, "_live_image_title", "Camera"),
+                ttl_ms=int(getattr(self, "_live_image_ttl_ms", 1000)),
+            )
+        except Exception:
+            logger.debug("Display live image update failed", exc_info=True)
+
+    def _clear_live_image_frame(self) -> None:
+        display = getattr(self, "_display_runtime", None)
+        if display is None or not bool(getattr(display, "is_configured", False)):
+            return
+        clear_live_image = getattr(display, "clear_live_image", None)
+        if not callable(clear_live_image):
+            return
+        try:
+            clear_live_image()
+        except Exception:
+            logger.debug("Display live image clear failed", exc_info=True)
+
     def _prime_presence_cache_after_enrollment(
         self,
         *,
@@ -1343,10 +1459,65 @@ class FaceRecognitionService:
     # Background loop (continuous recognition, zero latency at response time)
     # ------------------------------------------------------------------
 
-    def _loop_tick(self, camera_resource_id: str) -> None:
-        """Run one recognition cycle; update cache and session state."""
+    def _emit_loop_timing(
+        self,
+        *,
+        tick_started: float,
+        camera_resource_id: str,
+        interval_sec: float | None,
+        outcome: str,
+        capture_s: float | None = None,
+        prepare_s: float | None = None,
+        scene_s: float | None = None,
+        publish_s: float | None = None,
+        detected_count: int | None = None,
+        recognized_count: int | None = None,
+        unknown_count: int | None = None,
+        rejected_count: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        latency = getattr(self, "_loop_latency", None)
+        if latency is None:
+            return
+        heartbeat_at = getattr(self, "_loop_metric_heartbeat_at", None)
+        if heartbeat_at is None:
+            heartbeat_at = {}
+            self._loop_metric_heartbeat_at = heartbeat_at
         now = time.time()
+        key = f"timing:{outcome}"
+        last = float(heartbeat_at.get(key, 0.0))
+        if last and (now - last) < LOOP_HEARTBEAT_LOG_SEC:
+            return
+        heartbeat_at[key] = now
+        latency.timing(
+            "tick",
+            perf_now() - tick_started,
+            camera_resource=camera_resource_id,
+            interval_s=interval_sec,
+            outcome=outcome,
+            capture_s=capture_s,
+            prepare_s=prepare_s,
+            scene_s=scene_s,
+            publish_s=publish_s,
+            detected=detected_count,
+            recognized=recognized_count,
+            unknown=unknown_count,
+            rejected=rejected_count,
+            reason=reason,
+        )
+
+    def _loop_tick(
+        self,
+        camera_resource_id: str,
+        *,
+        interval_sec: float | None = None,
+    ) -> None:
+        """Run one recognition cycle; update cache and session state."""
+        tick_started = perf_now()
+        now = time.time()
+        capture_started = perf_now()
         image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
+        capture_s = perf_now() - capture_started
         if image is None:
             if self._depth_gate_settings is None:
                 self._log_loop_heartbeat(
@@ -1364,6 +1535,13 @@ class FaceRecognitionService:
                 )
             if self._presence_cache.clear_if_expired(now):
                 logger.info("[FaceLoop] no image, cache expired and cleared")
+            self._emit_loop_timing(
+                tick_started=tick_started,
+                camera_resource_id=camera_resource_id,
+                interval_sec=interval_sec,
+                outcome="no_image",
+                capture_s=capture_s,
+            )
             return
 
         self._cache_latest_loop_frame(
@@ -1371,44 +1549,151 @@ class FaceRecognitionService:
             camera_resource_id=camera_resource_id,
             captured_at=time.time(),
         )
+        prepare_started = perf_now()
         prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
         if not detected_faces:
+            publish_started = perf_now()
+            self._publish_live_image_frame(image)
+            publish_s = perf_now() - publish_started
             if prepared.reason:
                 self._log_loop_heartbeat(
                     f"prepare_{prepared.reason}",
-                    "[FaceLoop] face preparation produced no usable faces reason=%s detected=%s rejected=%s",
+                    "[FaceLoop] summary reason=%s detected=%s rejected=%s "
+                    "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
+                    "primary_face=%s primary_attention=%s",
                     prepared.reason,
                     prepared.detected_count,
                     prepared.rejected_count,
+                    [],
+                    0,
+                    [],
+                    0,
+                    None,
+                    None,
                 )
             if self._presence_cache.clear_if_expired(now):
                 logger.info("[FaceLoop] no faces, cache expired and cleared")
+            self._emit_loop_timing(
+                tick_started=tick_started,
+                camera_resource_id=camera_resource_id,
+                interval_sec=interval_sec,
+                outcome="no_faces",
+                capture_s=capture_s,
+                prepare_s=prepare_s,
+                publish_s=publish_s,
+                detected_count=prepared.detected_count,
+                recognized_count=0,
+                unknown_count=0,
+                rejected_count=prepared.rejected_count,
+                reason=prepared.reason,
+            )
             return
 
         self._presence_cache.mark_faces_seen(now)
+        scene_started = perf_now()
         persons, unknown_count, current_ids, analysis = self._build_scene_state(
+            image=image,
             detected_faces=detected_faces,
             image_shape=image.shape,
             now=now,
         )
+        scene_s = perf_now() - scene_started
+        publish_started = perf_now()
+        self._publish_live_image_frame(image, faces=detected_faces)
+        publish_s = perf_now() - publish_started
 
         self._presence_cache.expire_inactive(current_ids, now)
         self._presence_cache.update(
             persons=persons,
             faces_detected=len(detected_faces),
             unknown_count=unknown_count,
+            attentive_unknown_count=analysis.attentive_unknown_count,
             attention_target=analysis.attention_target,
+            primary_attention_target=analysis.primary_attention_target,
             social_scene=analysis.social_scene,
             now=now,
         )
+        attentive_names = [p.name for p in persons if bool(p.attentive)]
+        primary_attention = analysis.primary_attention_target
+        attention_details = self._format_attention_log_details(detected_faces)
         logger.debug(
-            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s primary_face=%s",
+            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
+            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
+            "attention_details=%s",
             len(detected_faces),
             [p.name for p in persons],
             unknown_count,
+            attentive_names,
+            analysis.attentive_unknown_count,
             analysis.attention_target.person_id if analysis.attention_target else None,
+            (
+                primary_attention.person_id
+                if primary_attention and primary_attention.person_id
+                else (primary_attention.kind if primary_attention else None)
+            ),
+            attention_details,
         )
+        self._emit_loop_timing(
+            tick_started=tick_started,
+            camera_resource_id=camera_resource_id,
+            interval_sec=interval_sec,
+            outcome="ok",
+            capture_s=capture_s,
+            prepare_s=prepare_s,
+            scene_s=scene_s,
+            publish_s=publish_s,
+            detected_count=len(detected_faces),
+            recognized_count=len(persons),
+            unknown_count=unknown_count,
+            rejected_count=prepared.rejected_count,
+            reason="ok",
+        )
+        self._log_loop_heartbeat(
+            "attention_summary",
+            "[FaceLoop] summary reason=%s detected=%s rejected=%s "
+            "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
+            "primary_face=%s primary_attention=%s attention_details=%s",
+            "ok",
+            len(detected_faces),
+            prepared.rejected_count,
+            [p.name for p in persons],
+            unknown_count,
+            attentive_names,
+            analysis.attentive_unknown_count,
+            analysis.attention_target.person_id if analysis.attention_target else None,
+            (
+                primary_attention.person_id
+                if primary_attention and primary_attention.person_id
+                else (primary_attention.kind if primary_attention else None)
+            ),
+            attention_details,
+        )
+
+    @staticmethod
+    def _format_attention_log_details(faces: list[dict[str, Any]]) -> list[str]:
+        details: list[str] = []
+        for index, face in enumerate(faces):
+            attention = face.get("attention")
+            if attention is None:
+                details.append(f"face{index}:missing")
+                continue
+            label = str(face.get("recognized_name") or f"face{index}").replace(" ", "_")
+            reason = str(getattr(attention, "reason", "") or "unknown")
+            attentive = "yes" if bool(getattr(attention, "attentive", False)) else "no"
+            raw = "yes" if bool(getattr(attention, "raw_attentive", False)) else "no"
+            confidence = float(getattr(attention, "confidence", 0.0) or 0.0)
+            raw_confidence = float(getattr(attention, "raw_confidence", 0.0) or 0.0)
+            yaw = _format_optional_float(getattr(attention, "yaw_deg", None))
+            pitch = _format_optional_float(getattr(attention, "pitch_deg", None))
+            roll = _format_optional_float(getattr(attention, "roll_deg", None))
+            details.append(
+                f"{label}:att={attentive},raw={raw},reason={reason},"
+                f"conf={confidence:.2f},raw_conf={raw_confidence:.2f},"
+                f"yaw={yaw},pitch={pitch},roll={roll}"
+            )
+        return details
 
     def _log_loop_heartbeat(
         self,
@@ -1448,7 +1733,7 @@ class FaceRecognitionService:
         def run() -> None:
             while not self._loop_stop.wait(interval):
                 try:
-                    self._loop_tick(resource_id)
+                    self._loop_tick(resource_id, interval_sec=interval)
                 except Exception as e:
                     if is_provider_error(e):
                         self._log_loop_heartbeat(
@@ -1475,6 +1760,7 @@ class FaceRecognitionService:
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=3.0)
             self._loop_thread = None
+        self._clear_live_image_frame()
         logger.info("[FaceLoop] stopped")
 
     def shutdown(self) -> None:
@@ -1495,6 +1781,10 @@ class FaceRecognitionService:
     def get_primary_face_person_id(self) -> str | None:
         """Return the current recognized primary visible person id, if any."""
         return self._presence_cache.get_primary_face_person_id()
+
+    def get_primary_attention_person_id(self) -> str | None:
+        """Return the current recognized primary attentive person id, if any."""
+        return self._presence_cache.get_primary_attention_person_id()
 
     def get_face_turn_target(self, person_id: str | None = None):
         """Return the current recognized face-bearing target for a person id."""

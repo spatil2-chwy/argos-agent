@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from argos_src.display import DisplayRuntime
-from argos_src.provider_api.wire import OP_DISPLAY_AWAIT_RESPONSE, OP_DISPLAY_COMMAND
+from argos_src.provider_api.wire import (
+    OP_DISPLAY_AWAIT_RESPONSE,
+    OP_DISPLAY_COMMAND,
+    OP_DISPLAY_IMAGE,
+)
 
 
 class _Client:
@@ -54,7 +58,7 @@ def test_display_runtime_deduplicates_faces_and_subtitles():
     assert len(commands) == 2
 
 
-def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
+def test_display_runtime_state_modes_send_expected_commands():
     client = _Client()
     runtime = DisplayRuntime(client=client, resource_id="interaction_display")
 
@@ -62,6 +66,7 @@ def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
     runtime.show_alert()
     runtime.show_recording()
     runtime.show_thinking()
+    runtime.show_speaking()
 
     commands = [
         request["args"]
@@ -71,4 +76,49 @@ def test_display_runtime_state_modes_are_face_only_except_explicit_subtitles():
     assert commands == [
         {"type": "face", "face": "happy"},
         {"type": "face", "face": "think"},
+        {"type": "face", "face": "think"},
+        {"type": "subtitle", "text": "Recording...", "durationMs": 5000},
+        {"type": "message", "text": "Thinking..."},
+        {"type": "face", "face": "excited"},
     ]
+
+
+def test_display_runtime_clear_transient_view_resets_face_cache():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    runtime.show_idle()
+    runtime.show_thinking()
+    runtime.show_idle()
+
+    commands = [
+        request["args"]
+        for request in client.requests
+        if request["operation"] == OP_DISPLAY_COMMAND
+    ]
+    assert commands == [
+        {"type": "face", "face": "happy"},
+        {"type": "message", "text": "Thinking..."},
+        {"type": "face", "face": "happy"},
+    ]
+
+
+def test_display_runtime_live_image_posts_image_payload_and_clear():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    assert runtime.show_live_image(
+        data_url="data:image/png;base64,abc",
+        title="Camera",
+        ttl_ms=1000,
+    )
+    assert runtime.clear_live_image()
+
+    assert client.requests[0]["operation"] == OP_DISPLAY_IMAGE
+    assert client.requests[0]["args"] == {
+        "title": "Camera",
+        "ttlMs": 1000,
+        "dataUrl": "data:image/png;base64,abc",
+    }
+    assert client.requests[1]["operation"] == OP_DISPLAY_IMAGE
+    assert client.requests[1]["args"] == {"type": "clear"}

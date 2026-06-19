@@ -125,7 +125,7 @@ export SLACK_BOT_TOKEN=...
 
 For Puffle's local browser screen, run the display control server separately at
 `http://localhost:4173`. The `puffle` manifest selects the HTTP-backed
-`interaction_display` resource through provider `puffle-go2-display`.
+`screen_001` resource through provider `puffle-go2-display`.
 Set `display.enabled: false` in a profile when running without the screen.
 
 Snowflake-backed employee directory variables are still optional and only needed
