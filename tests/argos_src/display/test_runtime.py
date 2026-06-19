@@ -74,16 +74,11 @@ def test_display_runtime_state_modes_send_expected_commands():
         if request["operation"] == OP_DISPLAY_COMMAND
     ]
     assert commands == [
-        {"type": "clear"},
         {"type": "face", "face": "happy"},
-        {"type": "clear"},
         {"type": "face", "face": "think"},
-        {"type": "clear"},
         {"type": "face", "face": "think"},
         {"type": "subtitle", "text": "Recording...", "durationMs": 5000},
-        {"type": "clear"},
         {"type": "message", "text": "Thinking..."},
-        {"type": "clear"},
         {"type": "face", "face": "excited"},
     ]
 
@@ -102,11 +97,8 @@ def test_display_runtime_clear_transient_view_resets_face_cache():
         if request["operation"] == OP_DISPLAY_COMMAND
     ]
     assert commands == [
-        {"type": "clear"},
         {"type": "face", "face": "happy"},
-        {"type": "clear"},
         {"type": "message", "text": "Thinking..."},
-        {"type": "clear"},
         {"type": "face", "face": "happy"},
     ]
 
