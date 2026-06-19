@@ -53,7 +53,7 @@ identity_store:
   db_path: var/identity/identity.sqlite3
 
 slack_memory:
-  enabled: false
+  enabled: true
   start_with_agent: false
   bot_token_env: SLACK_BOT_TOKEN
   poll_interval_sec: 1800.0
