@@ -16,6 +16,7 @@ poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
+poetry run python -m scripts.labs.openai_say_lab --help
 ```
 
 Registration quality dry run:
@@ -91,4 +92,20 @@ poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --loo
 # If Snowflake stores Latin-script names and multilingual ASR is returning a
 # native-script transcript, force English transcription for this lab run.
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --language en
+```
+
+One-off OpenAI speech without starting the realtime agent:
+
+```bash
+poetry run python -m scripts.labs.openai_say_lab "Hello from Puffle." --play
+
+# Save an mp3 instead of playing locally.
+poetry run python -m scripts.labs.openai_say_lab "Back in five minutes." --format mp3
+
+# Tune the delivery.
+poetry run python -m scripts.labs.openai_say_lab \
+  "The lab speaker is ready." \
+  --voice marin \
+  --instructions "Sound warm, concise, and a little excited." \
+  --play
 ```
