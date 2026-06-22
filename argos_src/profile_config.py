@@ -11,7 +11,6 @@ import tomli
 import yaml
 from argos_src.face_recognition.constants import DEFAULT_FACE_DB_PATH
 from argos_src.identity.constants import DEFAULT_IDENTITY_DB_PATH
-from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
 from argos_src.agent.gesture_runtime import resolve_gesture_preset_name
 from argos_src.speaker_recognition.constants import DEFAULT_SPEAKER_DB_PATH
 from argos_src.speaker_recognition.models import SpeakerRecognitionPolicy
@@ -160,19 +159,18 @@ class IdentityStoreProfile:
 
 
 @dataclass(frozen=True)
-class MemoryStoreProfile:
-    db_path: str
+class MemoryProfile:
+    enabled: bool = True
+    retention_class: str = "standard"
+    place_room_id: str = "realtime"
+    extract_live_turn_memory: bool = True
 
 
 @dataclass(frozen=True)
 class SlackMemoryChannelProfile:
     name: str
     channel_id: str = ""
-    site_code: str = ""
-    person_memory_enabled: bool = True
-    site_memory_enabled: bool = True
-    include_threads: bool = True
-    max_messages_per_window: int = 200
+    backfill_hours: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -181,7 +179,14 @@ class SlackMemoryProfile:
     start_with_agent: bool = False
     bot_token_env: str = "SLACK_BOT_TOKEN"
     poll_interval_sec: float = 1800.0
-    lookback_minutes: int = 30
+    state_path: str = ".tailwag/slack-state.json"
+    backfill_hours: Optional[float] = None
+    force_backfill: bool = False
+    active_thread_hours: float = 24.0
+    history_limit: int = 200
+    reply_limit: int = 200
+    extract_memory: bool = True
+    include_email: bool = True
     channels: tuple[SlackMemoryChannelProfile, ...] = ()
 
 
@@ -384,11 +389,7 @@ class ScenarioProfile:
             db_path=DEFAULT_IDENTITY_DB_PATH,
         )
     )
-    memory_store: MemoryStoreProfile = field(
-        default_factory=lambda: MemoryStoreProfile(
-            db_path=str(DEFAULT_MEMORY_DB_PATH),
-        )
-    )
+    memory: MemoryProfile = field(default_factory=MemoryProfile)
     slack_memory: SlackMemoryProfile = field(default_factory=SlackMemoryProfile)
     speaker_recognition: SpeakerRecognitionProfile = field(
         default_factory=lambda: SpeakerRecognitionProfile(
@@ -925,7 +926,7 @@ def _parse_profile(
     employee_directory_data = _pop_section(profile_data, "employee_directory")
     knowledge_base_data = _pop_list(profile_data, "knowledge_bases", default=[])
     identity_data = _pop_section(profile_data, "identity_store")
-    memory_data = _pop_section(profile_data, "memory_store")
+    memory_data = _pop_section(profile_data, "memory")
     slack_memory_data = _pop_section(profile_data, "slack_memory")
     face_data = _pop_section(profile_data, "face_recognition")
     speaker_data = _pop_section(profile_data, "speaker_recognition")
@@ -950,8 +951,10 @@ def _parse_profile(
     )
     face_recognition = _parse_face_recognition(face_data)
     identity_store = _parse_identity_store(identity_data)
-    memory_store = _parse_memory_store(memory_data)
+    memory = _parse_memory(memory_data)
     slack_memory = _parse_slack_memory(slack_memory_data)
+    if slack_memory.enabled and not memory.enabled:
+        raise ProfileValidationError("slack_memory.enabled requires memory.enabled.")
     speaker_recognition = _parse_speaker_recognition(speaker_data)
     realtime = _parse_realtime(
         realtime_data,
@@ -993,7 +996,7 @@ def _parse_profile(
         employee_directory=employee_directory,
         knowledge_bases=knowledge_bases,
         identity_store=identity_store,
-        memory_store=memory_store,
+        memory=memory,
         slack_memory=slack_memory,
         face_recognition=face_recognition,
         speaker_recognition=speaker_recognition,
@@ -1424,17 +1427,28 @@ def _parse_identity_store(data: dict[str, Any]) -> IdentityStoreProfile:
     return profile
 
 
-def _parse_memory_store(data: dict[str, Any]) -> MemoryStoreProfile:
-    profile = MemoryStoreProfile(
-        db_path=_pop_optional_str(
+def _parse_memory(data: dict[str, Any]) -> MemoryProfile:
+    retention_class = (
+        _pop_optional_str(data, "retention_class", default="standard") or "standard"
+    ).strip()
+    if not retention_class:
+        raise ProfileValidationError("memory.retention_class must not be empty.")
+    place_room_id = (
+        _pop_optional_str(data, "place_room_id", default="realtime") or "realtime"
+    ).strip()
+    if not place_room_id:
+        raise ProfileValidationError("memory.place_room_id must not be empty.")
+    profile = MemoryProfile(
+        enabled=_pop_bool(data, "enabled", default=True),
+        retention_class=retention_class,
+        place_room_id=place_room_id,
+        extract_live_turn_memory=_pop_bool(
             data,
-            "db_path",
-            default=str(DEFAULT_MEMORY_DB_PATH),
-        )
-        or str(DEFAULT_MEMORY_DB_PATH),
+            "extract_live_turn_memory",
+            default=True,
+        ),
     )
-    profile = replace(profile, db_path=str(resolve_repo_path(profile.db_path)))
-    _reject_unknown(data, "memory_store")
+    _reject_unknown(data, "memory")
     return profile
 
 
@@ -1451,36 +1465,17 @@ def _parse_slack_memory(data: dict[str, Any]) -> SlackMemoryProfile:
         name = _pop_required_str(channel_data, "name", context=context).strip()
         if not name:
             raise ProfileValidationError(f"{context}.name is required.")
-        max_messages = _pop_int(
-            channel_data,
-            "max_messages_per_window",
-            default=200,
-        )
-        if max_messages <= 0:
-            raise ProfileValidationError(
-                f"{context}.max_messages_per_window must be positive."
-            )
+        channel_id = (
+            _pop_optional_str(channel_data, "channel_id", default="") or ""
+        ).strip()
+        backfill_hours = _pop_optional_float(channel_data, "backfill_hours", default=None)
+        if backfill_hours is not None and backfill_hours <= 0:
+            raise ProfileValidationError(f"{context}.backfill_hours must be positive.")
         channels.append(
             SlackMemoryChannelProfile(
                 name=name,
-                channel_id=(
-                    _pop_optional_str(channel_data, "channel_id", default="") or ""
-                ).strip(),
-                site_code=(
-                    _pop_optional_str(channel_data, "site_code", default="") or ""
-                ).strip(),
-                person_memory_enabled=_pop_bool(
-                    channel_data,
-                    "person_memory_enabled",
-                    default=True,
-                ),
-                site_memory_enabled=_pop_bool(
-                    channel_data,
-                    "site_memory_enabled",
-                    default=True,
-                ),
-                include_threads=_pop_bool(channel_data, "include_threads", default=True),
-                max_messages_per_window=max_messages,
+                channel_id=channel_id,
+                backfill_hours=backfill_hours,
             )
         )
         _reject_unknown(channel_data, context)
@@ -1488,21 +1483,62 @@ def _parse_slack_memory(data: dict[str, Any]) -> SlackMemoryProfile:
     poll_interval = _pop_float(data, "poll_interval_sec", default=1800.0)
     if poll_interval <= 0:
         raise ProfileValidationError("slack_memory.poll_interval_sec must be positive.")
-    lookback_minutes = _pop_int(data, "lookback_minutes", default=30)
-    if lookback_minutes <= 0:
-        raise ProfileValidationError("slack_memory.lookback_minutes must be positive.")
+    backfill_hours = _pop_optional_float(data, "backfill_hours", default=None)
+    if backfill_hours is not None and backfill_hours <= 0:
+        raise ProfileValidationError("slack_memory.backfill_hours must be positive.")
+    active_thread_hours = _pop_float(data, "active_thread_hours", default=24.0)
+    if active_thread_hours <= 0:
+        raise ProfileValidationError("slack_memory.active_thread_hours must be positive.")
+    history_limit = _pop_int(data, "history_limit", default=200)
+    if history_limit <= 0:
+        raise ProfileValidationError("slack_memory.history_limit must be positive.")
+    reply_limit = _pop_int(data, "reply_limit", default=200)
+    if reply_limit <= 0:
+        raise ProfileValidationError("slack_memory.reply_limit must be positive.")
+
+    force_backfill = _pop_bool(data, "force_backfill", default=False)
+    start_with_agent = _pop_bool(data, "start_with_agent", default=False)
+    if force_backfill and start_with_agent:
+        raise ProfileValidationError(
+            "slack_memory.force_backfill cannot be used with start_with_agent."
+        )
+    if force_backfill and backfill_hours is None:
+        raise ProfileValidationError(
+            "slack_memory.force_backfill requires slack_memory.backfill_hours."
+        )
+
     profile = SlackMemoryProfile(
         enabled=_pop_bool(data, "enabled", default=False),
-        start_with_agent=_pop_bool(data, "start_with_agent", default=False),
+        start_with_agent=start_with_agent,
         bot_token_env=(
             _pop_optional_str(data, "bot_token_env", default="SLACK_BOT_TOKEN")
             or "SLACK_BOT_TOKEN"
         ).strip()
         or "SLACK_BOT_TOKEN",
         poll_interval_sec=poll_interval,
-        lookback_minutes=lookback_minutes,
+        state_path=str(
+            resolve_repo_path(
+                _pop_optional_str(
+                    data,
+                    "state_path",
+                    default=".tailwag/slack-state.json",
+                )
+                or ".tailwag/slack-state.json"
+            )
+        ),
+        backfill_hours=backfill_hours,
+        force_backfill=force_backfill,
+        active_thread_hours=active_thread_hours,
+        history_limit=history_limit,
+        reply_limit=reply_limit,
+        extract_memory=_pop_bool(data, "extract_memory", default=True),
+        include_email=_pop_bool(data, "include_email", default=True),
         channels=tuple(channels),
     )
+    if profile.enabled and not profile.channels:
+        raise ProfileValidationError(
+            "slack_memory.channels must contain at least one channel when enabled."
+        )
     _reject_unknown(data, "slack_memory")
     return profile
 
@@ -1914,6 +1950,20 @@ def _pop_float(mapping: dict[str, Any], key: str, *, default: float) -> float:
     value = mapping.pop(key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ProfileValidationError(f"{key} must be a number.")
+    return float(value)
+
+
+def _pop_optional_float(
+    mapping: dict[str, Any],
+    key: str,
+    *,
+    default: Optional[float],
+) -> Optional[float]:
+    value = mapping.pop(key, default)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProfileValidationError(f"{key} must be a number or null.")
     return float(value)
 
 

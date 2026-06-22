@@ -278,7 +278,7 @@ def create_agent(
     preference_extractor = None
     slack_memory_service = None
     identity_store = None
-    memory_store = None
+    memory_provider = None
     memory_context_compiler = None
     if (
         needs_face_runtime
@@ -287,14 +287,23 @@ def create_agent(
         or scenario_profile.slack_memory.enabled
     ):
         from argos_src.identity import IdentityStore
-        from argos_src.memory import MemoryContextCompiler, MemoryStore
 
         identity_store = IdentityStore(db_path=scenario_profile.identity_store.db_path)
-        memory_store = MemoryStore(db_path=scenario_profile.memory_store.db_path)
-        memory_context_compiler = MemoryContextCompiler(
-            memory_store,
-            identity_store=identity_store,
+
+    if scenario_profile.memory.enabled and (
+        needs_face_runtime
+        or scenario_profile.face_recognition.preference_extraction.enabled
+        or scenario_profile.slack_memory.enabled
+    ):
+        from argos_src.memory_provider import TailwagMemoryProvider
+
+        memory_provider = TailwagMemoryProvider(
+            site_code=scenario_profile.employee_directory.site_code,
+            place_room_id=scenario_profile.memory.place_room_id,
+            retention_class=scenario_profile.memory.retention_class,
+            extract_live_turn_memory=scenario_profile.memory.extract_live_turn_memory,
         )
+        memory_context_compiler = memory_provider
 
     if needs_face_runtime:
         from argos_src.face_recognition.attention_gate import (
@@ -312,7 +321,7 @@ def create_agent(
             recognition_threshold=scenario_profile.face_recognition.recognition_threshold,
             robot_client=robot_client,
             identity_store=identity_store,
-            memory_store=memory_store,
+            memory_store=memory_provider,
             site_code=scenario_profile.employee_directory.site_code,
             camera_resource_id=scenario_profile.resources.face_camera,
             camera_yaw_offset_rad=(
@@ -356,10 +365,11 @@ def create_agent(
                 ),
             ),
         )
-        if scenario_profile.face_recognition.preference_extraction.enabled:
-            from argos_src.memory.live_chat import PreferenceExtractor
-
-            preference_extractor = PreferenceExtractor(memory_store=memory_store)
+        if (
+            scenario_profile.face_recognition.preference_extraction.enabled
+            and memory_provider is not None
+        ):
+            preference_extractor = memory_provider
         if scenario_profile.face_recognition.enabled:
             face_service.start_loop(
                 camera_resource_id=scenario_profile.resources.face_camera,
@@ -388,18 +398,12 @@ def create_agent(
         )
         employee_directory_service.start_background()
 
-    if scenario_profile.slack_memory.enabled:
-        if memory_store is None:
-            from argos_src.memory import MemoryStore
+    if scenario_profile.slack_memory.enabled and memory_provider is not None:
+        from argos_src.memory_provider import TailwagSlackMemoryService
 
-            memory_store = MemoryStore(db_path=scenario_profile.memory_store.db_path)
-        from argos_src.memory.slack import SlackMemoryService
-
-        slack_memory_service = SlackMemoryService(
+        slack_memory_service = TailwagSlackMemoryService(
             profile=scenario_profile.slack_memory,
-            memory_store=memory_store,
-            identity_store=identity_store,
-            default_site_code=scenario_profile.employee_directory.site_code,
+            episode_recorder=memory_provider,
         )
         if scenario_profile.slack_memory.start_with_agent:
             slack_memory_service.start_background()
