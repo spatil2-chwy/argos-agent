@@ -229,11 +229,10 @@ robot client.
 
 ## Manual Smoke Tests
 
-If you are moving from the old identity-owned memory schema to the current
-identity/memory split, reset local runtime storage once before smoke testing:
+To reset local Argos identity and biometric stores before smoke testing:
 
 ```bash
-rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory
+rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition
 ```
 
 After bring-up, these are the highest-value manual checks:
@@ -243,7 +242,7 @@ After bring-up, these are the highest-value manual checks:
 3. Internal-event turn: trigger a nav or battery event and confirm the robot still responds naturally.
 4. Tool call: ask for something that should call a known tool, like a trick or visual inspection.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.
-6. Preference extraction: have a short recognized-speaker conversation, then inspect memory later with `python3 -m argos_src.memory.manage_memory --person "Your Name"`.
+6. Memory ingestion: have a short recognized-speaker conversation, then inspect the resulting episode/person memory with Tailwag tooling.
 
 ## Targeted Regression Tests
 
@@ -282,7 +281,7 @@ See [observability.md](/home/spatil2/argos-agent/docs/observability.md) for deta
 
 Two important runtime notes:
 
-- Argos no longer mirrors playback or engagement state onto ROS topics just to consume them back internally.
+- Playback and engagement state stay inside the Argos runtime.
 - turn-scoped dynamic instructions are attached on `response.create`; they are not inserted into conversation history.
 
 ## Troubleshooting
@@ -341,8 +340,7 @@ python3 -m argos_src.knowledge.build_faiss chewy_docs
 
 This builds `generated/index.faiss`, `generated/index.pkl`, and
 `generated/vdb_kwargs.json` from files under `documentation/` and `urdfs/`.
-Existing knowledge bases built with the previous external builder do not need
-to be rebuilt if those generated files are already present.
+Knowledge bases with existing generated files do not need to be rebuilt.
 
 Use it from a Go2 profile:
 

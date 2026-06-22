@@ -102,6 +102,13 @@ python3 -m pip install eclipse-zenoh
 `setup_shell.sh` activates the Argos Poetry environment and exposes the repo
 root on `PYTHONPATH`. It does not source ROS.
 
+Tailwag-backed memory also requires the `tailwag-memory` package to be installed
+in the active Argos environment. For local development with the sibling checkout:
+
+```bash
+python3 -m pip install -e /Users/aaggarwal1/Desktop/code/tailwag-memory
+```
+
 ### 4. Configure Argos
 
 ```bash
@@ -122,6 +129,23 @@ Optional integrations:
 ```bash
 export SLACK_BOT_TOKEN=...
 ```
+
+Tailwag-backed memory requires Tailwag runtime configuration when
+`memory.enabled: true`:
+
+```bash
+export NEO4J_URI=bolt://localhost:7687
+export NEO4J_USER=neo4j
+export NEO4J_PASSWORD=tailwag-memory
+export OPENAI_API_KEY=...
+export TAILWAG_EMBEDDING_MODEL=text-embedding-3-small
+export TAILWAG_EMBEDDING_DIMENSION=64
+export TAILWAG_SYNTHESIS_MODEL=gpt-5.5
+```
+
+`SLACK_BOT_TOKEN` is only required when Tailwag Slack polling is enabled. Keep
+the token in the environment and put only `bot_token_env: SLACK_BOT_TOKEN` in
+the profile YAML.
 
 For Puffle's local browser screen, run the display control server separately at
 `http://localhost:4173`. The `puffle` manifest selects the HTTP-backed

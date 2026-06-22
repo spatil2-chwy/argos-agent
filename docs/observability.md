@@ -11,9 +11,7 @@ You can override that with:
 
 ## Current Logging Model
 
-The old three-process timing chain is gone.
-
-The important components now are:
+The primary structured-log components are:
 
 - `realtime`
 - `tool`
@@ -69,9 +67,9 @@ Relevant metrics:
 
 | component | metric | meaning |
 |---|---|---|
-| `pref_extract` | `metric=db_read` | read existing MemoryStore items |
-| `pref_extract` | `metric=llm_extract` | background extraction LLM call |
-| `pref_extract` | `metric=db_write` | MemoryStore write |
+| `pref_extract` | `metric=episode_build` | build Tailwag realtime episode payload |
+| `pref_extract` | `metric=tailwag_record` | Tailwag episode record call |
+| `pref_extract` | `metric=tailwag_extract` | Tailwag-backed memory extraction |
 | `pref_extract` | `metric=total` | total background extraction time |
 
 Relevant usage events:

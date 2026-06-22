@@ -109,10 +109,9 @@ result = self.face_service.enroll_visible_person(
 )
 ```
 
-That means the LLM no longer has to pass title, manager, cost center, job family,
-tenure, or similar fields back into the tool. It should pass the verified username
-when `resolve_employee_identity` returned one. The rest is loaded locally from
-`EmployeeDirectoryService.get_verified_profile()`.
+The LLM should pass the verified username when `resolve_employee_identity`
+returned one. Title, manager, cost center, job family, tenure, and similar
+fields are loaded locally from `EmployeeDirectoryService.get_verified_profile()`.
 
 ## Enrollment Preprocessing
 
@@ -357,7 +356,7 @@ At audio commit, the queued turn carries:
 turn started." If the scene is ambiguous, it is `None`.
 
 `owner_id` means "the resolved owner of this spoken turn." This is the id used
-for live-chat preference extraction and `MemoryStore` ownership.
+for Tailwag realtime episode participants and person-context lookup.
 
 The canonical face-derived name in turn state is `primary_face_person_id`.
 
@@ -458,7 +457,7 @@ camera treat a person standing around two meters back differently from a close
 webcam-like face crop. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
-presence snapshot keeps the old face fields and adds:
+presence snapshot includes:
 
 - `attention_status`
 - `attention_count`
