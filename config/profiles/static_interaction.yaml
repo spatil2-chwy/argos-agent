@@ -173,10 +173,10 @@ engagement:
 
 embodiment:
   gestures:
-    enabled: true
+    enabled: false
     preset: unitree_go2
     tilt_enabled: false
-    nodding_enabled: true
+    nodding_enabled: false
 
 battery:
   low_battery_pct: 10.0
