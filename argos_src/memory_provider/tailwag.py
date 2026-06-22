@@ -207,7 +207,7 @@ class TailwagMemoryProvider:
                         "person_id=%s email=%s reason=%s",
                         rendered_person_id,
                         normalized_email,
-                        "no_unique_email_match_or_merge_candidate",
+                        "no_unique_email_match_or_safe_temp_person",
                     )
             except Exception:
                 logger.exception(
