@@ -72,6 +72,7 @@ face_recognition:
   db_path: var/face_recognition
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
+  live_image_enabled: false
   owner_turn:
     enabled: true
     camera_yaw_offset_rad: 0.0

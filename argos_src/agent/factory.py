@@ -321,6 +321,7 @@ def create_agent(
                 scenario_profile.face_recognition.owner_turn.camera_yaw_offset_rad
             ),
             display_runtime=display_runtime,
+            live_image_enabled=scenario_profile.face_recognition.live_image_enabled,
             depth_gate_settings=(
                 DepthGateSettings(
                     sync_slop_sec=scenario_profile.face_recognition.depth_gate.sync_slop_sec,

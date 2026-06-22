@@ -545,6 +545,21 @@ def test_face_attention_gate_profile_is_configurable():
     assert profile.realtime.admission.open_on_attention_presence is True
 
 
+def test_face_live_image_profile_is_configurable():
+    profile = _parse_profile(
+        {
+            "name": "face-live-image",
+            "face_recognition": {
+                "live_image_enabled": False,
+            },
+        },
+        profile_path=Path("/tmp/face-live-image.yaml"),
+        framework_config={},
+    )
+
+    assert profile.face_recognition.live_image_enabled is False
+
+
 def test_face_enrollment_policy_profile_is_configurable():
     profile = _parse_profile(
         {

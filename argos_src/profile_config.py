@@ -153,6 +153,7 @@ class FaceRecognitionProfile:
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
+    live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
     enrollment_policy: FaceEnrollmentPolicyProfile
@@ -335,6 +336,7 @@ class ScenarioProfile:
             db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
+            live_image_enabled=True,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
                 sync_slop_sec=0.12,
@@ -1502,6 +1504,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_threshold",
             default=0.6,
         ),
+        live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,
         enrollment_policy=enrollment_policy,

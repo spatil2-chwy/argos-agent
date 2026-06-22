@@ -140,6 +140,7 @@ class FaceRecognitionService:
         display_runtime: Any | None = None,
         live_image_title: str = "Camera",
         live_image_ttl_ms: int = 1000,
+        live_image_enabled: bool = True,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
         logger.info(f"Face recognition running on: {self.device}")
@@ -166,6 +167,7 @@ class FaceRecognitionService:
         self._display_runtime = display_runtime
         self._live_image_title = str(live_image_title or "Camera").strip() or "Camera"
         self._live_image_ttl_ms = max(1, int(live_image_ttl_ms))
+        self._live_image_enabled = bool(live_image_enabled)
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
         self._presence_cache = FacePresenceCache(cache_expire_sec=CACHE_EXPIRE_SEC)
         self._loop_thread: Optional[threading.Thread] = None
@@ -1365,6 +1367,8 @@ class FaceRecognitionService:
         *,
         faces: list[dict[str, Any]] | None = None,
     ) -> None:
+        if not bool(getattr(self, "_live_image_enabled", True)):
+            return
         display = getattr(self, "_display_runtime", None)
         if display is None or not bool(getattr(display, "is_configured", False)):
             return
@@ -1391,6 +1395,8 @@ class FaceRecognitionService:
             logger.debug("Display live image update failed", exc_info=True)
 
     def _clear_live_image_frame(self) -> None:
+        if not bool(getattr(self, "_live_image_enabled", True)):
+            return
         display = getattr(self, "_display_runtime", None)
         if display is None or not bool(getattr(display, "is_configured", False)):
             return

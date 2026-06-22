@@ -115,6 +115,7 @@ def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
     service._display_runtime = _Display()
     service._live_image_title = "Camera"
     service._live_image_ttl_ms = 1000
+    service._live_image_enabled = True
 
     module.FaceRecognitionService._publish_live_image_frame(service, _good_image(8))
 
@@ -122,6 +123,28 @@ def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
     assert updates[0]["title"] == "Camera"
     assert updates[0]["ttl_ms"] == 1000
     assert updates[0]["data_url"].startswith("data:image/png;base64,")
+
+
+def test_publish_live_image_frame_skips_display_when_disabled(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    updates = []
+
+    class _Display:
+        is_configured = True
+
+        def show_live_image(self, **kwargs):
+            updates.append(kwargs)
+            return True
+
+    service._display_runtime = _Display()
+    service._live_image_title = "Camera"
+    service._live_image_ttl_ms = 1000
+    service._live_image_enabled = False
+
+    module.FaceRecognitionService._publish_live_image_frame(service, _good_image(8))
+
+    assert updates == []
 
 
 def test_publish_live_image_frame_draws_attention_overlay(monkeypatch):
@@ -139,6 +162,7 @@ def test_publish_live_image_frame_draws_attention_overlay(monkeypatch):
     service._display_runtime = _Display()
     service._live_image_title = "Camera"
     service._live_image_ttl_ms = 1000
+    service._live_image_enabled = True
     image = np.zeros((80, 80, 3), dtype=np.uint8)
     face = {
         "bbox": {"x": 20, "y": 20, "w": 30, "h": 30},
