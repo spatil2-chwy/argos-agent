@@ -143,6 +143,9 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def is_recording_active(self):
             return False
 
+        def update_face_presence_snapshot(self, snapshot):
+            return None
+
         def shutdown(self):
             return None
 
@@ -209,6 +212,18 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def start_loop(self, **kwargs):
             self.start_calls.append(kwargs)
 
+    class _FakeNavigationPolicy:
+        def __init__(
+            self,
+            *,
+            source,
+            interruptible=True,
+            passive_listen_allowed=True,
+        ):
+            self.source = source
+            self.interruptible = interruptible
+            self.passive_listen_allowed = passive_listen_allowed
+
     class _FakeNavigationState:
         def __init__(self, store):
             self.store = store
@@ -231,6 +246,13 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def stop(self):
             return None
 
+    class _FakePatrolLoopBridge:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def on_nav_event(self, event):
+            return None
+
     realtime_stub = types.ModuleType("argos_src.agent.agent_runtime")
     realtime_stub.RealtimeRobotAgent = _FakeRealtimeRobotAgent
     monkeypatch.setitem(sys.modules, "argos_src.agent.agent_runtime", realtime_stub)
@@ -241,10 +263,21 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
 
     battery_mod = types.ModuleType("argos_src.runtime.battery_state")
     battery_mod.BatteryStateCache = object
+    battery_mod.LOW_BATTERY_NAVIGATION_MSG = "Battery is low. Cannot navigate."
     monkeypatch.setitem(sys.modules, "argos_src.runtime.battery_state", battery_mod)
 
     nav_mod = types.ModuleType("argos_src.nav_support.locations")
     nav_mod.LocationStore = lambda **kwargs: SimpleNamespace(kwargs=kwargs)
+    nav_mod.CHARGE_DOCK_LOCATION_NAME = "charge_dock"
+    nav_mod.NavigationPolicy = _FakeNavigationPolicy
+    nav_mod.INTERRUPTIBLE_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="general_navigation"
+    )
+    nav_mod.FOCUSED_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="human_task",
+        interruptible=False,
+        passive_listen_allowed=False,
+    )
     nav_mod.NavigationState = _FakeNavigationState
     monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
 
@@ -258,7 +291,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
 
     bridges_mod = types.ModuleType("argos_src.agent.bridges")
     bridges_mod.FaceEventBridge = _FakeFaceEventBridge
-    bridges_mod.PatrolLoopBridge = object
+    bridges_mod.PatrolLoopBridge = _FakePatrolLoopBridge
     monkeypatch.setitem(sys.modules, "argos_src.agent.bridges", bridges_mod)
 
     startup_mod = types.ModuleType("argos_src.agent.startup")
