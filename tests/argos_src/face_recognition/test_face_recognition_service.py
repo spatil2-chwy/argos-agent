@@ -475,7 +475,7 @@ def test_recognize_faces_continues_when_interaction_update_fails(monkeypatch):
     )
     service._depth_gate_settings = None
     image = _good_image()
-    face = _face(area=2500, depth_m=0.8)
+    face = _face(area=6400, depth_m=0.8)
 
     class _FakeDb:
         def update_interaction(self, _person_id):
@@ -519,7 +519,7 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     image = _good_image()
-    face = _face(area=2500, depth_m=0.8)
+    face = _face(area=6400, depth_m=0.8)
     added = {}
 
     class _FakeDb:
@@ -587,7 +587,7 @@ def test_enroll_visible_person_primes_presence_cache_for_voice_followup(monkeypa
     service = object.__new__(module.FaceRecognitionService)
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     image = _good_image()
-    face = _face(area=2500, depth_m=0.8)
+    face = _face(area=6400, depth_m=0.8)
 
     class _FakeDb:
         def add_person(self, *, name, face_embedding, metadata=None):
@@ -690,7 +690,7 @@ def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
     result = module.FaceRecognitionService._assess_enrollment_face_quality(
         service,
         np.full((128, 128, 3), 120, dtype=np.uint8),
-        _face(area=2500),
+        _face(area=6400),
     )
 
     assert result.accepted is False
@@ -700,7 +700,7 @@ def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
 def test_enrollment_face_quality_rejects_side_face(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    face = _face(area=2500)
+    face = _face(area=6400)
     face["landmarks"]["nose"] = (face["bbox"]["x"] + face["bbox"]["w"] * 0.85, 40.0)
 
     result = module.FaceRecognitionService._assess_enrollment_face_quality(
@@ -720,7 +720,7 @@ def test_enrollment_face_quality_rejects_clipped_bbox(monkeypatch):
     result = module.FaceRecognitionService._assess_enrollment_face_quality(
         service,
         _good_image(),
-        _face(area=2500, x=0, y=10),
+        _face(area=6400, x=0, y=10),
     )
 
     assert result.accepted is False
@@ -761,7 +761,7 @@ def test_prepare_visible_person_enrollment_preview_is_padded_face_crop(monkeypat
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     image = _good_image(size=160)
-    face = _face(area=2500, depth_m=0.8, x=50, y=40)
+    face = _face(area=6400, depth_m=0.8, x=50, y=40)
 
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
@@ -805,7 +805,7 @@ def test_enroll_visible_person_reports_already_known_failure(monkeypatch):
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(
-            faces=[_face(area=2500, depth_m=0.8)]
+            faces=[_face(area=6400, depth_m=0.8)]
         )
     )
     service._recognize_face_match = lambda *_args, **_kwargs: {
@@ -849,7 +849,7 @@ def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch)
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(
-            faces=[_face(area=2500, embedding=next(embeddings))]
+            faces=[_face(area=6400, embedding=next(embeddings))]
         )
     )
     service._recognize_face_match = lambda *_args, **_kwargs: None

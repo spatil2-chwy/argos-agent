@@ -323,6 +323,22 @@ def _diagnose_one_frame(
             face_payload["registration_check"]["agent_equivalent"] = agent_equivalent
         if selected_face is face:
             face_payload["selected_for_enrollment"] = True
+            saved_source_frame = save_preview_image(
+                image,
+                output_dir=preview_dir,
+                prefix=f"dry_run_frame_{frame_index:02d}_source",
+                metadata={
+                    "mode": "dry_run_source_frame",
+                    "frame_index": frame_index,
+                    "camera_resource_id": camera_resource_id,
+                    "image_shape": list(image.shape),
+                    "selected_face_index": index,
+                    "selected_face": summarize_face(face, include_embedding=False),
+                    "quality": quality,
+                    "existing_match": face_payload["existing_match"],
+                    "agent_equivalent": agent_equivalent,
+                },
+            )
             preview = service._enrollment_preview_image(image, face)
             saved_preview = save_preview_image(
                 preview,
@@ -340,6 +356,8 @@ def _diagnose_one_frame(
             )
             if saved_preview:
                 face_payload["saved_preview"] = saved_preview
+            if saved_source_frame:
+                face_payload["saved_source_frame"] = saved_source_frame
         payload["faces"].append(face_payload)
 
     return payload

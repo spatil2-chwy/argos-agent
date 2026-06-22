@@ -177,11 +177,11 @@ The enrollment quality gates live in `FaceEnrollmentPolicy` in
 ```python
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 1600
-    min_sharpness: float = 5.0
-    min_brightness: float = 30.0
+    min_face_area: int = 5000
+    min_sharpness: float = 12.0
+    min_brightness: float = 35.0
     max_brightness: float = 220.0
-    min_contrast: float = 14.0
+    min_contrast: float = 15.5
     max_eye_tilt: float = 0.25
     max_nose_center_offset: float = 0.10
     min_embedding_similarity: float = 0.70
@@ -191,14 +191,14 @@ class FaceEnrollmentPolicy:
 
 | Reason | Meaning | User guidance |
 |---|---|---|
-| `face_too_small` | Face bbox area is below `1600` px. | Come closer. |
+| `face_too_small` | Face bbox area is below `5000` px. | Come closer. |
 | `face_clipped` | Face touches image boundary. | Center whole face in view. |
 | `missing_landmarks` | Required eye, nose, or mouth landmarks are missing. | Face the camera directly. |
 | `side_face` | Eye tilt or nose offset suggests a profile/angled face. | Face the camera directly. |
-| `too_blurry` | Gradient-based sharpness below `5.0`. | Hold still. |
-| `too_dark` | Mean crop brightness below `30.0`. | Move to better light. |
+| `too_blurry` | Gradient-based sharpness below `12.0`. | Hold still. |
+| `too_dark` | Mean crop brightness below `35.0`. | Move to better light. |
 | `too_bright` | Mean crop brightness above `220.0`. | Move away from bright light. |
-| `low_contrast` | Crop contrast below `14.0`. | Move to better light. |
+| `low_contrast` | Crop contrast below `15.5`. | Move to better light. |
 | `embedding_inconsistent` | Fewer than 3 accepted burst embeddings are mutually similar enough. | Hold still and face the camera. |
 
 The final saved face reference is the average of normalized embeddings from

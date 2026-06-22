@@ -33,8 +33,10 @@ Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
 waiting indefinitely.
 
 Current registration tuning defaults match the production agent:
-- `min_brightness=30`
-- `min_contrast=14`
+- `min_face_area=5000`
+- `min_sharpness=12`
+- `min_brightness=35`
+- `min_contrast=15.5`
 - `max_nose_center_offset=0.1`
 
 Use `--details` when you want the full diagnostic dump.

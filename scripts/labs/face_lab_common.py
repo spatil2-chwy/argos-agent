@@ -107,7 +107,18 @@ def add_enrollment_policy_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_enrollment_policy(args: argparse.Namespace) -> FaceEnrollmentPolicy:
-    policy = DEFAULT_FACE_ENROLLMENT_POLICY
+    profile = load_scenario_profile(args.profile)
+    profile_policy = profile.face_recognition.enrollment_policy
+    policy = FaceEnrollmentPolicy(
+        min_face_area=profile_policy.min_face_area,
+        min_sharpness=profile_policy.min_sharpness,
+        min_brightness=profile_policy.min_brightness,
+        max_brightness=profile_policy.max_brightness,
+        min_contrast=profile_policy.min_contrast,
+        max_eye_tilt=profile_policy.max_eye_tilt,
+        max_nose_center_offset=profile_policy.max_nose_center_offset,
+        min_embedding_similarity=profile_policy.min_embedding_similarity,
+    )
     replacements: dict[str, Any] = {}
     for attr in (
         "min_face_area",
