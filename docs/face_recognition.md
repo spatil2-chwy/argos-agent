@@ -178,7 +178,7 @@ The enrollment quality gates live in `FaceEnrollmentPolicy` in
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
     min_face_area: int = 1600
-    min_sharpness: float = 20.0
+    min_sharpness: float = 5.0
     min_brightness: float = 30.0
     max_brightness: float = 220.0
     min_contrast: float = 14.0
@@ -195,7 +195,7 @@ class FaceEnrollmentPolicy:
 | `face_clipped` | Face touches image boundary. | Center whole face in view. |
 | `missing_landmarks` | Required eye, nose, or mouth landmarks are missing. | Face the camera directly. |
 | `side_face` | Eye tilt or nose offset suggests a profile/angled face. | Face the camera directly. |
-| `too_blurry` | Gradient-based sharpness below `20.0`. | Hold still. |
+| `too_blurry` | Gradient-based sharpness below `5.0`. | Hold still. |
 | `too_dark` | Mean crop brightness below `30.0`. | Move to better light. |
 | `too_bright` | Mean crop brightness above `220.0`. | Move away from bright light. |
 | `low_contrast` | Crop contrast below `14.0`. | Move to better light. |

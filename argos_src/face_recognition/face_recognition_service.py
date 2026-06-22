@@ -53,7 +53,7 @@ LOOP_HEARTBEAT_LOG_SEC = 5.0
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
     min_face_area: int = 1600
-    min_sharpness: float = 20.0
+    min_sharpness: float = 5.0
     min_brightness: float = 30.0
     max_brightness: float = 220.0
     min_contrast: float = 14.0
