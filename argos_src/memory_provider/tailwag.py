@@ -197,7 +197,18 @@ class TailwagMemoryProvider:
         client = self._client()
         if normalized_email:
             try:
-                client.rekey_person_by_email(normalized_email, rendered_person_id)
+                rekeyed = client.rekey_person_by_email(
+                    normalized_email,
+                    rendered_person_id,
+                )
+                if rekeyed is False:
+                    logger.info(
+                        "Tailwag person rekey unresolved; identity review needed "
+                        "person_id=%s email=%s reason=%s",
+                        rendered_person_id,
+                        normalized_email,
+                        "no_unique_email_match_or_merge_candidate",
+                    )
             except Exception:
                 logger.exception(
                     "Tailwag person rekey by email failed email=%s person_id=%s",

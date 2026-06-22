@@ -225,8 +225,7 @@ python3 -m argos_src.knowledge.build_faiss chewy_docs
 ```
 
 Existing `generated/index.faiss`, `generated/index.pkl`, and
-`generated/vdb_kwargs.json` folders created by the previous external builder
-remain compatible.
+`generated/vdb_kwargs.json` folders remain compatible.
 
 ## Troubleshooting
 

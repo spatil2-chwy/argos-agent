@@ -341,6 +341,7 @@ def test_employee_directory_defaults_to_disabled():
 
     assert profile.employee_directory.enabled is False
     assert profile.employee_directory.site_code == ""
+    assert profile.employee_directory.email_domain == ""
 
 
 def test_employee_directory_requires_site_code_when_enabled():
@@ -406,6 +407,7 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
             "employee_directory": {
                 "enabled": True,
                 "site_code": "BOS3",
+                "email_domain": "Chewy.COM",
             },
         },
         profile_path=Path("/tmp/employee-directory-enabled-tool.yaml"),
@@ -416,6 +418,7 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
         "identity.resolve_employee_identity",
     )
     assert profile.employee_directory.site_code == "BOS3"
+    assert profile.employee_directory.email_domain == "Chewy.COM"
 
 
 def test_face_db_path_resolves_from_repo_root_not_cwd():

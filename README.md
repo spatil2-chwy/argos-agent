@@ -58,6 +58,6 @@ Canonical operator guide: `docs/launch.md`
 - Face recognition: `docs/face_recognition.md`
 - Speaker recognition: `docs/speaker_recognition.md`
 - Identity store: `docs/identity_store.md`
-- Memory provider: `docs/memory_store.md`
+- Memory provider: `docs/memory_provider.md`
 - Employee directory: `docs/employee_directory.md`
 - Observability: `docs/observability.md`

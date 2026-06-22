@@ -6,7 +6,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from argos_src.employee_directory.service import EmployeeDirectoryService
+from argos_src.employee_directory.service import (
+    EmployeeDirectoryService,
+    employee_email_from_username,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -99,6 +102,19 @@ def _build_service(rows: list[tuple[Any, ...]]) -> EmployeeDirectoryService:
     )
     service.load_directory()
     return service
+
+
+def test_employee_email_from_username_normalizes_directory_email():
+    assert (
+        employee_email_from_username(" spatil2 ", " Chewy.COM ")
+        == "spatil2@chewy.com"
+    )
+    assert (
+        employee_email_from_username(" Sakshee.Patil@Chewy.COM ", "ignored.com")
+        == "sakshee.patil@chewy.com"
+    )
+    assert employee_email_from_username("", "chewy.com") == ""
+    assert employee_email_from_username("spatil2", "") == ""
 
 
 def test_resolve_employee_identity_tool_returns_directory_unavailable_payload():

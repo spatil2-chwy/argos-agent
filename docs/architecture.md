@@ -7,7 +7,7 @@ This is the high-level map of the current Argos stack. The deeper component docs
 - `voice.md`
 - `speaker_recognition.md`
 - `face_recognition.md`
-- `memory_store.md`
+- `memory_provider.md`
 - `observability.md`
 
 ## Core Idea
@@ -74,7 +74,7 @@ camera + optional depth
 Tailwag is the semantic memory writer and person-context source. Argos sends the
 full active conversation episode to Tailwag from speaker-owned realtime turn
 text. Prompt views still surface as `About` and `Potential Followups`, but the
-storage and extraction contract now lives outside Argos. See `memory_store.md`
+storage and extraction contract lives outside Argos. See `memory_provider.md`
 for the Tailwag-backed provider contract.
 
 Important distinctions:

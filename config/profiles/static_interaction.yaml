@@ -36,6 +36,7 @@ tools:
 employee_directory:
   enabled: true
   site_code: "BOS3"
+  email_domain: chewy.com
 
 knowledge_bases:
   - kind: whoami_query

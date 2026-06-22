@@ -65,6 +65,7 @@ class ToolsProfile:
 class EmployeeDirectoryProfile:
     enabled: bool
     site_code: str
+    email_domain: str = ""
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,7 @@ class ScenarioProfile:
         default_factory=lambda: EmployeeDirectoryProfile(
             enabled=False,
             site_code="",
+            email_domain="",
         )
     )
     knowledge_bases: tuple[KnowledgeBaseProfile, ...] = ()
@@ -1104,6 +1106,7 @@ def _parse_knowledge_base_entry(item: Any, *, index: int) -> KnowledgeBaseProfil
 def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
     enabled = _pop_bool(data, "enabled", default=False)
     site_code = (_pop_optional_str(data, "site_code", default="") or "").strip()
+    email_domain = (_pop_optional_str(data, "email_domain", default="") or "").strip()
     _reject_unknown(data, "employee_directory")
     if enabled and not site_code:
         raise ProfileValidationError(
@@ -1112,6 +1115,7 @@ def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
     return EmployeeDirectoryProfile(
         enabled=enabled,
         site_code=site_code,
+        email_domain=email_domain,
     )
 
 

@@ -395,6 +395,7 @@ def create_agent(
 
         employee_directory_service = EmployeeDirectoryService(
             site_code=scenario_profile.employee_directory.site_code,
+            email_domain=scenario_profile.employee_directory.email_domain,
         )
         employee_directory_service.start_background()
 
