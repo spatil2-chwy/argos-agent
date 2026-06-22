@@ -61,7 +61,7 @@ memory:
 
 slack_memory:
   enabled: true
-  start_with_agent: false
+  start_with_agent: true
   bot_token_env: SLACK_BOT_TOKEN
   poll_interval_sec: 1800.0
   state_path: .tailwag/slack-state.json
