@@ -3,8 +3,8 @@
 These scripts are small lab tools for testing Argos functionality without starting
 the full realtime agent.
 
-They still use the real Argos service code, profile config, ROS camera topics, face
-embedding model, and face/identity stores. They are meant for diagnosis and
+They still use the real Argos service code, profile config, provider camera
+resources, face embedding model, and face/identity stores. They are meant for diagnosis and
 parameter tuning, not for normal user-facing registration.
 
 Run from the repo root:
@@ -24,6 +24,9 @@ Registration quality dry run:
 ```bash
 poetry run python -m scripts.labs.face_registration_lab --frames 5
 ```
+
+Dry-run and enrollment previews are saved under `scripts/labs/face_preview` by
+default. Use `--preview-dir /path/to/dir` to choose another folder.
 
 With depth enabled, each diagnostic frame waits until a synced RGBD pair arrives.
 Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of

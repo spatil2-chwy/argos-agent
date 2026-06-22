@@ -175,6 +175,7 @@ argos_src/face_recognition/db/
 argos_src/speaker_recognition/db/
 argos_src/identity/db/
 argos_src/memory/db/
+scripts/labs/face_preview/
 
 *.codex
 

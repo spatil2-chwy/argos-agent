@@ -31,6 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.labs.face_lab_common import (
+    DEFAULT_PREVIEW_DIR,
     add_enrollment_policy_args,
     add_profile_args,
     build_enrollment_policy,
@@ -38,6 +39,8 @@ from scripts.labs.face_lab_common import (
     configure_logging,
     describe_enrollment_face_quality,
     json_print,
+    save_preview_data_url,
+    save_preview_image,
     summarize_face,
 )
 
@@ -92,7 +95,56 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print full per-face diagnostic internals instead of compact tuning output.",
     )
+    parser.add_argument(
+        "--preview-dir",
+        default=str(DEFAULT_PREVIEW_DIR),
+        help=(
+            "Directory for saved face preview PNG/JSON files. "
+            "Default: scripts/labs/face_preview."
+        ),
+    )
     return parser
+
+
+class _LabPreviewRuntime:
+    """Lab-only display review replacement that saves and accepts the preview."""
+
+    is_configured = True
+
+    def __init__(self, output_dir: str | Path) -> None:
+        self.output_dir = Path(output_dir)
+        self.saved_reviews: list[dict[str, str]] = []
+
+    def review_face_capture(
+        self,
+        *,
+        request_id: str,
+        image_url: str,
+        title: str,
+        accept_label: str,
+        reject_label: str,
+    ) -> dict[str, Any]:
+        saved = save_preview_data_url(
+            image_url,
+            output_dir=self.output_dir,
+            prefix=f"enroll_{request_id}",
+            metadata={
+                "mode": "enroll_review",
+                "request_id": request_id,
+                "title": title,
+                "accept_label": accept_label,
+                "reject_label": reject_label,
+                "auto_accepted": True,
+            },
+        )
+        if saved:
+            self.saved_reviews.append(saved)
+        return {
+            "available": True,
+            "accepted": True,
+            "status": "accepted",
+            **({"saved_preview": saved} if saved else {}),
+        }
 
 
 def _agent_equivalent_for_quality(quality: dict[str, Any]) -> dict[str, Any]:
@@ -143,11 +195,13 @@ def _agent_equivalent_for_prepare(prepared: Any) -> dict[str, Any]:
 
 def _diagnose_one_frame(
     service: Any,
-    camera_topic: str,
+    camera_resource_id: str,
     timeout: float,
     *,
     max_frame_wait_sec: float,
     details: bool,
+    preview_dir: str | Path,
+    frame_index: int,
 ) -> dict[str, Any]:
     started_at = time.monotonic()
     attempts = 0
@@ -155,7 +209,10 @@ def _diagnose_one_frame(
     depth_m = None
     while image is None:
         attempts += 1
-        image, depth_m = service._capture_for_recognition(camera_topic, timeout=timeout)
+        image, depth_m = service._capture_for_recognition(
+            camera_resource_id,
+            timeout=timeout,
+        )
         elapsed = time.monotonic() - started_at
         if image is not None:
             break
@@ -175,6 +232,7 @@ def _diagnose_one_frame(
                     ),
                 },
             }
+        time.sleep(0.02)
 
     prepared = service._prepare_faces_for_recognition_result(image, depth_m)
     payload: dict[str, Any] = {
@@ -265,6 +323,23 @@ def _diagnose_one_frame(
             face_payload["registration_check"]["agent_equivalent"] = agent_equivalent
         if selected_face is face:
             face_payload["selected_for_enrollment"] = True
+            preview = service._enrollment_preview_image(image, face)
+            saved_preview = save_preview_image(
+                preview,
+                output_dir=preview_dir,
+                prefix=f"dry_run_frame_{frame_index:02d}_face_{index:02d}",
+                metadata={
+                    "mode": "dry_run",
+                    "frame_index": frame_index,
+                    "face_index": index,
+                    "camera_resource_id": camera_resource_id,
+                    "quality": quality,
+                    "existing_match": face_payload["existing_match"],
+                    "agent_equivalent": agent_equivalent,
+                },
+            )
+            if saved_preview:
+                face_payload["saved_preview"] = saved_preview
         payload["faces"].append(face_payload)
 
     return payload
@@ -286,13 +361,17 @@ def main() -> int:
             {
                 "mode": "enroll" if args.enroll else "dry_run",
                 "profile": config["profile_name"],
-                "camera_topic": config["camera_topic"],
+                "camera_resource_id": config["camera_resource_id"],
                 "db_path": config["db_path"],
                 "identity_db_path": config["identity_db_path"],
                 "loop_interval_sec": config["loop_interval_sec"],
                 "recognition_threshold": config["recognition_threshold"],
+                "provider_transport": config["provider_transport"],
+                "provider_id": config["provider_id"],
+                "provider_resource_id": config["provider_resource_id"],
                 "depth_gate": vars(depth_settings) if depth_settings is not None else None,
                 "enrollment_policy": vars(enrollment_policy),
+                "preview_dir": str(Path(args.preview_dir)),
             }
         )
 
@@ -305,10 +384,12 @@ def main() -> int:
         for index in range(max(0, int(args.frames))):
             frame_payload = _diagnose_one_frame(
                 service,
-                config["camera_topic"],
+                config["camera_resource_id"],
                 timeout=timeout,
                 max_frame_wait_sec=max(0.0, float(args.max_frame_wait_sec)),
                 details=bool(args.details),
+                preview_dir=args.preview_dir,
+                frame_index=index,
             )
             frame_payload["frame_index"] = index
             diagnostics.append(frame_payload)
@@ -337,15 +418,26 @@ def main() -> int:
             )
             return 0
 
+        preview_runtime = _LabPreviewRuntime(args.preview_dir)
         result = service.enroll_visible_person(
             official_name=args.name,
             username=args.username,
-            camera_topic=config["camera_topic"],
+            camera_resource_id=config["camera_resource_id"],
+            display_runtime=preview_runtime,
         )
-        json_print({"summary": "enrollment_result", "result": result})
+        json_print(
+            {
+                "summary": "enrollment_result",
+                "result": result,
+                "saved_previews": preview_runtime.saved_reviews,
+            }
+        )
         return 0 if result.get("success") else 2
     finally:
         service.shutdown()
+        robot_client = config.get("robot_client") if "config" in locals() else None
+        if robot_client is not None:
+            robot_client.shutdown()
 
 
 if __name__ == "__main__":

@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import math
 import sys
 from dataclasses import asdict, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import numpy as np
+from PIL import Image as PILImage
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -22,7 +27,10 @@ from argos_src.face_recognition.face_recognition_service import (
     FaceEnrollmentPolicy,
     FaceRecognitionService,
 )
+from argos_src.provider_api.factory import create_provider_client
 from argos_src.profile_config import load_scenario_profile, resolve_repo_path
+
+DEFAULT_PREVIEW_DIR = _REPO_ROOT / "scripts" / "labs" / "face_preview"
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -39,9 +47,17 @@ def add_profile_args(parser: argparse.ArgumentParser) -> None:
         help="Argos profile name or YAML path. Default: static_interaction.",
     )
     parser.add_argument(
-        "--camera-topic",
+        "--camera-resource",
         default="",
-        help="Override face_recognition.camera_topic.",
+        help="Override resources.face_camera.",
+    )
+    parser.add_argument(
+        "--provider-transport",
+        default="",
+        help=(
+            "Override the profile provider transport for lab runs. "
+            "Use 'fake' for no-hardware smoke tests."
+        ),
     )
     parser.add_argument(
         "--db-path",
@@ -63,11 +79,6 @@ def add_profile_args(parser: argparse.ArgumentParser) -> None:
         "--disable-depth",
         action="store_true",
         help="Capture color only and skip the depth gate.",
-    )
-    parser.add_argument(
-        "--depth-topic",
-        default="",
-        help="Override face_recognition.depth_gate.depth_topic.",
     )
     parser.add_argument("--sync-slop-sec", type=float, default=None)
     parser.add_argument("--sync-queue-size", type=int, default=None)
@@ -117,7 +128,7 @@ def build_enrollment_policy(args: argparse.Namespace) -> FaceEnrollmentPolicy:
 def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
     profile = load_scenario_profile(args.profile)
     face = profile.face_recognition
-    camera_topic = args.camera_topic or face.camera_topic
+    camera_resource_id = args.camera_resource or profile.resources.face_camera
     db_path = str(resolve_repo_path(args.db_path)) if args.db_path else face.db_path
     identity_db_path = (
         str(resolve_repo_path(args.identity_db_path))
@@ -130,10 +141,13 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
         if args.recognition_threshold is not None
         else float(face.recognition_threshold)
     )
+    provider_transport = (
+        str(args.provider_transport or "").strip()
+        or profile.robot.bridge.transport
+    )
     depth_settings = None
     if face.depth_gate.enabled and not args.disable_depth:
         depth_settings = DepthGateSettings(
-            depth_topic=args.depth_topic or face.depth_gate.depth_topic,
             sync_slop_sec=(
                 float(args.sync_slop_sec)
                 if args.sync_slop_sec is not None
@@ -177,12 +191,15 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
         )
     return {
         "profile_name": profile.name,
-        "camera_topic": camera_topic,
+        "camera_resource_id": camera_resource_id,
         "db_path": db_path,
         "identity_db_path": identity_db_path,
         "loop_interval_sec": loop_interval_sec,
         "recognition_threshold": recognition_threshold,
         "depth_settings": depth_settings,
+        "provider_transport": provider_transport,
+        "provider_id": profile.robot.bridge.provider_id,
+        "provider_resource_id": profile.robot.bridge.resource_id,
     }
 
 
@@ -192,13 +209,25 @@ def build_face_service(
     enrollment_policy: FaceEnrollmentPolicy | None = None,
 ) -> tuple[FaceRecognitionService, dict[str, Any]]:
     config = load_face_runtime_config(args)
+    profile = load_scenario_profile(args.profile)
+    robot_client = create_provider_client(
+        transport=config["provider_transport"],
+        key_prefix=profile.robot.bridge.key_prefix,
+        connect_endpoints=profile.robot.bridge.connect_endpoints,
+        resource_id=profile.robot.bridge.resource_id,
+        manifest=profile.manifest,
+    )
+    robot_client.start()
     service = FaceRecognitionService(
         db_path=config["db_path"],
         identity_db_path=config["identity_db_path"],
         recognition_threshold=config["recognition_threshold"],
+        robot_client=robot_client,
+        camera_resource_id=config["camera_resource_id"],
         depth_gate_settings=config["depth_settings"],
         enrollment_policy=enrollment_policy,
     )
+    config["robot_client"] = robot_client
     return service, config
 
 
@@ -407,6 +436,85 @@ def describe_enrollment_face_quality(
             "real hand/hair occlusion because MTCNN may still infer plausible landmarks."
         ),
         "policy": asdict(policy),
+    }
+
+
+def save_preview_image(
+    image: Any,
+    *,
+    output_dir: str | Path | None = None,
+    prefix: str = "face_preview",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Save an enrollment preview image and adjacent JSON metadata."""
+    if image is None or not hasattr(image, "shape"):
+        return {}
+
+    target_dir = Path(output_dir) if output_dir else DEFAULT_PREVIEW_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe_prefix = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_"
+        for ch in str(prefix or "face_preview")
+    ).strip("_") or "face_preview"
+    image_path = target_dir / f"{timestamp}_{safe_prefix}.png"
+    metadata_path = target_dir / f"{timestamp}_{safe_prefix}.json"
+
+    arr = np.asarray(image)
+    if arr.dtype in (np.float32, np.float64):
+        arr = np.clip(arr, 0.0, 1.0)
+        arr = (arr * 255.0).round().astype(np.uint8)
+    else:
+        arr = np.ascontiguousarray(arr)
+    PILImage.fromarray(arr).save(image_path)
+
+    metadata_payload = dict(metadata or {})
+    metadata_payload.setdefault("image_path", str(image_path))
+    metadata_payload.setdefault("image_shape", list(getattr(image, "shape", ())))
+    metadata_path.write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "image_path": str(image_path),
+        "metadata_path": str(metadata_path),
+    }
+
+
+def save_preview_data_url(
+    data_url: str,
+    *,
+    output_dir: str | Path | None = None,
+    prefix: str = "face_preview",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Save the exact PNG data URL that the display review would receive."""
+    rendered = str(data_url or "").strip()
+    marker = "base64,"
+    if marker not in rendered:
+        return {}
+
+    target_dir = Path(output_dir) if output_dir else DEFAULT_PREVIEW_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe_prefix = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_"
+        for ch in str(prefix or "face_preview")
+    ).strip("_") or "face_preview"
+    image_path = target_dir / f"{timestamp}_{safe_prefix}.png"
+    metadata_path = target_dir / f"{timestamp}_{safe_prefix}.json"
+
+    encoded = rendered.split(marker, 1)[1]
+    image_path.write_bytes(base64.b64decode(encoded))
+    metadata_payload = dict(metadata or {})
+    metadata_payload.setdefault("image_path", str(image_path))
+    metadata_path.write_text(
+        json.dumps(metadata_payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "image_path": str(image_path),
+        "metadata_path": str(metadata_path),
     }
 
 
