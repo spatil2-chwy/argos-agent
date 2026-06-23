@@ -14,10 +14,54 @@ cd ~/argos-agent
 source setup_shell.sh
 poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
+poetry run python -m scripts.labs.face_capture_lab --help
+poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 ```
+
+## Structured perception labs + eval
+
+Use these when you want repeatable artifacts plus a label file for quantitative
+evaluation. Labs write runs under `var/labs/...`; eval writes reports under
+`var/eval/perception/...`.
+
+Face enrollment/detection/recognition/depth/attention capture:
+
+```bash
+poetry run python -m scripts.labs.face_capture_lab --mode enrollment --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode recognition --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 20 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode depth --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode all --frames 10 --interval-sec 1
+```
+
+Audio detection capture:
+
+```bash
+poetry run python -m scripts.labs.audio_detection_lab --clips 10
+poetry run python -m scripts.labs.audio_detection_lab --audio-file /path/to/clip.wav
+```
+
+After capture, edit the generated `labels.todo.jsonl` and fill only the label
+fields you know. Then run eval:
+
+```bash
+poetry run python -m scripts.eval.perception_eval --run-dir var/labs/face/enrollment/<run_id>
+poetry run python -m scripts.eval.perception_eval --run-dir var/labs/audio/detection/<run_id>
+```
+
+Eval produces:
+
+- `eval_report.md`
+- `eval_report.json`
+- `metrics.csv`
+- `failures.csv`
+- `threshold_sweeps.csv`
+
+Ground truth is manual for v1: raw camera/audio artifacts do not contain recall
+labels by themselves. The lab predicts; you label; eval computes metrics.
 
 Registration quality dry run:
 

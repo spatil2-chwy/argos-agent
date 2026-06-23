@@ -22,6 +22,10 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from argos_src.face_recognition.depth_gate import DepthGateSettings
+from argos_src.face_recognition.attention_gate import (
+    AttentionGateSettings,
+    AttentionSmoothingSettings,
+)
 from argos_src.face_recognition.face_recognition_service import (
     DEFAULT_FACE_ENROLLMENT_POLICY,
     FaceEnrollmentPolicy,
@@ -214,6 +218,32 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def build_attention_gate_settings(profile: Any) -> AttentionGateSettings:
+    attention_gate = profile.face_recognition.attention_gate
+    return AttentionGateSettings(
+        enabled=attention_gate.enabled,
+        min_face_area=attention_gate.min_face_area,
+        min_face_area_ratio=attention_gate.min_face_area_ratio,
+        max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
+        max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
+        max_abs_roll_deg=attention_gate.max_abs_roll_deg,
+        distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
+        distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
+        distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
+        near_face_area_ratio=attention_gate.near_face_area_ratio,
+        distant_face_area_ratio=attention_gate.distant_face_area_ratio,
+        near_depth_m=attention_gate.near_depth_m,
+        distant_depth_m=attention_gate.distant_depth_m,
+        max_center_offset_ratio=attention_gate.max_center_offset_ratio,
+        min_confidence=attention_gate.min_confidence,
+        smoothing=AttentionSmoothingSettings(
+            window_sec=attention_gate.smoothing_window_sec,
+            min_observations=attention_gate.min_attentive_observations,
+            hold_sec=attention_gate.hold_sec,
+        ),
+    )
+
+
 def build_face_service(
     args: argparse.Namespace,
     *,
@@ -236,6 +266,7 @@ def build_face_service(
         robot_client=robot_client,
         camera_resource_id=config["camera_resource_id"],
         depth_gate_settings=config["depth_settings"],
+        attention_gate_settings=build_attention_gate_settings(profile),
         enrollment_policy=enrollment_policy,
     )
     config["robot_client"] = robot_client
