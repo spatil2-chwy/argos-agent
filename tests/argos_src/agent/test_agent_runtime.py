@@ -1589,6 +1589,58 @@ def test_stale_cooldown_admission_does_not_override_idle_display():
     assert display_modes == []
 
 
+def test_closed_admission_clears_passive_alert_display():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent.realtime_profile.wake_window_sec = 5.0
+    agent.realtime_profile.admission = SimpleNamespace(
+        block_during_speaking=True,
+        block_during_engaged=False,
+        open_on_face_presence=False,
+        open_on_attention_presence=True,
+        open_on_interaction_states=("alert",),
+        open_on_wake_window=False,
+    )
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._wake_window_until = 0.0
+    agent._recording_active = False
+    agent._recording_started_at = 0.0
+    agent._last_voice_at = 0.0
+    agent._face_gate = SimpleNamespace(
+        is_face_present=lambda: False,
+        is_attention_present=lambda: False,
+    )
+    agent._vad = lambda *_args, **_kwargs: (False, {})
+    agent._wake_word = lambda *_args, **_kwargs: (False, {})
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "alert"
+
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert agent._display_queue.get_nowait() == ("mode", "idle")
+    assert agent._display_mode == "idle"
+
+
+def test_closed_admission_does_not_clear_thinking_display():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "thinking"
+
+    agent._clear_passive_alert_display_if_needed()
+
+    assert agent._display_queue.empty()
+    assert agent._display_mode == "thinking"
+
+
 def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():
     agent = _make_agent()
     seen = []

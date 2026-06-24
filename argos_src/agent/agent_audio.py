@@ -277,6 +277,14 @@ class RealtimeAgentAudioMixin:
                         display_state_still_current = current_state == interaction_state
                     if callable(display_mode) and display_state_still_current:
                         display_mode("alert")
+                else:
+                    clear_passive_alert = getattr(
+                        self,
+                        "_clear_passive_alert_display_if_needed",
+                        None,
+                    )
+                    if callable(clear_passive_alert):
+                        clear_passive_alert()
                 if allowed and voice_detected:
                     self._candidate_voice_blocks = (
                         int(getattr(self, "_candidate_voice_blocks", 0) or 0) + 1
