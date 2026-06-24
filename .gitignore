@@ -179,3 +179,4 @@ argos_src/memory/db/
 *.codex
 
 *.snowflake_env
+.tailwag

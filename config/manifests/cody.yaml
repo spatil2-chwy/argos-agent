@@ -1,0 +1,45 @@
+id: cody
+display_name: Cody
+
+providers:
+  - id: cody-go2
+    transport: zenoh
+    key_prefix: argos/providers/cody-go2
+    connect_endpoints: []
+
+  - id: cody-go2-display
+    transport: http
+    key_prefix: argos/providers/cody-go2-display
+    connect_endpoints:
+      - http://localhost:4173
+
+resources:
+  - id: base
+    kind: robot_base
+    family: unitree_go2
+    provider: cody-go2
+    capabilities:
+      - motion.velocity
+      - posture.command
+      - embodiment.action
+      - battery.state
+      - transform.lookup
+      - presence.face.publish
+      - voice_command.publish
+
+  - id: realsense_001
+    kind: camera
+    hardware: realsense
+    provider: cody-go2
+    capabilities:
+      - camera.rgb
+      - camera.rgbd
+      - camera.intrinsics
+
+  - id: screen_001
+    kind: display
+    hardware: cody_screen
+    provider: cody-go2-display
+    capabilities:
+      - display.command
+      - display.interaction

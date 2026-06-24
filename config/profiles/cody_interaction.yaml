@@ -1,0 +1,192 @@
+name: cody_interaction
+
+manifest: cody
+
+resources:
+  primary_robot: base
+  face_camera: realsense_001
+  scene_camera: realsense_001
+  interaction_display: screen_001
+
+display:
+  enabled: true
+
+navigation:
+  locations_file:
+  startup_patrol_route: []
+
+tools:
+  enabled_tool_ids:
+    - posture.rest
+    - posture.stand
+    - posture.stop
+    - posture.sit
+    - embodiment.unitree_go2.hello
+    - embodiment.unitree_go2.stretch
+    - embodiment.unitree_go2.content
+    - embodiment.unitree_go2.bow_down
+    - embodiment.unitree_go2.look_up
+    - embodiment.unitree_go2.left_tilt
+    - embodiment.unitree_go2.right_tilt
+    - motion.move_robot
+    - vision.capture_scene
+    - identity.enroll_visible_person
+    - identity.resolve_employee_identity
+
+employee_directory:
+  enabled: true
+  site_code: "BOS3"
+  email_domain: chewy.com
+
+knowledge_bases:
+  - kind: whoami_query
+    root_dir: chewy_docs
+    tool_name: query_chewy_knowledge
+    description: Search Chewy Robotics company documentation and knowledge base. Use this for factual questions about Chewy Robotics products, team, policies, workplace information, or other company information. Do not use it for casual banter or visual questions.
+    k: 4
+  - kind: whoami_query
+    root_dir: go2_identity
+    tool_name: query_puffle_identity
+    description: Search Puffle's robot identity and embodiment knowledge base. Use this for detailed or technical factual questions about what kind of robot you are, your hardware, sensors, privacy and data handling, face recognition, memory fields, speech pipeline, and current system capabilities or limits like "whats the black thing on your head?" or "how do you hear and speak?". For quick playful self-introductions, answer directly without this tool.
+    k: 4
+
+identity_store:
+  db_path: var/identity/identity.sqlite3
+
+memory:
+  enabled: true
+  retention_class: standard
+  place_room_id: realtime
+  extract_live_turn_memory: true
+
+slack_memory:
+  enabled: true
+  start_with_agent: true
+  bot_token_env: SLACK_BOT_TOKEN
+  poll_interval_sec: 1800.0
+  state_path: .tailwag/slack-state.json
+  backfill_hours: 2.0
+  force_backfill: false
+  active_thread_hours: 24.0
+  history_limit: 50
+  reply_limit: 200
+  extract_memory: true
+  include_email: true
+  channels:
+    - name: robotics_internal_team
+      channel_id: C0896C8CE83
+
+face_recognition:
+  enabled: true
+  db_path: var/face_recognition
+  loop_interval_sec: 0.3
+  recognition_threshold: 0.6
+  owner_turn:
+    enabled: true
+    camera_yaw_offset_rad: 0.0
+    deadband_deg: 3.0
+    turn_gain: 0.8
+    max_turn_deg: 25.0
+    angular_speed_rad_s: 0.8
+    command_hz: 50.0
+    delay_after_recording_sec: 0.05
+    odom_frame: odom
+    robot_frame: base_link
+    yaw_tolerance_deg: 1.5
+    max_duration_sec: 1.5
+    slow_zone_deg: 8.0
+    min_angular_speed_rad_s: 0.25
+  depth_gate:
+    enabled: false
+    sync_slop_sec: 0.12
+    sync_queue_size: 10
+    capture_timeout_sec: 1.5
+    max_face_depth_m: 2.0
+    min_valid_samples: 2
+    patch_size: 3
+    search_radius_px: 12
+    max_valid_depth_m: 10.0
+  attention_gate:
+    enabled: true
+    min_face_area: 700
+    min_face_area_ratio: 0.00035
+    max_abs_yaw_deg: 25.0
+    max_abs_pitch_deg: 22.0
+    max_abs_roll_deg: 35.0
+    distant_max_abs_yaw_deg: 18.0
+    distant_max_abs_pitch_deg: 32.0
+    distant_max_abs_roll_deg: 28.0
+    near_face_area_ratio: 0.035
+    distant_face_area_ratio: 0.010
+    near_depth_m: 0.8
+    distant_depth_m: 2.0
+    max_center_offset_ratio: 0.70
+    min_confidence: 0.55
+    smoothing_window_sec: 1.0
+    min_attentive_observations: 2
+    hold_sec: 0.8
+  preference_extraction:
+    enabled: true
+  proactive_greeting:
+    recognized_enabled: true
+    unknown_enabled: true
+    require_attention: true
+    recognized_cooldown_sec: 45.0
+    unknown_cooldown_sec: 30.0
+
+speaker_recognition:
+  enabled: true
+  query_min_voiced_sec: 0.8
+  query_match_threshold: 0.60
+  query_margin_threshold: 0.08
+  reference_update_threshold: 0.55
+  enroll_min_voiced_sec: 2.0
+  enroll_min_rms_level: 350.0
+  max_clipped_fraction: 0.02
+  explicit_prompt_after_silent_failures: 2
+
+realtime:
+  prompt_file: personality_test_prompt.md
+  model: gpt-realtime-1.5
+  voice: cedar
+  audio_output_speed: 1.0
+  transcription_model: gpt-4o-mini-transcribe
+  input_device: pipewire
+  output_device: pipewire
+  noise_reduction: near_field
+  vad_threshold: 0.8
+  silence_grace_period: 1.0
+  wake_word: hey puffle
+  wake_threshold: 0.5
+  wake_window_sec: 5.0
+  input_sample_rate: 24000
+  output_sample_rate: 24000
+  input_block_size: 2400
+  admission:
+    block_during_speaking: true
+    block_during_engaged: true
+    open_on_face_presence: false
+    open_on_attention_presence: true
+    open_on_interaction_states:
+      - alert
+    open_on_wake_window: true
+
+engagement:
+  coalescer_debounce_sec: 0.4
+  coalescer_max_wait_sec: 2.0
+  alert_timeout_sec: 15.0
+  cooldown_sec: 7.0
+  speaking_timeout_sec: 30.0
+  startup_patrol_delay_sec: 2.0
+  patrol_next_hop_delay_sec: 5.0
+
+embodiment:
+  gestures:
+    enabled: true
+    preset: unitree_go2
+    tilt_enabled: false
+    nodding_enabled: true
+
+battery:
+  low_battery_pct: 10.0
+  charging_ready_pct: 100.0
