@@ -6,6 +6,8 @@ resources:
   primary_robot: base
   face_camera: arducam_001
   scene_camera: arducam_001
+  # face_camera: realsense_001
+  # scene_camera: realsense_001
   interaction_display: screen_001
 
 display:
