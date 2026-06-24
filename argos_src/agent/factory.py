@@ -303,9 +303,11 @@ def create_agent(
         )
         from argos_src.face_recognition.depth_gate import DepthGateSettings
         from argos_src.face_recognition.face_recognition_service import (
+            FaceEnrollmentPolicy,
             FaceRecognitionService,
         )
         attention_gate = scenario_profile.face_recognition.attention_gate
+        enrollment_policy = scenario_profile.face_recognition.enrollment_policy
 
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
@@ -319,6 +321,7 @@ def create_agent(
                 scenario_profile.face_recognition.owner_turn.camera_yaw_offset_rad
             ),
             display_runtime=display_runtime,
+            live_image_enabled=scenario_profile.face_recognition.live_image_enabled,
             depth_gate_settings=(
                 DepthGateSettings(
                     sync_slop_sec=scenario_profile.face_recognition.depth_gate.sync_slop_sec,
@@ -354,6 +357,16 @@ def create_agent(
                     min_observations=attention_gate.min_attentive_observations,
                     hold_sec=attention_gate.hold_sec,
                 ),
+            ),
+            enrollment_policy=FaceEnrollmentPolicy(
+                min_face_area=enrollment_policy.min_face_area,
+                min_sharpness=enrollment_policy.min_sharpness,
+                min_brightness=enrollment_policy.min_brightness,
+                max_brightness=enrollment_policy.max_brightness,
+                min_contrast=enrollment_policy.min_contrast,
+                max_eye_tilt=enrollment_policy.max_eye_tilt,
+                max_nose_center_offset=enrollment_policy.max_nose_center_offset,
+                min_embedding_similarity=enrollment_policy.min_embedding_similarity,
             ),
         )
         if scenario_profile.face_recognition.preference_extraction.enabled:

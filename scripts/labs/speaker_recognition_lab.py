@@ -66,6 +66,7 @@ from scripts.labs.speaker_lab_common import (
     timestamp_label,
     write_pcm16_wav,
 )
+from scripts.labs.perception_lab_common import DEFAULT_LAB_ROOT, LabRunWriter
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -99,6 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Optional WAV file to enroll instead of microphone capture. Repeatable.",
     )
+    _add_structured_output_args(enroll)
 
     recognize = subparsers.add_parser(
         "recognize",
@@ -135,6 +137,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5,
         help="How many scored matches to print. Default: 5.",
     )
+    _add_structured_output_args(recognize)
 
     list_cmd = subparsers.add_parser(
         "list",
@@ -157,6 +160,50 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _add_structured_output_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output-root",
+        default=str(DEFAULT_LAB_ROOT),
+        help="Root directory for standard lab output. Default: var/labs.",
+    )
+    parser.add_argument("--run-id", default="")
+
+
+def _speaker_enroll_label_template(sample: dict[str, Any]) -> dict[str, Any]:
+    component = sample.get("components", {}).get("speaker_enrollment", {})
+    return {
+        "sample_id": sample["sample_id"],
+        "artifacts": sample.get("artifacts", {}),
+        "prediction_summary": {
+            "saved": component.get("saved"),
+            "reason": component.get("reason"),
+            "rejection_reason": component.get("rejection_reason"),
+        },
+        "labels": {
+            "should_save_speaker_reference": None,
+            "label_reason": None,
+        },
+    }
+
+
+def _speaker_recognition_label_template(sample: dict[str, Any]) -> dict[str, Any]:
+    component = sample.get("components", {}).get("speaker_recognition", {})
+    return {
+        "sample_id": sample["sample_id"],
+        "artifacts": sample.get("artifacts", {}),
+        "prediction_summary": {
+            "audio_speaker_id": component.get("audio_speaker_id"),
+            "owner_id": component.get("owner_id"),
+            "top_score": component.get("top_score"),
+            "margin": component.get("margin"),
+        },
+        "labels": {
+            "actual_speaker_id": None,
+            "speaker_recognition_correct": None,
+        },
+    }
 
 
 def _capture_or_load_audio(
@@ -232,6 +279,23 @@ def _run_enroll(args: argparse.Namespace) -> int:
     ensure_session_dirs(config)
     capture_vad, vad_impl = build_vad(config.vad_threshold)
     analysis_vad, analysis_vad_impl = build_vad(config.vad_threshold)
+    writer = LabRunWriter(
+        component="audio",
+        mode="speaker_enrollment",
+        root=args.output_root,
+        run_id=args.run_id or None,
+    )
+    writer.write_manifest(
+        {
+            "profile": config.profile_name,
+            "profile_arg": args.profile,
+            "enabled_components": {"speaker_enrollment": True},
+            "config": session_summary_payload(config, vad_impl=analysis_vad_impl),
+            "person_id": str(args.person_id).strip(),
+            "audio_files": list(args.audio_file or []),
+            "clips": int(args.clips),
+        }
+    )
     json_print(
         {
             "mode": "enroll",
@@ -303,6 +367,30 @@ def _run_enroll(args: argparse.Namespace) -> int:
                 trimmed_audio_pcm16=trimmed_audio_pcm16,
                 payload=payload,
             )
+            sample = {
+                "sample_id": f"clip_{clip_index:04d}",
+                "source": str(capture.get("source") or ""),
+                "artifacts": payload["artifacts"],
+                "components": {
+                    "speaker_enrollment": {
+                        "measured": True,
+                        "person_id": str(args.person_id).strip(),
+                        "saved": bool(
+                            (payload.get("service_result") or {}).get("saved")
+                        ),
+                        "reason": str(
+                            (payload.get("service_result") or {}).get("reason") or ""
+                        ),
+                        "rejection_reason": str(
+                            ((payload.get("enrollment_gate") or {}).get("rejection_reason") or "")
+                        ),
+                        "raw_stats": payload.get("raw_stats"),
+                        "trimmed_stats": payload.get("trimmed_stats"),
+                        "diagnostics": payload.get("diagnostics"),
+                    }
+                },
+            }
+            writer.append_sample(sample, _speaker_enroll_label_template(sample))
             json_print(payload)
         final_record = service.db.get_reference(str(args.person_id).strip())
         json_print(
@@ -311,7 +399,17 @@ def _run_enroll(args: argparse.Namespace) -> int:
                 "person_id": str(args.person_id).strip(),
                 "reference_saved": bool(final_record),
                 "metadata": dict((final_record or {}).get("metadata") or {}),
+                "standard_lab_run_dir": str(writer.run_dir),
             }
+        )
+        writer.write_quick_summary(
+            [
+                "# Speaker Enrollment Lab",
+                "",
+                f"- run_dir: `{writer.run_dir}`",
+                f"- person_id: `{str(args.person_id).strip()}`",
+                f"- labels: `{writer.labels_path}`",
+            ]
         )
         return 0
     finally:
@@ -324,6 +422,30 @@ def _run_recognize(args: argparse.Namespace) -> int:
     ensure_session_dirs(config)
     capture_vad, vad_impl = build_vad(config.vad_threshold)
     analysis_vad, analysis_vad_impl = build_vad(config.vad_threshold)
+    writer = LabRunWriter(
+        component="audio",
+        mode="speaker_recognition",
+        root=args.output_root,
+        run_id=args.run_id or None,
+    )
+    writer.write_manifest(
+        {
+            "profile": config.profile_name,
+            "profile_arg": args.profile,
+            "enabled_components": {"speaker_recognition": True},
+            "config": session_summary_payload(config, vad_impl=analysis_vad_impl),
+            "audio_files": list(args.audio_file or []),
+            "clips": int(args.clips),
+            "face_context": {
+                "primary_face_person_id": str(args.primary_face_person_id or "").strip() or None,
+                "visible_face_person_ids": [
+                    str(item or "").strip()
+                    for item in (args.visible_face_person_id or [])
+                    if str(item or "").strip()
+                ],
+            },
+        }
+    )
     json_print(
         {
             "mode": "recognize",
@@ -410,7 +532,37 @@ def _run_recognize(args: argparse.Namespace) -> int:
                 trimmed_audio_pcm16=trimmed_audio_pcm16,
                 payload=payload,
             )
+            resolution = dict(payload.get("resolution") or {})
+            sample = {
+                "sample_id": f"clip_{clip_index:04d}",
+                "source": str(capture.get("source") or ""),
+                "artifacts": payload["artifacts"],
+                "components": {
+                    "speaker_recognition": {
+                        "measured": True,
+                        "audio_speaker_id": resolution.get("audio_speaker_id"),
+                        "owner_id": resolution.get("owner_id"),
+                        "owner_source": resolution.get("owner_source"),
+                        "owner_confidence": resolution.get("owner_confidence"),
+                        "top_score": resolution.get("top_score"),
+                        "runner_up_score": resolution.get("runner_up_score"),
+                        "margin": resolution.get("margin"),
+                        "scored_matches": payload.get("scored_matches", []),
+                        "query_gate": payload.get("query_gate"),
+                        "diagnostics": payload.get("diagnostics"),
+                    }
+                },
+            }
+            writer.append_sample(sample, _speaker_recognition_label_template(sample))
             json_print(payload)
+        writer.write_quick_summary(
+            [
+                "# Speaker Recognition Lab",
+                "",
+                f"- run_dir: `{writer.run_dir}`",
+                f"- labels: `{writer.labels_path}`",
+            ]
+        )
         return 0
     finally:
         service.shutdown()

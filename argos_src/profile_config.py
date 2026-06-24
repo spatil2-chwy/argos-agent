@@ -131,6 +131,18 @@ class FaceAttentionGateProfile:
 
 
 @dataclass(frozen=True)
+class FaceEnrollmentPolicyProfile:
+    min_face_area: int
+    min_sharpness: float
+    min_brightness: float
+    max_brightness: float
+    min_contrast: float
+    max_eye_tilt: float
+    max_nose_center_offset: float
+    min_embedding_similarity: float
+
+
+@dataclass(frozen=True)
 class PreferenceExtractionProfile:
     enabled: bool
 
@@ -141,8 +153,10 @@ class FaceRecognitionProfile:
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
+    live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
+    enrollment_policy: FaceEnrollmentPolicyProfile
     owner_turn: FaceOwnerTurnProfile
     preference_extraction: PreferenceExtractionProfile
     proactive_greeting: ProactiveGreetingProfile
@@ -322,6 +336,7 @@ class ScenarioProfile:
             db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
+            live_image_enabled=True,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
                 sync_slop_sec=0.12,
@@ -352,6 +367,16 @@ class ScenarioProfile:
                 smoothing_window_sec=1.0,
                 min_attentive_observations=2,
                 hold_sec=0.8,
+            ),
+            enrollment_policy=FaceEnrollmentPolicyProfile(
+                min_face_area=5000,
+                min_sharpness=12.0,
+                min_brightness=35.0,
+                max_brightness=220.0,
+                min_contrast=15.5,
+                max_eye_tilt=0.25,
+                max_nose_center_offset=0.10,
+                min_embedding_similarity=0.70,
             ),
             owner_turn=FaceOwnerTurnProfile(
                 enabled=False,
@@ -1122,6 +1147,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     proactive_data = _pop_section(data, "proactive_greeting")
     depth_gate_data = _pop_section(data, "depth_gate")
     attention_gate_data = _pop_section(data, "attention_gate")
+    enrollment_policy_data = _pop_section(data, "enrollment_policy")
     owner_turn_data = _pop_section(data, "owner_turn")
     preference_extraction_data = _pop_section(data, "preference_extraction")
 
@@ -1295,6 +1321,85 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         ) from exc
     _reject_unknown(attention_gate_data, "face_recognition.attention_gate")
 
+    enrollment_policy = FaceEnrollmentPolicyProfile(
+        min_face_area=_pop_int(
+            enrollment_policy_data,
+            "min_face_area",
+            default=5000,
+        ),
+        min_sharpness=_pop_float(
+            enrollment_policy_data,
+            "min_sharpness",
+            default=12.0,
+        ),
+        min_brightness=_pop_float(
+            enrollment_policy_data,
+            "min_brightness",
+            default=35.0,
+        ),
+        max_brightness=_pop_float(
+            enrollment_policy_data,
+            "max_brightness",
+            default=220.0,
+        ),
+        min_contrast=_pop_float(
+            enrollment_policy_data,
+            "min_contrast",
+            default=15.5,
+        ),
+        max_eye_tilt=_pop_float(
+            enrollment_policy_data,
+            "max_eye_tilt",
+            default=0.25,
+        ),
+        max_nose_center_offset=_pop_float(
+            enrollment_policy_data,
+            "max_nose_center_offset",
+            default=0.10,
+        ),
+        min_embedding_similarity=_pop_float(
+            enrollment_policy_data,
+            "min_embedding_similarity",
+            default=0.70,
+        ),
+    )
+    if enrollment_policy.min_face_area < 1:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.min_face_area must be >= 1"
+        )
+    if enrollment_policy.min_sharpness < 0.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.min_sharpness must be >= 0"
+        )
+    if enrollment_policy.min_brightness < 0.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.min_brightness must be >= 0"
+        )
+    if enrollment_policy.max_brightness <= enrollment_policy.min_brightness:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.max_brightness must be greater than min_brightness"
+        )
+    if enrollment_policy.min_contrast < 0.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.min_contrast must be >= 0"
+        )
+    if enrollment_policy.max_eye_tilt < 0.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.max_eye_tilt must be >= 0"
+        )
+    if enrollment_policy.max_nose_center_offset < 0.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.max_nose_center_offset must be >= 0"
+        )
+    if not 0.0 <= enrollment_policy.min_embedding_similarity <= 1.0:
+        raise ProfileValidationError(
+            "face_recognition.enrollment_policy.min_embedding_similarity must be between 0 and 1"
+        )
+    _reject_unknown(
+        enrollment_policy_data,
+        "face_recognition.enrollment_policy",
+    )
+
     owner_turn = FaceOwnerTurnProfile(
         enabled=_pop_bool(owner_turn_data, "enabled", default=False),
         camera_yaw_offset_rad=_pop_float(
@@ -1399,8 +1504,10 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_threshold",
             default=0.6,
         ),
+        live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,
+        enrollment_policy=enrollment_policy,
         owner_turn=owner_turn,
         preference_extraction=preference_extraction,
         proactive_greeting=proactive,
