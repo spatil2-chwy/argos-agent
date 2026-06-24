@@ -37,6 +37,13 @@ poetry run python -m scripts.labs.face_capture_lab --mode depth --frames 10 --in
 poetry run python -m scripts.labs.face_capture_lab --mode all --frames 10 --interval-sec 1
 ```
 
+For sparse attention stills, use raw per-frame attention scoring so production
+temporal smoothing does not suppress otherwise attentive head-pose frames:
+
+```bash
+poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 40 --interval-sec 0.5 --attention-eval-raw
+```
+
 Audio detection capture:
 
 ```bash

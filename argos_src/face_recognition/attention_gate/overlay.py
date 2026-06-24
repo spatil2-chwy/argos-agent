@@ -30,7 +30,7 @@ def draw_attention_overlay(
         attentive = bool(getattr(attention, "attentive", False))
         color = (0, 220, 0) if attentive else (0, 180, 255)
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
-        label = "attentive" if attentive else str(getattr(attention, "reason", "") or "not_attentive")
+        label = _attention_label(attention, attentive=attentive)
         name = str(face.get("recognized_name") or "").strip()
         if name:
             label = f"{name} {label}"
@@ -96,6 +96,23 @@ def _draw_pose_axes(
     cv2.line(image, (int(x0), int(y0)), _point(x_axis), (0, 0, 255), 2)
     cv2.line(image, (int(x0), int(y0)), _point(y_axis), (0, 255, 0), 2)
     cv2.line(image, (int(x0), int(y0)), _point(z_axis), (255, 0, 0), 2)
+
+
+def _attention_label(attention: Any, *, attentive: bool) -> str:
+    if attention is None:
+        return "not_attentive"
+    reason = "attentive" if attentive else str(getattr(attention, "reason", "") or "not_attentive")
+    raw = "raw=yes" if bool(getattr(attention, "raw_attentive", False)) else "raw=no"
+    pose_parts = []
+    for label, value in (
+        ("y", getattr(attention, "yaw_deg", None)),
+        ("p", getattr(attention, "pitch_deg", None)),
+        ("r", getattr(attention, "roll_deg", None)),
+    ):
+        if value is not None:
+            pose_parts.append(f"{label}={float(value):.0f}")
+    pose = " ".join(pose_parts)
+    return " ".join(part for part in (reason, raw, pose) if part)
 
 
 def _axis_origin(face: dict[str, Any]) -> tuple[float, float] | None:
