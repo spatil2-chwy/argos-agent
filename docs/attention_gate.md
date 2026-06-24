@@ -127,6 +127,8 @@ attention_gate:
   distant_max_abs_yaw_deg: 18.0
   distant_max_abs_pitch_deg: 32.0
   distant_max_abs_roll_deg: 28.0
+  min_abs_pitch_deg: 0.0
+  distant_min_abs_pitch_deg: 8.0
 
   near_face_area_ratio: 0.035
   distant_face_area_ratio: 0.010
@@ -141,7 +143,8 @@ The intent is:
 - allow smaller faces from a mounted RealSense camera
 - tighten distant yaw so side conversations do not open the mic as easily
 - allow more distant pitch because a standing person may naturally look down
-  toward a lower robot-mounted camera
+  toward a lower robot-mounted camera, while requiring a small nonzero distant
+  pitch so a level head is less likely to count as camera-facing attention
 - keep roll somewhat tighter at distance because tilted small crops are less
   reliable evidence of direct attention
 - allow more off-center placement in a wide camera view

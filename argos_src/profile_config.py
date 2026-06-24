@@ -119,6 +119,8 @@ class FaceAttentionGateProfile:
     distant_max_abs_yaw_deg: float
     distant_max_abs_pitch_deg: float
     distant_max_abs_roll_deg: float
+    min_abs_pitch_deg: float
+    distant_min_abs_pitch_deg: float
     near_face_area_ratio: float
     distant_face_area_ratio: float
     near_depth_m: float
@@ -358,6 +360,8 @@ class ScenarioProfile:
                 distant_max_abs_yaw_deg=25.0,
                 distant_max_abs_pitch_deg=20.0,
                 distant_max_abs_roll_deg=35.0,
+                min_abs_pitch_deg=0.0,
+                distant_min_abs_pitch_deg=0.0,
                 near_face_area_ratio=0.04,
                 distant_face_area_ratio=0.012,
                 near_depth_m=0.8,
@@ -1250,6 +1254,16 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "distant_max_abs_roll_deg",
             default=35.0,
         ),
+        min_abs_pitch_deg=_pop_float(
+            attention_gate_data,
+            "min_abs_pitch_deg",
+            default=0.0,
+        ),
+        distant_min_abs_pitch_deg=_pop_float(
+            attention_gate_data,
+            "distant_min_abs_pitch_deg",
+            default=0.0,
+        ),
         near_face_area_ratio=_pop_float(
             attention_gate_data,
             "near_face_area_ratio",
@@ -1303,6 +1317,8 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
             distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
             distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
+            min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
+            distant_min_abs_pitch_deg=attention_gate.distant_min_abs_pitch_deg,
             near_face_area_ratio=attention_gate.near_face_area_ratio,
             distant_face_area_ratio=attention_gate.distant_face_area_ratio,
             near_depth_m=attention_gate.near_depth_m,

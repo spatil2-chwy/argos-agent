@@ -137,6 +137,9 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.face_recognition.attention_gate.distant_max_abs_yaw_deg == pytest.approx(
         18.0
     )
+    assert profile.face_recognition.attention_gate.distant_min_abs_pitch_deg == pytest.approx(
+        8.0
+    )
     assert profile.face_recognition.attention_gate.max_center_offset_ratio == pytest.approx(
         0.70
     )
@@ -496,6 +499,8 @@ def test_face_attention_gate_profile_is_configurable():
                     "distant_max_abs_yaw_deg": 14.0,
                     "distant_max_abs_pitch_deg": 29.0,
                     "distant_max_abs_roll_deg": 24.0,
+                    "min_abs_pitch_deg": 2.0,
+                    "distant_min_abs_pitch_deg": 7.0,
                     "near_face_area_ratio": 0.03,
                     "distant_face_area_ratio": 0.008,
                     "near_depth_m": 0.7,
@@ -531,6 +536,8 @@ def test_face_attention_gate_profile_is_configurable():
     assert attention.distant_max_abs_yaw_deg == pytest.approx(14.0)
     assert attention.distant_max_abs_pitch_deg == pytest.approx(29.0)
     assert attention.distant_max_abs_roll_deg == pytest.approx(24.0)
+    assert attention.min_abs_pitch_deg == pytest.approx(2.0)
+    assert attention.distant_min_abs_pitch_deg == pytest.approx(7.0)
     assert attention.near_face_area_ratio == pytest.approx(0.03)
     assert attention.distant_face_area_ratio == pytest.approx(0.008)
     assert attention.near_depth_m == pytest.approx(0.7)

@@ -392,6 +392,8 @@ face_recognition:
     distant_max_abs_yaw_deg: 18.0
     distant_max_abs_pitch_deg: 32.0
     distant_max_abs_roll_deg: 28.0
+    min_abs_pitch_deg: 0.0
+    distant_min_abs_pitch_deg: 8.0
     near_face_area_ratio: 0.035
     distant_face_area_ratio: 0.010
     near_depth_m: 0.8
@@ -440,6 +442,8 @@ Attention gate settings:
 | `distant_max_abs_yaw_deg: 18.0` | Far/small-face left/right head angle limit. | Tighten if far side conversations falsely open admission. |
 | `distant_max_abs_pitch_deg: 32.0` | Far/small-face up/down head angle limit. | Mounted cameras often need this higher because users look down toward the robot. |
 | `distant_max_abs_roll_deg: 28.0` | Far/small-face head tilt limit. | Tune if tilted distant heads falsely count as attention. |
+| `min_abs_pitch_deg: 0.0` | Near-face minimum up/down head angle. | Keep low unless the near camera geometry needs a pitch band. |
+| `distant_min_abs_pitch_deg: 8.0` | Far/small-face minimum up/down head angle. | Raise if distant level heads falsely open admission; lower if real users are rejected. |
 | `near_face_area_ratio: 0.035` | Face area ratio treated as near when depth is unavailable. | Tune from live bbox logs. |
 | `distant_face_area_ratio: 0.010` | Face area ratio treated as distant when depth is unavailable. | Tune from live bbox logs. |
 | `near_depth_m: 0.8` | Depth treated as near when `depth_m` exists on the face. | Keep unless the camera is mounted unusually close. |

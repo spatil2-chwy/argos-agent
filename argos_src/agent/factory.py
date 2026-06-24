@@ -346,6 +346,8 @@ def create_agent(
                 distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
                 distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
                 distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
+                min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
+                distant_min_abs_pitch_deg=attention_gate.distant_min_abs_pitch_deg,
                 near_face_area_ratio=attention_gate.near_face_area_ratio,
                 distant_face_area_ratio=attention_gate.distant_face_area_ratio,
                 near_depth_m=attention_gate.near_depth_m,

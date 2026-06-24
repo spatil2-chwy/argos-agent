@@ -119,6 +119,8 @@ face_recognition:
     distant_max_abs_yaw_deg: 18.0
     distant_max_abs_pitch_deg: 32.0
     distant_max_abs_roll_deg: 28.0
+    min_abs_pitch_deg: 0.0
+    distant_min_abs_pitch_deg: 8.0
     near_face_area_ratio: 0.035
     distant_face_area_ratio: 0.010
     near_depth_m: 0.8

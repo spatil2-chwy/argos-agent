@@ -308,3 +308,81 @@ def test_attention_gate_allows_downward_pitch_for_small_distant_faces():
 
     assert result.attentive is True
     assert result.reason == "attentive"
+
+
+def test_attention_gate_can_require_pitch_magnitude_for_distant_faces():
+    estimator = _Estimator(
+        HeadPoseObservation(
+            success=True,
+            yaw_deg=0.0,
+            pitch_deg=0.0,
+            roll_deg=0.0,
+        )
+    )
+    gate = FaceAttentionGate(
+        AttentionGateSettings(
+            min_face_area=100,
+            max_abs_pitch_deg=22.0,
+            distant_max_abs_pitch_deg=32.0,
+            min_abs_pitch_deg=0.0,
+            distant_min_abs_pitch_deg=8.0,
+            near_face_area_ratio=0.035,
+            distant_face_area_ratio=0.010,
+            smoothing=AttentionSmoothingSettings(
+                window_sec=1.0,
+                min_observations=1,
+                hold_sec=0.0,
+            ),
+        ),
+        head_pose_estimator=estimator,
+    )
+
+    result = gate.evaluate(
+        object(),
+        _face_with_bbox(x=450, y=450, w=100, h=100),
+        image_shape=(1000, 1000, 3),
+        track_id="person-1",
+        now=10.0,
+    )
+
+    assert result.attentive is False
+    assert result.reason == "head_pose_outside_threshold"
+
+
+def test_attention_gate_accepts_distant_pitch_inside_configured_band():
+    estimator = _Estimator(
+        HeadPoseObservation(
+            success=True,
+            yaw_deg=0.0,
+            pitch_deg=12.0,
+            roll_deg=0.0,
+        )
+    )
+    gate = FaceAttentionGate(
+        AttentionGateSettings(
+            min_face_area=100,
+            max_abs_pitch_deg=22.0,
+            distant_max_abs_pitch_deg=32.0,
+            min_abs_pitch_deg=0.0,
+            distant_min_abs_pitch_deg=8.0,
+            near_face_area_ratio=0.035,
+            distant_face_area_ratio=0.010,
+            smoothing=AttentionSmoothingSettings(
+                window_sec=1.0,
+                min_observations=1,
+                hold_sec=0.0,
+            ),
+        ),
+        head_pose_estimator=estimator,
+    )
+
+    result = gate.evaluate(
+        object(),
+        _face_with_bbox(x=450, y=450, w=100, h=100),
+        image_shape=(1000, 1000, 3),
+        track_id="person-1",
+        now=10.0,
+    )
+
+    assert result.attentive is True
+    assert result.reason == "attentive"

@@ -29,6 +29,8 @@ class AttentionGateSettings:
     distant_max_abs_yaw_deg: float = 25.0
     distant_max_abs_pitch_deg: float = 20.0
     distant_max_abs_roll_deg: float = 35.0
+    min_abs_pitch_deg: float = 0.0
+    distant_min_abs_pitch_deg: float = 0.0
     near_face_area_ratio: float = 0.04
     distant_face_area_ratio: float = 0.012
     near_depth_m: float = 0.8
@@ -54,6 +56,16 @@ class AttentionGateSettings:
             raise ValueError("distant_max_abs_pitch_deg must be > 0")
         if self.distant_max_abs_roll_deg <= 0.0:
             raise ValueError("distant_max_abs_roll_deg must be > 0")
+        if self.min_abs_pitch_deg < 0.0:
+            raise ValueError("min_abs_pitch_deg must be >= 0")
+        if self.distant_min_abs_pitch_deg < 0.0:
+            raise ValueError("distant_min_abs_pitch_deg must be >= 0")
+        if self.min_abs_pitch_deg > self.max_abs_pitch_deg:
+            raise ValueError("min_abs_pitch_deg must be <= max_abs_pitch_deg")
+        if self.distant_min_abs_pitch_deg > self.distant_max_abs_pitch_deg:
+            raise ValueError(
+                "distant_min_abs_pitch_deg must be <= distant_max_abs_pitch_deg"
+            )
         if self.near_face_area_ratio <= 0.0:
             raise ValueError("near_face_area_ratio must be > 0")
         if self.distant_face_area_ratio <= 0.0:
@@ -158,7 +170,11 @@ class FaceAttentionGate:
             image_shape=image_shape,
         )
         yaw_score = _axis_score(pose.yaw_deg, limits.yaw_deg)
-        pitch_score = _axis_score(pose.pitch_deg, limits.pitch_deg)
+        pitch_score = _axis_band_score(
+            pose.pitch_deg,
+            min_abs_limit=limits.min_pitch_deg,
+            max_abs_limit=limits.pitch_deg,
+        )
         roll_score = _axis_score(pose.roll_deg, limits.roll_deg)
         if min(yaw_score, pitch_score, roll_score) < 0.0:
             confidence = _confidence_from_margin(
@@ -208,6 +224,11 @@ class FaceAttentionGate:
             pitch_deg=_lerp(
                 self.settings.max_abs_pitch_deg,
                 self.settings.distant_max_abs_pitch_deg,
+                distance_factor,
+            ),
+            min_pitch_deg=_lerp(
+                self.settings.min_abs_pitch_deg,
+                self.settings.distant_min_abs_pitch_deg,
                 distance_factor,
             ),
             roll_deg=_lerp(
@@ -286,6 +307,7 @@ class FaceAttentionGate:
 class _PoseLimits:
     yaw_deg: float
     pitch_deg: float
+    min_pitch_deg: float
     roll_deg: float
 
 
@@ -311,6 +333,29 @@ def _axis_score(value: float | None, limit: float) -> float:
     if value is None:
         return -1.0
     return 1.0 - (abs(float(value)) / float(limit))
+
+
+def _axis_band_score(
+    value: float | None,
+    *,
+    min_abs_limit: float,
+    max_abs_limit: float,
+) -> float:
+    if value is None:
+        return -1.0
+    min_abs = max(0.0, float(min_abs_limit))
+    max_abs = float(max_abs_limit)
+    if min_abs <= 0.0:
+        return _axis_score(value, max_abs)
+    abs_value = abs(float(value))
+    if abs_value < min_abs:
+        return (abs_value / min_abs) - 1.0
+    if abs_value > max_abs:
+        return 1.0 - (abs_value / max_abs)
+    span = max(max_abs - min_abs, 1e-6)
+    lower_margin = (abs_value - min_abs) / span
+    upper_margin = (max_abs - abs_value) / span
+    return min(lower_margin, upper_margin)
 
 
 def _confidence_from_margin(margin: float, *, min_confidence: float) -> float:
