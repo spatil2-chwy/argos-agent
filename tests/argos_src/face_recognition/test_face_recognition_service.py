@@ -212,6 +212,27 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
     ]
 
 
+def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.65
+    details = module.FaceRecognitionService._format_recognition_log_details(
+        service,
+        [
+            module.PersonContext(
+                person_id="person-1",
+                name="Sakshee Patil",
+                interaction_count=1,
+                confidence=0.734,
+                bbox_area=1600,
+                timestamp=100.0,
+            )
+        ],
+    )
+
+    assert details == ["Sakshee_Patil:sim=0.73,threshold=0.65"]
+
+
 def test_loop_tick_emits_timing_metric(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)

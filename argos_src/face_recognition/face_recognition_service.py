@@ -1622,6 +1622,7 @@ class FaceRecognitionService:
             now=now,
         )
         attentive_names = [p.name for p in persons if bool(p.attentive)]
+        recognized_details = self._format_recognition_log_details(persons)
         primary_attention = analysis.primary_attention_target
         attention_details = self._format_attention_log_details(detected_faces)
         logger.debug(
@@ -1629,7 +1630,7 @@ class FaceRecognitionService:
             "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
             "attention_details=%s",
             len(detected_faces),
-            [p.name for p in persons],
+            recognized_details,
             unknown_count,
             attentive_names,
             analysis.attentive_unknown_count,
@@ -1664,7 +1665,7 @@ class FaceRecognitionService:
             "ok",
             len(detected_faces),
             prepared.rejected_count,
-            [p.name for p in persons],
+            recognized_details,
             unknown_count,
             attentive_names,
             analysis.attentive_unknown_count,
@@ -1676,6 +1677,14 @@ class FaceRecognitionService:
             ),
             attention_details,
         )
+
+    def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
+        threshold = float(getattr(self, "_recognition_threshold", 0.0) or 0.0)
+        details: list[str] = []
+        for person in persons:
+            label = str(person.name or person.person_id).replace(" ", "_")
+            details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
+        return details
 
     @staticmethod
     def _format_attention_log_details(faces: list[dict[str, Any]]) -> list[str]:
