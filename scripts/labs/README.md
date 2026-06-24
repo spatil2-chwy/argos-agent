@@ -3,8 +3,8 @@
 These scripts are small lab tools for testing Argos functionality without starting
 the full realtime agent.
 
-They still use the real Argos service code, profile config, ROS camera topics, face
-embedding model, and face/identity stores. They are meant for diagnosis and
+They still use the real Argos service code, profile config, provider camera
+resources, face embedding model, and face/identity stores. They are meant for diagnosis and
 parameter tuning, not for normal user-facing registration.
 
 Run from the repo root:
@@ -14,10 +14,54 @@ cd ~/argos-agent
 source setup_shell.sh
 poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
+poetry run python -m scripts.labs.face_capture_lab --help
+poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 ```
+
+## Structured perception labs + eval
+
+Use these when you want repeatable artifacts plus a label file for quantitative
+evaluation. Labs write runs under `var/labs/...`; eval writes reports under
+`var/eval/perception/...`.
+
+Face enrollment/detection/recognition/depth/attention capture:
+
+```bash
+poetry run python -m scripts.labs.face_capture_lab --mode enrollment --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode recognition --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 20 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode depth --frames 10 --interval-sec 1
+poetry run python -m scripts.labs.face_capture_lab --mode all --frames 10 --interval-sec 1
+```
+
+Audio detection capture:
+
+```bash
+poetry run python -m scripts.labs.audio_detection_lab --clips 10
+poetry run python -m scripts.labs.audio_detection_lab --audio-file /path/to/clip.wav
+```
+
+After capture, edit the generated `labels.todo.jsonl` and fill only the label
+fields you know. Then run eval:
+
+```bash
+poetry run python -m scripts.eval.perception_eval --run-dir var/labs/face/enrollment/<run_id>
+poetry run python -m scripts.eval.perception_eval --run-dir var/labs/audio/detection/<run_id>
+```
+
+Eval produces:
+
+- `eval_report.md`
+- `eval_report.json`
+- `metrics.csv`
+- `failures.csv`
+- `threshold_sweeps.csv`
+
+Ground truth is manual for v1: raw camera/audio artifacts do not contain recall
+labels by themselves. The lab predicts; you label; eval computes metrics.
 
 Registration quality dry run:
 
@@ -25,13 +69,18 @@ Registration quality dry run:
 poetry run python -m scripts.labs.face_registration_lab --frames 5
 ```
 
+Dry-run and enrollment previews are saved under `scripts/labs/face_preview` by
+default. Use `--preview-dir /path/to/dir` to choose another folder.
+
 With depth enabled, each diagnostic frame waits until a synced RGBD pair arrives.
 Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
 waiting indefinitely.
 
 Current registration tuning defaults match the production agent:
-- `min_brightness=30`
-- `min_contrast=14`
+- `min_face_area=5000`
+- `min_sharpness=12`
+- `min_brightness=35`
+- `min_contrast=15.5`
 - `max_nose_center_offset=0.1`
 
 Use `--details` when you want the full diagnostic dump.

@@ -4,8 +4,10 @@ manifest: puffle
 
 resources:
   primary_robot: base
-  face_camera: realsense_001
-  scene_camera: realsense_001
+  face_camera: arducam_001
+  scene_camera: arducam_001
+  # face_camera: realsense_001
+  # scene_camera: realsense_001
   interaction_display: screen_001
 
 display:
@@ -81,6 +83,7 @@ face_recognition:
   db_path: var/face_recognition
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
+  live_image_enabled: false
   owner_turn:
     enabled: true
     camera_yaw_offset_rad: 0.0
@@ -106,6 +109,15 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
+  enrollment_policy:
+    min_face_area: 5000
+    min_sharpness: 12.0
+    min_brightness: 35.0
+    max_brightness: 220.0
+    min_contrast: 15.5
+    max_eye_tilt: 0.25
+    max_nose_center_offset: 0.10
+    min_embedding_similarity: 0.70
   attention_gate:
     enabled: true
     min_face_area: 700
@@ -182,10 +194,10 @@ engagement:
 
 embodiment:
   gestures:
-    enabled: true
+    enabled: false
     preset: unitree_go2
     tilt_enabled: false
-    nodding_enabled: true
+    nodding_enabled: false
 
 battery:
   low_battery_pct: 10.0

@@ -86,7 +86,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _recognize_once(
     service: Any,
     *,
-    camera_topic: str,
+    camera_resource_id: str,
     timeout: float,
     include_enrollment_quality: bool,
     max_frame_wait_sec: float,
@@ -97,7 +97,10 @@ def _recognize_once(
     depth_m = None
     while image is None:
         attempts += 1
-        image, depth_m = service._capture_for_recognition(camera_topic, timeout=timeout)
+        image, depth_m = service._capture_for_recognition(
+            camera_resource_id,
+            timeout=timeout,
+        )
         elapsed = time.monotonic() - started_at
         if image is not None:
             break
@@ -109,6 +112,7 @@ def _recognize_once(
                 "capture_wait_s": round(elapsed, 3),
                 "message": "No color frame or synced RGBD pair was captured.",
             }
+        time.sleep(0.02)
 
     prepared = service._prepare_faces_for_recognition_result(image, depth_m)
     payload: dict[str, Any] = {
@@ -173,11 +177,14 @@ def main() -> int:
             {
                 "mode": "loop" if args.loop else "once",
                 "profile": config["profile_name"],
-                "camera_topic": config["camera_topic"],
+                "camera_resource_id": config["camera_resource_id"],
                 "db_path": config["db_path"],
                 "identity_db_path": config["identity_db_path"],
                 "loop_interval_sec": config["loop_interval_sec"],
                 "recognition_threshold": config["recognition_threshold"],
+                "provider_transport": config["provider_transport"],
+                "provider_id": config["provider_id"],
+                "provider_resource_id": config["provider_resource_id"],
                 "depth_gate": vars(depth_settings) if depth_settings is not None else None,
                 "include_enrollment_quality": bool(args.include_enrollment_quality),
             }
@@ -190,7 +197,7 @@ def main() -> int:
         while True:
             payload = _recognize_once(
                 service,
-                camera_topic=config["camera_topic"],
+                camera_resource_id=config["camera_resource_id"],
                 timeout=timeout,
                 include_enrollment_quality=args.include_enrollment_quality,
                 max_frame_wait_sec=max(0.0, float(args.max_frame_wait_sec)),
@@ -205,6 +212,9 @@ def main() -> int:
         return 0
     finally:
         service.shutdown()
+        robot_client = config.get("robot_client") if "config" in locals() else None
+        if robot_client is not None:
+            robot_client.shutdown()
 
 
 if __name__ == "__main__":
