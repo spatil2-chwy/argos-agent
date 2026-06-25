@@ -16,10 +16,54 @@ poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
 poetry run python -m scripts.labs.face_capture_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
+poetry run python -m scripts.labs.enrollment_photo_collection --help
+poetry run python -m scripts.labs.enrollment_audio_collection --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 ```
+
+## Person-centered enrollment data collection
+
+Use these when you want raw, person-labeled artifacts for comparing face/audio
+recognition models and preprocessing choices. The scripts write under
+`data_collection/<person_slug>/<session_id>/` by default.
+Pass the same `--session-id` to the photo and audio scripts when you want both
+modalities in one session folder.
+
+Photo collection using the selected profile's `resources.face_camera`:
+
+```bash
+poetry run python -m scripts.labs.enrollment_photo_collection "Jane Doe" --frames 8
+```
+
+By default, this uses whatever camera resource is in the YAML profile, such as
+`face_camera: arducam_001`, and saves it under `photos/face_camera/`. Photo
+capture is manually triggered: change the person's pose/angle, press Enter, and
+the script captures one frame. Use `--auto` if you want timed capture with
+`--interval-sec` instead.
+
+To collect multiple provider camera resources in one run, repeat `--camera`.
+The value before `=` is only the output folder/sample prefix; the value after
+`=` is the provider resource id:
+
+```bash
+poetry run python -m scripts.labs.enrollment_photo_collection "Jane Doe" \
+  --camera realsense=realsense_001 \
+  --camera arducam_fisheye=arducam_fisheye_001 \
+  --camera arducam_rect=arducam_rect_001
+```
+
+Audio collection:
+
+```bash
+poetry run python -m scripts.labs.enrollment_audio_collection "Jane Doe" --clips 5
+```
+
+The audio script uses the selected profile's microphone/VAD settings, shows
+`Mic admission active`, `Recording...`, and `Saved audio...` on the interaction
+display when configured, waits for Enter before each clip, and saves both the
+input-rate WAV plus an agent-rate 16 kHz WAV for later experiments.
 
 ## Structured perception labs + eval
 
