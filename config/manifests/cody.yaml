@@ -27,7 +27,7 @@ resources:
       - presence.face.publish
       - voice_command.publish
 
-  - id: realsense_001
+  - id: realsense_002
     kind: camera
     hardware: realsense
     provider: cody-go2
