@@ -52,7 +52,7 @@ current speaker-owned text into the same active conversation episode. The
 episode ends on idle timeout or runtime shutdown.
 
 Episode participants are Argos `person_id` values. Argos sends transcript text,
-summary, place, role/source metadata, and retention class. Argos does not send
+place, role/source metadata, and retention class. Argos does not send
 face embeddings, audio embeddings, raw images, or raw audio to Tailwag.
 
 ## Person Context

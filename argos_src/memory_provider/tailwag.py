@@ -277,13 +277,11 @@ class TailwagMemoryProvider:
             started_at = self._active_started_at or now
             transcript = "\n\n".join(self._active_segment_text.values())
             participants = tuple(sorted(self._active_person_ids))
-        summary = _segment_summary(transcript)
         return self._episode_input(
             id=episode_id,
             episode_type="conversation",
             start_time=started_at,
             end_time=now,
-            summary=summary,
             transcript=transcript,
             retention_class=self.retention_class,
             place=self._place_input(
@@ -340,13 +338,6 @@ def _segment_transcript(segment: PreferenceSegment) -> str:
 
 def _is_terminal_flush(reason: str) -> bool:
     return str(reason or "").strip() in {"idle_timeout", "shutdown"}
-
-
-def _segment_summary(transcript: str) -> str:
-    rendered = " ".join(str(transcript or "").split())
-    if len(rendered) <= 240:
-        return rendered
-    return rendered[:237].rstrip() + "..."
 
 
 def _utc_now_iso() -> str:

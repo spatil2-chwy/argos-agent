@@ -11,19 +11,59 @@ from argos_src.memory_provider.tailwag import TailwagMemoryProvider
 
 
 class _TailwagInput:
+    allowed_fields: frozenset[str] = frozenset()
+
     def __init__(self, **kwargs):
+        unknown_fields = set(kwargs) - self.allowed_fields
+        if unknown_fields:
+            unexpected = ", ".join(sorted(unknown_fields))
+            raise TypeError(f"unexpected Tailwag input fields: {unexpected}")
         self.face_embedding = None
         self.audio_embedding = None
         for key, value in kwargs.items():
             setattr(self, key, value)
 
 
+class _PersonInput(_TailwagInput):
+    allowed_fields = frozenset(
+        {
+            "id",
+            "display_name",
+            "email",
+            "consent_status",
+            "face_embedding",
+            "audio_embedding",
+            "role",
+            "source",
+        }
+    )
+
+
+class _PlaceInput(_TailwagInput):
+    allowed_fields = frozenset({"building_code", "room_id"})
+
+
+class _EpisodeInput(_TailwagInput):
+    allowed_fields = frozenset(
+        {
+            "id",
+            "episode_type",
+            "start_time",
+            "end_time",
+            "transcript",
+            "retention_class",
+            "place",
+            "participants",
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def fake_tailwag_memory_module(monkeypatch):
     module = types.ModuleType("tailwag_memory")
-    module.PersonInput = _TailwagInput
-    module.PlaceInput = _TailwagInput
-    module.EpisodeInput = _TailwagInput
+    module.PersonInput = _PersonInput
+    module.PlaceInput = _PlaceInput
+    module.EpisodeInput = _EpisodeInput
     monkeypatch.setitem(sys.modules, "tailwag_memory", module)
 
 
@@ -165,6 +205,7 @@ def test_extract_and_store_segment_records_tailwag_episode_without_biometrics():
     assert episode.participants[0].source == "live_chat"
     assert episode.participants[0].face_embedding is None
     assert episode.participants[0].audio_embedding is None
+    assert not hasattr(episode, "summary")
     assert "User: I like robot demos." in episode.transcript
     assert "Assistant: I'll remember that." in episode.transcript
     assert "seg-1-turn" not in episode.transcript
