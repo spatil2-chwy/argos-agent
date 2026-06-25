@@ -16,14 +16,14 @@ class SpeakerRecognitionPolicy:
 
     backend: str = "speechbrain_ecapa"
     db_path: str = ""
-    query_min_voiced_sec: float = 0.8
-    query_match_threshold: float = 0.60
-    query_margin_threshold: float = 0.08
+    query_min_voiced_sec: float = 0.0
+    query_match_threshold: float = 0.40
+    query_margin_threshold: float = 0.20
     reference_update_threshold: float = 0.55
-    enroll_min_voiced_sec: float = 2.0
+    enroll_min_voiced_sec: float = 0.0
     enroll_max_voiced_sec: float = 0.0
     explicit_prompt_after_silent_failures: int = 2
-    enroll_min_rms_level: float = 350.0
+    enroll_min_rms_level: float = 0.0
     max_clipped_fraction: float = 0.02
 
     def __post_init__(self) -> None:

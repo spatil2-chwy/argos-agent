@@ -440,18 +440,10 @@ class RealtimeAgentAudioMixin:
                 "speech_end_unix_s": speech_end_unix_s,
                 "transcript_perf_s": transcript_perf_s,
             }
+        # Speaker recognition now uses the raw 16 kHz turn audio. The eval repo
+        # showed raw ECAPA embeddings with per-person centroids outperforming
+        # the earlier duration/VAD-gated path on collected robot samples.
         trimmed_audio_pcm16 = audio_pcm16
-        if self.speaker_service is not None and audio_pcm16:
-            try:
-                # Do not reuse the live capture VAD here. Silero/Torch is not
-                # thread-safe enough for concurrent callback + commit use.
-                trimmed_audio_pcm16 = self.speaker_service.trim_turn_audio(
-                    audio_pcm16,
-                    vad=None,
-                )
-            except Exception:
-                self.logger.exception("Failed to trim turn audio req_id=%s", req_id)
-                trimmed_audio_pcm16 = audio_pcm16
         speaker_audio_debug = self._speaker_audio_debug_payload(
             raw_audio_pcm16=audio_pcm16,
             trimmed_audio_pcm16=trimmed_audio_pcm16,

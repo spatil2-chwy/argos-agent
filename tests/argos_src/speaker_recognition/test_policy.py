@@ -76,13 +76,30 @@ def test_resolve_owner_id_reports_audio_face_agreement_when_accepted_ids_match()
         primary_face_person_id="alice",
         audio_speaker_id="alice",
         top_score=0.61,
-        runner_up_score=0.80,
+        runner_up_score=0.21,
         visible_face_person_ids=("alice",),
     )
 
     assert result.owner_id == "alice"
     assert result.owner_source == "audio_face_agree"
     assert result.speaker_visible is True
+
+
+def test_resolve_owner_id_requires_margin_even_when_face_corroborates_audio():
+    policy = SpeakerRecognitionPolicy(query_match_threshold=0.40, query_margin_threshold=0.20)
+
+    result = resolve_owner_id(
+        policy=policy,
+        primary_face_person_id="alice",
+        audio_speaker_id="alice",
+        top_score=0.61,
+        runner_up_score=0.55,
+        visible_face_person_ids=("alice",),
+    )
+
+    assert result.owner_id == "alice"
+    assert result.owner_source == "face"
+    assert result.audio_speaker_id is None
 
 
 def test_resolve_owner_id_leaves_unresolved_without_face_or_accepted_audio():
@@ -126,6 +143,18 @@ def test_enrollment_rejection_reason_rejects_short_audio():
     )
 
     assert reason == "reject_too_short"
+
+
+def test_enrollment_rejection_reason_rejects_empty_audio_even_without_duration_gate():
+    policy = SpeakerRecognitionPolicy(enroll_min_voiced_sec=0.0, enroll_min_rms_level=0.0)
+    waveform = np.asarray([], dtype=np.int16)
+
+    reason = enrollment_rejection_reason(
+        policy,
+        audio_pcm16=waveform,
+    )
+
+    assert reason == "reject_empty"
 
 
 def test_enrollment_rejection_reason_rejects_quiet_audio():

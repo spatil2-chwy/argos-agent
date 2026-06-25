@@ -736,7 +736,7 @@ def test_owner_turn_is_requested_when_audio_turn_commits():
     assert owner_turn.requests[0]["owner_source"] == "face"
 
 
-def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
+def test_audio_turn_uses_raw_speaker_audio_without_trim_pass():
     agent = _make_agent()
     agent.speaker_service = _FakeSpeakerService()
     agent._vad = object()
@@ -750,8 +750,8 @@ def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
         speech_end_unix_s=2.0,
     )
 
-    assert len(agent.speaker_service.trim_calls) == 1
-    assert agent.speaker_service.trim_calls[0]["vad"] is None
+    assert agent.speaker_service.trim_calls == []
+    assert agent.speaker_service.resolve_calls[0]["audio_pcm16"] == b"\x01\x02"
 
 
 def test_output_audio_does_not_request_duplicate_owner_turn():

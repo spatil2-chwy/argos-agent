@@ -95,6 +95,8 @@ def enrollment_rejection_reason(
     audio_pcm16: np.ndarray,
 ) -> str:
     stats = clip_stats(audio_pcm16)
+    if stats.duration_s <= 0.0:
+        return "reject_empty"
     if stats.duration_s < policy.enroll_min_voiced_sec:
         return "reject_too_short"
     if policy.enroll_max_voiced_sec > 0.0 and stats.duration_s > policy.enroll_max_voiced_sec:
@@ -127,17 +129,10 @@ def resolve_owner_id(
         if rendered
     )
     margin = max(0.0, float(top_score) - float(runner_up_score))
-    has_face_corroboration = rendered_audio_candidate is not None and (
-        rendered_audio_candidate == rendered_primary
-        or rendered_audio_candidate in visible_face_ids
-    )
     audio_is_confident = (
         rendered_audio_candidate is not None
         and float(top_score) >= policy.query_match_threshold
-        and (
-            margin >= policy.query_margin_threshold
-            or has_face_corroboration
-        )
+        and margin >= policy.query_margin_threshold
     )
     rendered_audio = rendered_audio_candidate if audio_is_confident else None
     audio_visible = rendered_audio is not None and (
