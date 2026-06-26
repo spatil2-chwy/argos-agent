@@ -126,9 +126,8 @@ Examples of one item:
 - one function call
 - one function-call output
 
-Argos no longer keeps a fixed item-count tail. Realtime history is scoped to the
-current resolved owner, and older conversation items are deleted on owner
-handoff.
+Realtime history is scoped to the current resolved owner, and earlier
+conversation items are deleted on owner handoff.
 
 ## Human Audio Turn: Exact Flow
 
@@ -406,9 +405,9 @@ That truncate step is important: it keeps the server-side conversation aligned w
 
 ## Important Edge Cases
 
-### New human turn before the previous answer starts
+### New human turn before the pending answer starts
 
-If the old turn has not produced audio yet, `_supersede_unanswered_turn()` cancels it and lets the new human turn win.
+If the superseded turn has not produced audio yet, `_supersede_unanswered_turn()` cancels it and lets the new human turn win.
 
 ### Model completed without audio
 

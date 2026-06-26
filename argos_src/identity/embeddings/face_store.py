@@ -16,7 +16,7 @@ class FaceEmbeddingStore:
     """Persistent face-vector store.
 
     Identity lives in :class:`argos_src.identity.store.IdentityStore`; social/context
-    memory lives in :class:`argos_src.memory.store.MemoryStore`.
+    memory lives outside Argos in Tailwag.
     This class stores only face embeddings and modality-specific metadata.
     """
 

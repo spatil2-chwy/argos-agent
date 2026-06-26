@@ -89,7 +89,10 @@ class RealtimeAgentPreferenceMixin:
 
         def run_then_clear() -> None:
             try:
-                self.preference_extractor.extract_and_store_segment(segment)
+                try:
+                    self.preference_extractor.extract_and_store_segment(segment, reason=reason)
+                except TypeError:
+                    self.preference_extractor.extract_and_store_segment(segment)
             finally:
                 with self._pending_lock:
                     self._pending_preference_segment_ids.discard(segment.segment_id)

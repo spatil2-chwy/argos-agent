@@ -180,3 +180,4 @@ scripts/labs/face_preview/
 *.codex
 
 *.snowflake_env
+.tailwag

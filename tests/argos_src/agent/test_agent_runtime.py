@@ -1,6 +1,7 @@
 import logging
 from collections import deque
 import importlib
+from pathlib import Path
 import queue
 from types import SimpleNamespace
 import threading
@@ -117,6 +118,233 @@ class _FakeTool:
 
     def invoke(self, arguments):
         return {"success": True, "arguments": arguments}
+
+
+def _parse_factory_profile(payload):
+    from argos_src.profile_config import _parse_profile as _raw_parse_profile
+
+    merged = {"manifest": "puffle"}
+    merged.update(payload)
+    return _raw_parse_profile(
+        merged,
+        profile_path=Path(f"/tmp/{merged['name']}.yaml"),
+        framework_config={},
+    )
+
+
+def _load_factory_for_memory_tests(monkeypatch, *, created):
+    monkeypatch.delitem(sys.modules, "argos_src.agent.factory", raising=False)
+
+    class _FakeRealtimeRobotAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.owner_turn_controller = kwargs.get("owner_turn_controller")
+
+        def is_recording_active(self):
+            return False
+
+        def update_face_presence_snapshot(self, snapshot):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _FakeEngagementStateMachine:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def attach_coalescer(self, coalescer):
+            self.coalescer = coalescer
+
+        def attach_battery_low_submitter(self, submitter):
+            self.battery_low_submitter = submitter
+
+        def attach_recording_state_provider(self, provider):
+            self.recording_state_provider = provider
+
+        def shutdown(self):
+            return None
+
+    class _FakeEventCoalescer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def submit(self, *args, **kwargs):
+            return None
+
+    class _FakeTailwagMemoryProvider:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.retention_class = kwargs["retention_class"]
+            created["memory_providers"].append(self)
+
+        def close(self):
+            return None
+
+    class _FakeTailwagSlackMemoryService:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            created["slack_services"].append(self)
+
+        def start_background(self):
+            self.started = True
+
+        def shutdown(self):
+            return None
+
+    class _FailingSQLiteMemoryStore:
+        def __init__(self, *args, **kwargs):
+            created["sqlite_memory_stores"].append((args, kwargs))
+            raise AssertionError("SQLite MemoryStore should not be constructed")
+
+    class _FakeIdentityStore:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created["identity_stores"].append(self)
+
+    class _FakeFaceRecognitionService:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.start_calls = []
+            created["face_services"].append(self)
+
+        def start_loop(self, **kwargs):
+            self.start_calls.append(kwargs)
+
+    class _FakeNavigationPolicy:
+        def __init__(
+            self,
+            *,
+            source,
+            interruptible=True,
+            passive_listen_allowed=True,
+        ):
+            self.source = source
+            self.interruptible = interruptible
+            self.passive_listen_allowed = passive_listen_allowed
+
+    class _FakeNavigationState:
+        def __init__(self, store):
+            self.store = store
+
+        def get_patrol(self):
+            return {}
+
+        def get_active_goal(self):
+            return None
+
+    class _FakeFaceEventBridge:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            created["face_event_bridges"].append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            return None
+
+    class _FakePatrolLoopBridge:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def on_nav_event(self, event):
+            return None
+
+    realtime_stub = types.ModuleType("argos_src.agent.agent_runtime")
+    realtime_stub.RealtimeRobotAgent = _FakeRealtimeRobotAgent
+    monkeypatch.setitem(sys.modules, "argos_src.agent.agent_runtime", realtime_stub)
+
+    prompt_loader_mod = types.ModuleType("argos_src.resource_paths")
+    prompt_loader_mod.load_system_prompt = lambda *_args, **_kwargs: "prompt"
+    monkeypatch.setitem(sys.modules, "argos_src.resource_paths", prompt_loader_mod)
+
+    battery_mod = types.ModuleType("argos_src.runtime.battery_state")
+    battery_mod.BatteryStateCache = object
+    battery_mod.LOW_BATTERY_NAVIGATION_MSG = "Battery is low. Cannot navigate."
+    monkeypatch.setitem(sys.modules, "argos_src.runtime.battery_state", battery_mod)
+
+    nav_mod = types.ModuleType("argos_src.nav_support.locations")
+    nav_mod.LocationStore = lambda **kwargs: SimpleNamespace(kwargs=kwargs)
+    nav_mod.CHARGE_DOCK_LOCATION_NAME = "charge_dock"
+    nav_mod.NavigationPolicy = _FakeNavigationPolicy
+    nav_mod.INTERRUPTIBLE_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="general_navigation"
+    )
+    nav_mod.FOCUSED_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="human_task",
+        interruptible=False,
+        passive_listen_allowed=False,
+    )
+    nav_mod.NavigationState = _FakeNavigationState
+    monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
+
+    tools_mod = types.ModuleType("argos_src.tools")
+    tools_mod.NAVIGATION_TOOL_NAMES = ()
+    tools_mod.build_builtin_tools = lambda **_kwargs: []
+    tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
+    tools_mod.resolve_builtin_tool_name = lambda name, **_kwargs: name
+    tools_mod.resolve_builtin_tool_names = lambda names, **_kwargs: tuple(names)
+    monkeypatch.setitem(sys.modules, "argos_src.tools", tools_mod)
+
+    bridges_mod = types.ModuleType("argos_src.agent.bridges")
+    bridges_mod.FaceEventBridge = _FakeFaceEventBridge
+    bridges_mod.PatrolLoopBridge = _FakePatrolLoopBridge
+    monkeypatch.setitem(sys.modules, "argos_src.agent.bridges", bridges_mod)
+
+    startup_mod = types.ModuleType("argos_src.agent.startup")
+    startup_mod.derive_initial_robot_posture = lambda **_kwargs: "standing"
+    startup_mod.prepare_robot_for_agent_session = lambda *_args, **_kwargs: []
+    monkeypatch.setitem(sys.modules, "argos_src.agent.startup", startup_mod)
+
+    memory_provider_mod = types.ModuleType("argos_src.memory_provider")
+    memory_provider_mod.TailwagMemoryProvider = _FakeTailwagMemoryProvider
+    memory_provider_mod.TailwagSlackMemoryService = _FakeTailwagSlackMemoryService
+    monkeypatch.setitem(sys.modules, "argos_src.memory_provider", memory_provider_mod)
+
+    sqlite_memory_mod = types.ModuleType("argos_src.memory")
+    sqlite_memory_mod.MemoryStore = _FailingSQLiteMemoryStore
+    monkeypatch.setitem(sys.modules, "argos_src.memory", sqlite_memory_mod)
+
+    identity_mod = types.ModuleType("argos_src.identity")
+    identity_mod.IdentityStore = _FakeIdentityStore
+    monkeypatch.setitem(sys.modules, "argos_src.identity", identity_mod)
+
+    attention_mod = types.ModuleType("argos_src.face_recognition.attention_gate")
+    attention_mod.AttentionGateSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    attention_mod.AttentionSmoothingSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.face_recognition.attention_gate",
+        attention_mod,
+    )
+
+    depth_mod = types.ModuleType("argos_src.face_recognition.depth_gate")
+    depth_mod.DepthGateSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    monkeypatch.setitem(sys.modules, "argos_src.face_recognition.depth_gate", depth_mod)
+
+    face_service_mod = types.ModuleType(
+        "argos_src.face_recognition.face_recognition_service"
+    )
+    face_service_mod.FaceRecognitionService = _FakeFaceRecognitionService
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.face_recognition.face_recognition_service",
+        face_service_mod,
+    )
+
+    factory_mod = importlib.import_module("argos_src.agent.factory")
+    monkeypatch.setattr(
+        factory_mod,
+        "create_provider_client",
+        lambda **_kwargs: SimpleNamespace(shutdown=lambda: None),
+    )
+    monkeypatch.setattr(factory_mod, "RealtimeRobotAgent", _FakeRealtimeRobotAgent)
+    monkeypatch.setattr(factory_mod, "EngagementStateMachine", _FakeEngagementStateMachine)
+    monkeypatch.setattr(factory_mod, "EventCoalescer", _FakeEventCoalescer)
+    return factory_mod
 
 
 class _FakeGestureRuntime:
@@ -1797,6 +2025,148 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
     assert bob.memory_profile_lines == ("memory for person-2",)
     assert bob.potential_followups == ("followup for person-2",)
     assert bob.preferred_language == "language-person-2"
+
+
+def test_capture_turn_context_continues_without_memory_when_tailwag_fails():
+    agent = _make_agent()
+    agent._current_office_location = "BOS3"
+    log_messages = []
+    agent.logger = SimpleNamespace(
+        exception=lambda message, *args: log_messages.append(message % args),
+    )
+
+    class _FailingMemoryCompiler:
+        def person_context(self, *_args, **_kwargs):
+            raise RuntimeError("tailwag unavailable")
+
+        def site_blocks(self, *_args, **_kwargs):
+            raise RuntimeError("tailwag unavailable")
+
+    agent.memory_context_compiler = _FailingMemoryCompiler()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                interaction_count=2,
+                confidence=0.93,
+                bbox_area=20,
+                timestamp=100.0,
+                directory_profile_lines=("title: Engineer",),
+                memory_profile_lines=("local fallback memory",),
+                potential_followups=("local fallback followup",),
+                preferred_language="",
+                visible=True,
+            ),
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+
+    context = agent._capture_turn_context(
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        owner_source="face",
+        speaker_visible=True,
+    )
+
+    assert context.memory_context_blocks == ()
+    assert len(context.persons) == 1
+    assert context.persons[0].memory_profile_lines == ("local fallback memory",)
+    assert context.persons[0].potential_followups == ("local fallback followup",)
+    assert "Failed to compile site memory context" in log_messages
+    assert "Failed to compile memory context for person-1" in log_messages
+
+
+def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "sqlite_memory_stores": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-factory-wiring",
+            "memory": {
+                "enabled": True,
+                "retention_class": "priority",
+                "place_room_id": "lab",
+                "extract_live_turn_memory": False,
+            },
+            "slack_memory": {
+                "enabled": True,
+                "start_with_agent": True,
+                "channels": [{"name": "argos-test", "channel_id": "C123"}],
+            },
+            "face_recognition": {
+                "enabled": True,
+                "preference_extraction": {"enabled": True},
+            },
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert created["sqlite_memory_stores"] == []
+    assert len(created["memory_providers"]) == 1
+    provider = created["memory_providers"][0]
+    assert provider.kwargs == {
+        "site_code": "",
+        "place_room_id": "lab",
+        "retention_class": "priority",
+        "extract_live_turn_memory": False,
+    }
+    assert agent.kwargs["memory_context_compiler"] is provider
+    assert agent.kwargs["preference_extractor"] is provider
+    assert agent.kwargs["preference_extraction_enabled"] is True
+    assert len(created["face_services"]) == 1
+    assert created["face_services"][0].kwargs["memory_store"] is provider
+    assert len(created["slack_services"]) == 1
+    assert created["slack_services"][0].kwargs["episode_recorder"] is provider
+    assert created["slack_services"][0].started is True
+    assert agent.kwargs["slack_memory_service"] is created["slack_services"][0]
+
+
+def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "sqlite_memory_stores": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-factory-memory-disabled",
+            "memory": {"enabled": False},
+            "face_recognition": {
+                "enabled": True,
+                "preference_extraction": {"enabled": True},
+            },
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert created["sqlite_memory_stores"] == []
+    assert created["memory_providers"] == []
+    assert created["slack_services"] == []
+    assert agent.kwargs["memory_context_compiler"] is None
+    assert agent.kwargs["preference_extractor"] is None
+    assert agent.kwargs["preference_extraction_enabled"] is True
+    assert len(created["face_services"]) == 1
+    assert created["face_services"][0].kwargs["memory_store"] is None
 
 
 def test_audio_turn_pending_internal_text_uses_system_role_message():
