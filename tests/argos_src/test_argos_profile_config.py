@@ -143,10 +143,11 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.face_recognition.attention_gate.max_center_offset_ratio == pytest.approx(
         0.70
     )
-    assert profile.face_recognition.enrollment_policy.min_face_area == 5000
-    assert profile.face_recognition.enrollment_policy.min_sharpness == pytest.approx(12.0)
+    assert profile.face_recognition.enrollment_policy.min_face_area == 1500
     assert profile.face_recognition.enrollment_policy.min_brightness == pytest.approx(35.0)
     assert profile.face_recognition.enrollment_policy.min_contrast == pytest.approx(15.5)
+    assert profile.face_recognition.recognition_threshold == pytest.approx(0.6)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.20)
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
@@ -574,14 +575,12 @@ def test_face_enrollment_policy_profile_is_configurable():
             "face_recognition": {
                 "enrollment_policy": {
                     "min_face_area": 6200,
-                    "min_sharpness": 14.0,
                     "min_brightness": 34.0,
                     "max_brightness": 215.0,
                     "min_contrast": 16.0,
-                    "max_eye_tilt": 0.22,
-                    "max_nose_center_offset": 0.09,
                     "min_embedding_similarity": 0.74,
                 },
+                "recognition_margin_threshold": 0.18,
             },
         },
         profile_path=Path("/tmp/enrollment-policy.yaml"),
@@ -590,13 +589,11 @@ def test_face_enrollment_policy_profile_is_configurable():
 
     policy = profile.face_recognition.enrollment_policy
     assert policy.min_face_area == 6200
-    assert policy.min_sharpness == pytest.approx(14.0)
     assert policy.min_brightness == pytest.approx(34.0)
     assert policy.max_brightness == pytest.approx(215.0)
     assert policy.min_contrast == pytest.approx(16.0)
-    assert policy.max_eye_tilt == pytest.approx(0.22)
-    assert policy.max_nose_center_offset == pytest.approx(0.09)
     assert policy.min_embedding_similarity == pytest.approx(0.74)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.18)
 
 
 def test_face_recognition_rejects_provider_internal_camera_keys():

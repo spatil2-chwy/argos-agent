@@ -135,12 +135,9 @@ class FaceAttentionGateProfile:
 @dataclass(frozen=True)
 class FaceEnrollmentPolicyProfile:
     min_face_area: int
-    min_sharpness: float
     min_brightness: float
     max_brightness: float
     min_contrast: float
-    max_eye_tilt: float
-    max_nose_center_offset: float
     min_embedding_similarity: float
 
 
@@ -155,6 +152,7 @@ class FaceRecognitionProfile:
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
+    recognition_margin_threshold: float
     live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
@@ -338,6 +336,7 @@ class ScenarioProfile:
             db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
+            recognition_margin_threshold=0.20,
             live_image_enabled=True,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
@@ -373,13 +372,10 @@ class ScenarioProfile:
                 hold_sec=0.8,
             ),
             enrollment_policy=FaceEnrollmentPolicyProfile(
-                min_face_area=5000,
-                min_sharpness=12.0,
+                min_face_area=1500,
                 min_brightness=35.0,
                 max_brightness=220.0,
                 min_contrast=15.5,
-                max_eye_tilt=0.25,
-                max_nose_center_offset=0.10,
                 min_embedding_similarity=0.70,
             ),
             owner_turn=FaceOwnerTurnProfile(
@@ -1341,12 +1337,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         min_face_area=_pop_int(
             enrollment_policy_data,
             "min_face_area",
-            default=5000,
-        ),
-        min_sharpness=_pop_float(
-            enrollment_policy_data,
-            "min_sharpness",
-            default=12.0,
+            default=1500,
         ),
         min_brightness=_pop_float(
             enrollment_policy_data,
@@ -1363,16 +1354,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "min_contrast",
             default=15.5,
         ),
-        max_eye_tilt=_pop_float(
-            enrollment_policy_data,
-            "max_eye_tilt",
-            default=0.25,
-        ),
-        max_nose_center_offset=_pop_float(
-            enrollment_policy_data,
-            "max_nose_center_offset",
-            default=0.10,
-        ),
         min_embedding_similarity=_pop_float(
             enrollment_policy_data,
             "min_embedding_similarity",
@@ -1382,10 +1363,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     if enrollment_policy.min_face_area < 1:
         raise ProfileValidationError(
             "face_recognition.enrollment_policy.min_face_area must be >= 1"
-        )
-    if enrollment_policy.min_sharpness < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.min_sharpness must be >= 0"
         )
     if enrollment_policy.min_brightness < 0.0:
         raise ProfileValidationError(
@@ -1398,14 +1375,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     if enrollment_policy.min_contrast < 0.0:
         raise ProfileValidationError(
             "face_recognition.enrollment_policy.min_contrast must be >= 0"
-        )
-    if enrollment_policy.max_eye_tilt < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.max_eye_tilt must be >= 0"
-        )
-    if enrollment_policy.max_nose_center_offset < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.max_nose_center_offset must be >= 0"
         )
     if not 0.0 <= enrollment_policy.min_embedding_similarity <= 1.0:
         raise ProfileValidationError(
@@ -1520,6 +1489,11 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_threshold",
             default=0.6,
         ),
+        recognition_margin_threshold=_pop_float(
+            data,
+            "recognition_margin_threshold",
+            default=0.20,
+        ),
         live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,
@@ -1529,6 +1503,14 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         proactive_greeting=proactive,
     )
     profile = replace(profile, db_path=str(resolve_repo_path(profile.db_path)))
+    if not 0.0 <= profile.recognition_threshold <= 1.0:
+        raise ProfileValidationError(
+            "face_recognition.recognition_threshold must be between 0 and 1"
+        )
+    if not 0.0 <= profile.recognition_margin_threshold <= 1.0:
+        raise ProfileValidationError(
+            "face_recognition.recognition_margin_threshold must be between 0 and 1"
+        )
     _reject_unknown(data, "face_recognition")
     return profile
 

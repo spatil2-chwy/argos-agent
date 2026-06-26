@@ -73,7 +73,8 @@ face_recognition:
   enabled: true
   db_path: var/face_recognition
   loop_interval_sec: 0.05
-  recognition_threshold: 0.8
+  recognition_threshold: 0.6
+  recognition_margin_threshold: 0.20
   live_image_enabled: false
   owner_turn:
     enabled: true
@@ -101,13 +102,10 @@ face_recognition:
     search_radius_px: 12
     max_valid_depth_m: 10.0
   enrollment_policy:
-    min_face_area: 5000
-    min_sharpness: 12.0
+    min_face_area: 1500
     min_brightness: 35.0
     max_brightness: 220.0
     min_contrast: 15.5
-    max_eye_tilt: 0.25
-    max_nose_center_offset: 0.10
     min_embedding_similarity: 0.70
   attention_gate:
     enabled: true

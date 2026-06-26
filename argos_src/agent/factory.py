@@ -312,6 +312,9 @@ def create_agent(
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
             recognition_threshold=scenario_profile.face_recognition.recognition_threshold,
+            recognition_margin_threshold=(
+                scenario_profile.face_recognition.recognition_margin_threshold
+            ),
             robot_client=robot_client,
             identity_store=identity_store,
             memory_store=memory_store,
@@ -362,12 +365,9 @@ def create_agent(
             ),
             enrollment_policy=FaceEnrollmentPolicy(
                 min_face_area=enrollment_policy.min_face_area,
-                min_sharpness=enrollment_policy.min_sharpness,
                 min_brightness=enrollment_policy.min_brightness,
                 max_brightness=enrollment_policy.max_brightness,
                 min_contrast=enrollment_policy.min_contrast,
-                max_eye_tilt=enrollment_policy.max_eye_tilt,
-                max_nose_center_offset=enrollment_policy.max_nose_center_offset,
                 min_embedding_similarity=enrollment_policy.min_embedding_similarity,
             ),
         )

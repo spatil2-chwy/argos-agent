@@ -233,6 +233,74 @@ def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
     assert details == ["Sakshee_Patil:sim=0.73,threshold=0.65"]
 
 
+def test_recognize_face_match_accepts_clear_top_match(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    calls = []
+
+    def recognize_face(**kwargs):
+        calls.append(kwargs)
+        return [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.82},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.55},
+        ]
+
+    service.db = types.SimpleNamespace(recognize_face=recognize_face)
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match["person_id"] == "arushi"
+    assert match["runner_up_similarity"] == 0.55
+    assert abs(match["similarity_margin"] - 0.27) < 1e-6
+    assert calls[0]["threshold"] == -1.0
+    assert calls[0]["top_k"] == 2
+
+
+def test_recognize_face_match_rejects_low_similarity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
+        ]
+    )
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match is None
+
+
+def test_recognize_face_match_rejects_small_margin(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.75},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.62},
+        ]
+    )
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match is None
+
+
 def test_loop_tick_emits_timing_metric(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
@@ -685,9 +753,50 @@ def test_enrollment_face_selection_ignores_small_weak_extra_detection(monkeypatc
     assert face == primary
 
 
+def test_enrollment_face_selection_ignores_below_min_area_extra_detection(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
+    primary = {
+        "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
+        "confidence": 0.99,
+    }
+    small_extra = {
+        "bbox": {"x": 120, "y": 15, "w": 30, "h": 30},
+        "confidence": 0.999,
+    }
+
+    face, multiple_people_visible = module.FaceRecognitionService._select_enrollment_face(
+        service,
+        [primary, small_extra],
+    )
+
+    assert multiple_people_visible is False
+    assert face == primary
+
+
+def test_enrollment_face_selection_returns_small_face_for_quality_rejection(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
+    small = {
+        "bbox": {"x": 10, "y": 10, "w": 30, "h": 30},
+        "confidence": 0.99,
+    }
+
+    face, multiple_people_visible = module.FaceRecognitionService._select_enrollment_face(
+        service,
+        [small],
+    )
+
+    assert multiple_people_visible is False
+    assert face == small
+
+
 def test_enrollment_face_selection_rejects_two_distinct_strong_faces(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
     left = {
         "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
         "confidence": 0.99,
@@ -728,7 +837,60 @@ def test_prepare_faces_for_recognition_reports_no_embedding(monkeypatch):
     assert result.reason == "no_embedding"
 
 
-def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
+def test_prepare_faces_for_recognition_filters_faces_below_min_area(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._depth_gate_settings = None
+    small = {
+        "bbox": {"x": 10, "y": 10, "w": 20, "h": 20},
+        "confidence": 0.99,
+    }
+    usable = {
+        "bbox": {"x": 50, "y": 10, "w": 50, "h": 50},
+        "confidence": 0.98,
+    }
+    service.detect_faces = lambda _image: [small, usable]
+    service.extract_face_embedding = lambda _image, _face: np.ones(512, dtype=np.float32)
+
+    result = module.FaceRecognitionService._prepare_faces_for_recognition_result(
+        service,
+        np.zeros((128, 128, 3), dtype=np.uint8),
+        None,
+        min_face_area=1500,
+    )
+
+    assert result.reason == ""
+    assert result.detected_count == 2
+    assert result.rejected_count == 1
+    assert len(result.faces) == 1
+    assert result.faces[0]["bbox"] == usable["bbox"]
+
+
+def test_prepare_faces_for_recognition_reports_all_faces_below_min_area(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._depth_gate_settings = None
+    service.detect_faces = lambda _image: [
+        {
+            "bbox": {"x": 10, "y": 10, "w": 20, "h": 20},
+            "confidence": 0.99,
+        }
+    ]
+
+    result = module.FaceRecognitionService._prepare_faces_for_recognition_result(
+        service,
+        np.zeros((128, 128, 3), dtype=np.uint8),
+        None,
+        min_face_area=1500,
+    )
+
+    assert result.faces == []
+    assert result.reason == "face_too_small"
+    assert result.detected_count == 1
+    assert result.rejected_count == 1
+
+
+def test_enrollment_face_quality_rejects_low_contrast_frame(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
 
@@ -739,14 +901,14 @@ def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
     )
 
     assert result.accepted is False
-    assert result.reason == "too_blurry"
+    assert result.reason == "low_contrast"
 
 
-def test_enrollment_face_quality_rejects_side_face(monkeypatch):
+def test_enrollment_face_quality_accepts_face_without_landmarks(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     face = _face(area=6400)
-    face["landmarks"]["nose"] = (face["bbox"]["x"] + face["bbox"]["w"] * 0.85, 40.0)
+    face.pop("landmarks")
 
     result = module.FaceRecognitionService._assess_enrollment_face_quality(
         service,
@@ -754,8 +916,7 @@ def test_enrollment_face_quality_rejects_side_face(monkeypatch):
         face,
     )
 
-    assert result.accepted is False
-    assert result.reason == "side_face"
+    assert result.accepted is True
 
 
 def test_enrollment_face_quality_rejects_clipped_bbox(monkeypatch):

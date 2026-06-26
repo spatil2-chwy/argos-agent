@@ -177,13 +177,10 @@ The enrollment quality gates live in `FaceEnrollmentPolicy` in
 ```python
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 5000
-    min_sharpness: float = 12.0
+    min_face_area: int = 1500
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    max_eye_tilt: float = 0.25
-    max_nose_center_offset: float = 0.10
     min_embedding_similarity: float = 0.70
 ```
 
@@ -191,11 +188,8 @@ class FaceEnrollmentPolicy:
 
 | Reason | Meaning | User guidance |
 |---|---|---|
-| `face_too_small` | Face bbox area is below `5000` px. | Come closer. |
+| `face_too_small` | Face bbox area is below `1500` px. | Come closer. |
 | `face_clipped` | Face touches image boundary. | Center whole face in view. |
-| `missing_landmarks` | Required eye, nose, or mouth landmarks are missing. | Face the camera directly. |
-| `side_face` | Eye tilt or nose offset suggests a profile/angled face. | Face the camera directly. |
-| `too_blurry` | Gradient-based sharpness below `12.0`. | Hold still. |
 | `too_dark` | Mean crop brightness below `35.0`. | Move to better light. |
 | `too_bright` | Mean crop brightness above `220.0`. | Move away from bright light. |
 | `low_contrast` | Crop contrast below `15.5`. | Move to better light. |
@@ -276,9 +270,21 @@ and embedding extraction as enrollment:
 
 ```python
 detected_faces = self.detect_faces(image)
+detected_faces = [face for face in detected_faces if bbox_area >= min_face_area]
 gated_faces, rejected_count = filter_detections_by_depth(...)
 embedding = self.extract_face_embedding(image, detection)
 ```
+
+The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_face_area`
+(`1500` px in the static interaction profile). This keeps tiny distant faces from
+becoming recognized-person context while still allowing fisheye captures where
+valid nearby faces are smaller than RealSense crops.
+
+Recognition accepts the top database match only when similarity is at least
+`recognition_threshold` (`0.6` in the static interaction profile) and the
+top-vs-runner-up similarity margin is at least `recognition_margin_threshold`
+(`0.20`). This keeps low-confidence and ambiguous matches out of the live
+person context.
 
 What recognition does not do:
 
@@ -313,6 +319,7 @@ Enrollment wants exactly one visible person:
 
 - one face is accepted
 - duplicate/ghost detections overlapping the primary can be ignored
+- extra detections below `FaceEnrollmentPolicy.min_face_area` can be ignored
 - tiny, weak extra detections can be ignored
 - significant extra faces return `status="retry_single_face"` and
   `failure_reason="multiple_faces"`
@@ -372,6 +379,7 @@ face_recognition:
   enabled: true
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
+  recognition_margin_threshold: 0.20
   depth_gate:
     enabled: true
     sync_slop_sec: 0.12
@@ -520,9 +528,7 @@ are:
 The checks I would keep strict are:
 
 - `multiple_faces`
-- `side_face`, especially `max_nose_center_offset`
 - `face_clipped`
-- `missing_landmarks`
 - `embedding_inconsistent`
 
 Those are the ones most likely to save the wrong identity or produce a weak

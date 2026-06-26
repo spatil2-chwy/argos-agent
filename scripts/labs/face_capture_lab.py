@@ -160,9 +160,6 @@ def _enrollment_predictions(
                     "bbox_area": metrics.get("bbox_area", 0),
                     "brightness": metrics.get("brightness", 0.0),
                     "contrast": metrics.get("contrast", 0.0),
-                    "sharpness": metrics.get("sharpness", 0.0),
-                    "eye_tilt": metrics.get("eye_tilt", 0.0),
-                    "nose_center_offset": metrics.get("nose_center_offset", 0.0),
                 },
                 "policy": quality.get("policy", {}),
             }
