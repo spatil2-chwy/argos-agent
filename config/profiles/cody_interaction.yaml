@@ -32,6 +32,7 @@ tools:
     - vision.capture_scene
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
+    - memory.search_semantic
 
 employee_directory:
   enabled: true
