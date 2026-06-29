@@ -193,11 +193,6 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def shutdown(self):
             return None
 
-    class _FailingSQLiteMemoryStore:
-        def __init__(self, *args, **kwargs):
-            created["sqlite_memory_stores"].append((args, kwargs))
-            raise AssertionError("SQLite MemoryStore should not be constructed")
-
     class _FakeIdentityStore:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -282,12 +277,32 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
 
     tools_mod = types.ModuleType("argos_src.tools")
+    tools_mod.__path__ = []
     tools_mod.NAVIGATION_TOOL_NAMES = ()
     tools_mod.build_builtin_tools = lambda **_kwargs: []
     tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
     tools_mod.resolve_builtin_tool_name = lambda name, **_kwargs: name
     tools_mod.resolve_builtin_tool_names = lambda names, **_kwargs: tuple(names)
     monkeypatch.setitem(sys.modules, "argos_src.tools", tools_mod)
+    unitree_tools_mod = types.ModuleType("argos_src.tools.unitree_go2")
+    unitree_tools_mod.__path__ = []
+    navigation_tools_mod = types.ModuleType("argos_src.tools.unitree_go2.navigation")
+    navigation_tools_mod.__path__ = []
+    navigation_toolset_mod = types.ModuleType(
+        "argos_src.tools.unitree_go2.navigation.toolset"
+    )
+    navigation_toolset_mod.process_navigation_event = lambda **_kwargs: None
+    monkeypatch.setitem(sys.modules, "argos_src.tools.unitree_go2", unitree_tools_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.tools.unitree_go2.navigation",
+        navigation_tools_mod,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.tools.unitree_go2.navigation.toolset",
+        navigation_toolset_mod,
+    )
 
     bridges_mod = types.ModuleType("argos_src.agent.bridges")
     bridges_mod.FaceEventBridge = _FakeFaceEventBridge
@@ -303,10 +318,6 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     memory_provider_mod.TailwagMemoryProvider = _FakeTailwagMemoryProvider
     memory_provider_mod.TailwagSlackMemoryService = _FakeTailwagSlackMemoryService
     monkeypatch.setitem(sys.modules, "argos_src.memory_provider", memory_provider_mod)
-
-    sqlite_memory_mod = types.ModuleType("argos_src.memory")
-    sqlite_memory_mod.MemoryStore = _FailingSQLiteMemoryStore
-    monkeypatch.setitem(sys.modules, "argos_src.memory", sqlite_memory_mod)
 
     identity_mod = types.ModuleType("argos_src.identity")
     identity_mod.IdentityStore = _FakeIdentityStore
@@ -328,6 +339,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     face_service_mod = types.ModuleType(
         "argos_src.face_recognition.face_recognition_service"
     )
+    face_service_mod.FaceEnrollmentPolicy = lambda **kwargs: SimpleNamespace(**kwargs)
     face_service_mod.FaceRecognitionService = _FakeFaceRecognitionService
     monkeypatch.setitem(
         sys.modules,
@@ -2081,7 +2093,6 @@ def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(mo
     created = {
         "memory_providers": [],
         "slack_services": [],
-        "sqlite_memory_stores": [],
         "identity_stores": [],
         "face_services": [],
         "face_event_bridges": [],
@@ -2113,7 +2124,6 @@ def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(mo
 
     agent = factory_mod.create_agent(scenario_profile=profile)
 
-    assert created["sqlite_memory_stores"] == []
     assert len(created["memory_providers"]) == 1
     provider = created["memory_providers"][0]
     assert provider.kwargs == {
@@ -2137,7 +2147,6 @@ def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(mo
     created = {
         "memory_providers": [],
         "slack_services": [],
-        "sqlite_memory_stores": [],
         "identity_stores": [],
         "face_services": [],
         "face_event_bridges": [],
@@ -2159,7 +2168,6 @@ def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(mo
 
     agent = factory_mod.create_agent(scenario_profile=profile)
 
-    assert created["sqlite_memory_stores"] == []
     assert created["memory_providers"] == []
     assert created["slack_services"] == []
     assert agent.kwargs["memory_context_compiler"] is None

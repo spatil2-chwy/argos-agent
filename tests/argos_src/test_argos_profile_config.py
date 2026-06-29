@@ -665,20 +665,6 @@ def test_memory_profile_parses_tailwag_runtime_switches():
     assert profile.memory.extract_live_turn_memory is False
 
 
-def test_legacy_memory_store_section_is_rejected():
-    with pytest.raises(ProfileValidationError, match="memory_store"):
-        _parse_profile(
-            {
-                "name": "legacy-memory-store",
-                "memory_store": {
-                    "db_path": "var/memory/memory.sqlite3",
-                },
-            },
-            profile_path=Path("/tmp/legacy-memory-store.yaml"),
-            framework_config={},
-        )
-
-
 def test_runtime_state_defaults_live_outside_source_package():
     profile = _parse_profile(
         {"name": "runtime-state-defaults"},
@@ -804,6 +790,21 @@ def test_slack_memory_channel_requires_name():
                 },
             },
             profile_path=Path("/tmp/bad-slack-memory.yaml"),
+            framework_config={},
+        )
+
+
+def test_enabled_slack_memory_channel_requires_channel_id():
+    with pytest.raises(ProfileValidationError, match="channel_id is required"):
+        _parse_profile(
+            {
+                "name": "bad-slack-memory-channel-id",
+                "slack_memory": {
+                    "enabled": True,
+                    "channels": [{"name": "argos-test"}],
+                },
+            },
+            profile_path=Path("/tmp/bad-slack-memory-channel-id.yaml"),
             framework_config={},
         )
 

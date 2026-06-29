@@ -129,7 +129,17 @@ class TailwagMemoryProvider:
 
     def extract_and_store_segment(self, segment: PreferenceSegment, reason: str = "") -> None:
         """Append a flushed realtime segment to the active Tailwag episode."""
-        episode = self._episode_from_segment(segment)
+        try:
+            episode = self._episode_from_segment(segment)
+        except Exception:
+            logger.exception(
+                "Tailwag live-turn episode construction failed segment=%s person=%s",
+                getattr(segment, "segment_id", ""),
+                getattr(segment, "person_id", ""),
+            )
+            if _is_terminal_flush(reason):
+                self.finish_active_episode(reason=reason)
+            return
         if episode is None:
             return
         terminal = _is_terminal_flush(reason)
