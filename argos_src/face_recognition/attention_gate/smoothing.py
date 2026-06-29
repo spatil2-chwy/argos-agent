@@ -54,22 +54,19 @@ class AttentionSmoother:
         enough = len(attentive_items) >= int(self.settings.min_observations)
         if enough:
             self._last_attentive_at[rendered] = float(now)
-            confidence_out = max(item[2] for item in attentive_items)
             self._prune(now)
-            return True, float(confidence_out)
+            return True, 1.0
 
         last_attentive = self._last_attentive_at.get(rendered)
         if (
             last_attentive is not None
             and (float(now) - last_attentive) <= float(self.settings.hold_sec)
         ):
-            confidence_out = max([item[2] for item in attentive_items] + [float(confidence), 0.0])
             self._prune(now)
-            return True, float(confidence_out)
+            return True, 1.0
 
-        confidence_out = max((item[2] for item in history), default=float(confidence))
         self._prune(now)
-        return False, float(confidence_out)
+        return False, 0.0
 
     def _prune(self, now: float) -> None:
         stale_before = float(now) - max(

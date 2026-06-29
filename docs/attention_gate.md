@@ -64,12 +64,9 @@ For each detected face, `FaceAttentionGate.evaluate(...)` does this:
 1. Check that the gate is enabled.
 2. Compute the detected face bbox area.
 3. Reject very small faces before running head pose.
-4. Reject faces whose center is too far from the image center.
-5. Run SixDRepNet on the face crop to estimate yaw, pitch, and roll.
-6. Compute effective yaw/pitch/roll limits for this face.
-7. Compare the pose against those limits.
-8. Convert the closest margin to a confidence value.
-9. Pass the raw attentive/not-attentive result through temporal smoothing.
+4. Run SixDRepNet on the face crop to estimate yaw, pitch, and roll.
+5. Compare the pose against fixed yaw/pitch/roll limits.
+6. Pass the raw attentive/not-attentive result through temporal smoothing.
 
 The result is stored on the face as a `FaceAttentionObservation`:
 
@@ -82,72 +79,41 @@ raw_attentive
 raw_confidence
 ```
 
+`confidence` and `raw_confidence` are compatibility fields. They are binary:
+`1.0` when the corresponding smoothed or raw attention decision is true, and
+`0.0` otherwise.
+
 Important reasons:
 
 | Reason | Meaning |
 |---|---|
-| `attentive` | Face passed pose, center, size, and smoothing. |
+| `attentive` | Face passed pose, size, and smoothing. |
 | `smoothing` | Current frame passed, but not enough recent positives yet. |
 | `face_too_small` | Face bbox is below the configured minimum. |
-| `off_axis` | Face center is too far from the image center. |
-| `head_pose_outside_threshold` | Yaw, pitch, or roll exceeded the effective limit. |
+| `head_pose_outside_threshold` | Yaw, pitch, or roll exceeded the configured limit. |
 | `sixdrepnet_unavailable` | The head-pose model could not be initialized. |
 
-## Size And Distance
+## Size And Pose
 
-The gate works with or without depth.
-
-If the face dict contains `depth_m`, the gate uses depth to decide how far along
-the near-to-distant tuning curve this face is. If depth is missing, it falls back
-to the face bbox area as a fraction of the image area.
-
-```text
-depth available:
-  near_depth_m -> near pose limits
-  distant_depth_m -> distant pose limits
-
-depth unavailable:
-  near_face_area_ratio -> near pose limits
-  distant_face_area_ratio -> distant pose limits
-```
-
-This matters for mounted wide-view cameras. A face at two meters may be a small
-part of the image, and head-pose estimates are noisier than a close webcam crop.
-The static profile therefore uses different near and distant limits:
+The gate uses one absolute bbox-area threshold and one fixed pose threshold set.
+It does not vary pose limits by distance or reject faces based on how far their
+center is from the camera optical axis.
 
 ```yaml
 attention_gate:
-  min_face_area: 700
-  min_face_area_ratio: 0.00035
-
-  max_abs_yaw_deg: 25.0
-  max_abs_pitch_deg: 22.0
-  max_abs_roll_deg: 35.0
-
-  distant_max_abs_yaw_deg: 18.0
-  distant_max_abs_pitch_deg: 32.0
-  distant_max_abs_roll_deg: 28.0
+  min_face_area: 1500
+  max_abs_yaw_deg: 20.0
+  max_abs_pitch_deg: 18.0
+  max_abs_roll_deg: 90.0
   min_abs_pitch_deg: 0.0
-  distant_min_abs_pitch_deg: 8.0
-
-  near_face_area_ratio: 0.035
-  distant_face_area_ratio: 0.010
-  near_depth_m: 0.8
-  distant_depth_m: 2.0
-
-  max_center_offset_ratio: 0.70
 ```
 
 The intent is:
 
-- allow smaller faces from a mounted RealSense camera
-- tighten distant yaw so side conversations do not open the mic as easily
-- allow more distant pitch because a standing person may naturally look down
-  toward a lower robot-mounted camera, while requiring a small nonzero distant
-  pitch so a level head is less likely to count as camera-facing attention
-- keep roll somewhat tighter at distance because tilted small crops are less
-  reliable evidence of direct attention
-- allow more off-center placement in a wide camera view
+- reject very small crops before spending time on head pose
+- keep yaw and pitch strict enough to avoid obvious side conversations
+- keep roll permissive so head tilt rarely blocks otherwise plausible attention
+- let smoothing handle frame-level noise
 
 ## Scene-Level Attention
 
@@ -221,7 +187,6 @@ given the current stack:
 
 - face detection tells us a person is visible
 - head pose tells us whether their face is broadly oriented toward the robot
-- depth or bbox scale tells us whether to treat the pose as near or distant
 - smoothing handles frame-level noise
 - VAD prevents silent visual attention from becoming a turn
 
@@ -230,8 +195,8 @@ answers whether the person is plausibly addressing the robot. That matches the
 robot interaction use case better than trying to classify eye contact precisely
 from a small wide-angle face crop.
 
-Depth is useful but not required. Depth makes near/far interpolation more
-physical; bbox ratio is the fallback when depth sync is disabled or unavailable.
+Depth is useful for separate face-depth gating, but the attention gate itself no
+longer uses depth or bbox ratio to alter pose thresholds.
 
 The main remaining limitation is calibration. The best thresholds depend on:
 
@@ -244,13 +209,13 @@ The main remaining limitation is calibration. The best thresholds depend on:
 For real deployment tuning, inspect attention logs with:
 
 ```text
-reason, confidence, yaw, pitch, roll, bbox area, depth_m
+reason, yaw, pitch, roll, bbox area, depth_m
 ```
 
 Then tune in this order:
 
-1. `min_face_area` and `min_face_area_ratio` if valid distant faces are rejected.
-2. `max_center_offset_ratio` if valid users stand off-center.
-3. `distant_max_abs_yaw_deg` if side conversations falsely open admission.
-4. `distant_max_abs_pitch_deg` if users facing the robot while looking down are rejected.
+1. `min_face_area` if valid distant faces are rejected.
+2. `max_abs_yaw_deg` if side conversations falsely open admission.
+3. `max_abs_pitch_deg` if users facing the robot while looking up or down are rejected.
+4. `max_abs_roll_deg` if tilted heads are incorrectly blocked or admitted.
 5. `smoothing_window_sec` and `min_attentive_observations` if attention flickers.

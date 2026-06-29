@@ -392,22 +392,11 @@ face_recognition:
     max_valid_depth_m: 10.0
   attention_gate:
     enabled: true
-    min_face_area: 700
-    min_face_area_ratio: 0.00035
-    max_abs_yaw_deg: 25.0
-    max_abs_pitch_deg: 22.0
-    max_abs_roll_deg: 35.0
-    distant_max_abs_yaw_deg: 18.0
-    distant_max_abs_pitch_deg: 32.0
-    distant_max_abs_roll_deg: 28.0
+    min_face_area: 1500
+    max_abs_yaw_deg: 20.0
+    max_abs_pitch_deg: 18.0
+    max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-    distant_min_abs_pitch_deg: 8.0
-    near_face_area_ratio: 0.035
-    distant_face_area_ratio: 0.010
-    near_depth_m: 0.8
-    distant_depth_m: 2.0
-    max_center_offset_ratio: 0.70
-    min_confidence: 0.55
     smoothing_window_sec: 1.0
     min_attentive_observations: 2
     hold_sec: 0.8
@@ -442,22 +431,11 @@ Attention gate settings:
 | Setting | Meaning | Keep it? |
 |---|---|---|
 | `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
-| `min_face_area: 700` | Absolute minimum detected face bbox area before head-pose scoring. | Lower for mounted wide-view cameras; keep enrollment stricter. |
-| `min_face_area_ratio: 0.00035` | Resolution-scaled face area floor, combined with `min_face_area`. | Tune with camera resolution. |
-| `max_abs_yaw_deg: 25.0` | Near-face left/right head angle limit. | Tune for close interaction. |
-| `max_abs_pitch_deg: 22.0` | Near-face up/down head angle limit. | Tune with camera mounting height. |
-| `max_abs_roll_deg: 35.0` | Near-face head tilt limit. | Usually keep. |
-| `distant_max_abs_yaw_deg: 18.0` | Far/small-face left/right head angle limit. | Tighten if far side conversations falsely open admission. |
-| `distant_max_abs_pitch_deg: 32.0` | Far/small-face up/down head angle limit. | Mounted cameras often need this higher because users look down toward the robot. |
-| `distant_max_abs_roll_deg: 28.0` | Far/small-face head tilt limit. | Tune if tilted distant heads falsely count as attention. |
-| `min_abs_pitch_deg: 0.0` | Near-face minimum up/down head angle. | Keep low unless the near camera geometry needs a pitch band. |
-| `distant_min_abs_pitch_deg: 8.0` | Far/small-face minimum up/down head angle. | Raise if distant level heads falsely open admission; lower if real users are rejected. |
-| `near_face_area_ratio: 0.035` | Face area ratio treated as near when depth is unavailable. | Tune from live bbox logs. |
-| `distant_face_area_ratio: 0.010` | Face area ratio treated as distant when depth is unavailable. | Tune from live bbox logs. |
-| `near_depth_m: 0.8` | Depth treated as near when `depth_m` exists on the face. | Keep unless the camera is mounted unusually close. |
-| `distant_depth_m: 2.0` | Depth treated as distant when `depth_m` exists on the face. | Match the natural standing interaction distance. |
-| `max_center_offset_ratio: 0.70` | Rejects faces far from the optical center for attention. | Mounted wide cameras should be looser than webcams. |
-| `min_confidence: 0.55` | Confidence floor reported at the configured pose/center acceptance boundary. | Usually keep. |
+| `min_face_area: 1500` | Absolute minimum detected face bbox area before head-pose scoring. | Lower only if valid distant faces are rejected. |
+| `max_abs_yaw_deg: 20.0` | Left/right head angle limit. | Tighten if side conversations falsely open admission. |
+| `max_abs_pitch_deg: 18.0` | Up/down head angle limit. | Tune with camera mounting height. |
+| `max_abs_roll_deg: 90.0` | Head tilt limit. | Wide by default so roll rarely blocks attention. |
+| `min_abs_pitch_deg: 0.0` | Minimum up/down head angle. | Keep low unless the camera geometry needs a pitch band. |
 | `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
 | `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
 | `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
