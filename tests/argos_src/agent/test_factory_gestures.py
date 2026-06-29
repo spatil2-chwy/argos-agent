@@ -47,6 +47,7 @@ def _load_factory_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
 
     tools_mod = types.ModuleType("argos_src.tools")
+    tools_mod.MEMORY_TOOL_NAMES = ()
     tools_mod.NAVIGATION_TOOL_NAMES = ()
     tools_mod.build_builtin_tools = lambda **_kwargs: []
     tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
