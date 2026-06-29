@@ -1,13 +1,11 @@
-name: static_interaction
+name: cody_interaction
 
-manifest: puffle
+manifest: cody
 
 resources:
   primary_robot: base
-  face_camera: arducam_001
-  scene_camera: arducam_001
-  # face_camera: realsense_001
-  # scene_camera: realsense_001
+  face_camera: realsense_002
+  scene_camera: realsense_002
   interaction_display: screen_001
 
 display:
@@ -81,7 +79,7 @@ slack_memory:
 face_recognition:
   enabled: true
   db_path: var/face_recognition
-  loop_interval_sec: 0.3
+  loop_interval_sec: 0.5
   recognition_threshold: 0.6
   live_image_enabled: false
   owner_turn:
@@ -109,17 +107,8 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
-  enrollment_policy:
-    min_face_area: 5000
-    min_sharpness: 12.0
-    min_brightness: 35.0
-    max_brightness: 220.0
-    min_contrast: 15.5
-    max_eye_tilt: 0.25
-    max_nose_center_offset: 0.10
-    min_embedding_similarity: 0.70
   attention_gate:
-    enabled: true
+    enabled: false
     min_face_area: 700
     min_face_area_ratio: 0.00035
     max_abs_yaw_deg: 25.0

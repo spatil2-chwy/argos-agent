@@ -1,4 +1,4 @@
-"""Encounter normalization helpers for robot-observed memory."""
+"""Encounter metadata helpers for Tailwag person last_seen updates."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ ENCOUNTER_PROFILE_FIELDS = (
     "official_name",
     "employee_name",
     "username",
+    "email",
+    "work_email",
+    "employee_email",
     "business_title",
     "job_family",
     "job_family_group",
@@ -29,7 +32,7 @@ def build_encounter_metadata(
     site_code: str,
     identity_metadata: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return a compact metadata payload for a recognized-person encounter."""
+    """Return compact non-biometric metadata for a recognized-person encounter."""
     metadata: dict[str, Any] = {
         "name": str(name or "").strip(),
         "site_code": str(site_code or "").strip(),
