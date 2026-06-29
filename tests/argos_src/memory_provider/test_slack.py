@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+import argos_src.memory_provider.slack as slack_module
 from argos_src.memory_provider.slack import TailwagSlackMemoryService
 from argos_src.profile_config import SlackMemoryChannelProfile, SlackMemoryProfile
 
@@ -160,7 +161,6 @@ def test_poll_once_passes_channel_ids_and_polling_parameters(
                 channel_id="C123",
                 backfill_hours=1.0,
             ),
-            SlackMemoryChannelProfile(name="channel-name-fallback"),
         ),
     )
     service = TailwagSlackMemoryService(
@@ -179,22 +179,20 @@ def test_poll_once_passes_channel_ids_and_polling_parameters(
             "reply_limit": 75,
             "extract_memory": False,
         },
-        {
-            "channel_id": "channel-name-fallback",
-            "backfill_hours": 2.0,
-            "force_backfill": True,
-            "history_limit": 50,
-            "reply_limit": 75,
-            "extract_memory": False,
-        },
     ]
 
 
-def test_poll_once_skips_channels_without_channel_id_or_name(
+def test_poll_once_skips_channels_without_channel_id(
     fake_tailwag_slack_ingestion,
     monkeypatch,
 ):
     monkeypatch.setenv("ARGOS_TEST_SLACK_TOKEN", "xoxb-test-token")
+    warnings = []
+    monkeypatch.setattr(
+        slack_module.logger,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
     profile = SlackMemoryProfile(
         enabled=True,
         bot_token_env="ARGOS_TEST_SLACK_TOKEN",
@@ -213,6 +211,7 @@ def test_poll_once_skips_channels_without_channel_id_or_name(
     assert [call["channel_id"] for call in fake_tailwag_slack_ingestion.poll_calls] == [
         "C123"
     ]
+    assert any("without channel_id" in message for message in warnings)
 
 
 def test_poll_once_with_no_channels_makes_no_channel_poll_calls(

@@ -1650,6 +1650,13 @@ def _parse_slack_memory(data: dict[str, Any]) -> SlackMemoryProfile:
         raise ProfileValidationError(
             "slack_memory.channels must contain at least one channel when enabled."
         )
+    if profile.enabled:
+        for index, channel in enumerate(profile.channels):
+            if not channel.channel_id:
+                raise ProfileValidationError(
+                    f"slack_memory.channels[{index}].channel_id is required when "
+                    "slack_memory.enabled."
+                )
     _reject_unknown(data, "slack_memory")
     return profile
 

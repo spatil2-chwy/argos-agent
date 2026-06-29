@@ -44,8 +44,10 @@ class TailwagSlackMemoryService:
         for channel in getattr(self.profile, "channels", ()) or ():
             channel_id = str(getattr(channel, "channel_id", "") or "").strip()
             if not channel_id:
-                channel_id = str(getattr(channel, "name", "") or "").strip()
-            if not channel_id:
+                logger.warning(
+                    "Skipping Tailwag Slack memory channel without channel_id name=%s",
+                    str(getattr(channel, "name", "") or "").strip() or "<unnamed>",
+                )
                 continue
             backfill_hours = getattr(channel, "backfill_hours", None)
             if backfill_hours is None:

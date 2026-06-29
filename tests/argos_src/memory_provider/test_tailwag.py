@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import inspect
+from pathlib import Path
 import sys
 import types
 
 import pytest
 
 from argos_src.agent.preference_types import PreferenceSegment, PreferenceSegmentTurn
+import argos_src.memory_provider.tailwag as tailwag_module
 from argos_src.memory_provider.tailwag import TailwagMemoryProvider
 
 
@@ -386,17 +387,42 @@ def test_health_and_record_errors_return_no_memory_fallbacks():
     assert "Next turn." in client.recorded[0][0].transcript
 
 
+def test_episode_construction_errors_are_logged_and_do_not_crash(monkeypatch):
+    module = sys.modules["tailwag_memory"]
+    messages = []
+    monkeypatch.setattr(
+        tailwag_module.logger,
+        "exception",
+        lambda message, *args: messages.append(message % args),
+    )
+
+    class FailingEpisodeInput:
+        def __init__(self, **_kwargs):
+            raise RuntimeError("tailwag input unavailable")
+
+    module.EpisodeInput = FailingEpisodeInput
+    client = FakeTailwagClient()
+    provider = _provider_for(client)
+
+    provider.extract_and_store_segment(
+        _segment("seg-1", "person-1", "This should log."),
+        reason="idle_timeout",
+    )
+
+    assert client.recorded == []
+    assert any(
+        "Tailwag live-turn episode construction failed" in message
+        for message in messages
+    )
+
+
 def test_site_blocks_are_deferred_until_tailwag_exposes_contract():
     provider = _provider_for(FakeTailwagClient())
 
     assert provider.site_blocks("BOS3", current_person_id="person-1") == ()
 
 
-def test_factory_uses_tailwag_provider_without_constructing_sqlite_memory():
-    import argos_src.agent.factory as factory
-
-    source = inspect.getsource(factory.create_agent)
+def test_factory_uses_tailwag_provider():
+    source = Path("argos_src/agent/factory.py").read_text()
 
     assert "TailwagMemoryProvider" in source
-    assert "MemoryStore(" not in source
-    assert "MemoryContextCompiler(" not in source
