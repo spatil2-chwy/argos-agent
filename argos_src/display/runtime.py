@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -38,6 +40,7 @@ class DisplayRuntime:
         self._enabled = bool(enabled and client is not None and self._resource_id)
         self._last_face = ""
         self._last_subtitle = ""
+        self._modal_lock = threading.RLock()
 
     @property
     def is_configured(self) -> bool:
@@ -112,6 +115,39 @@ class DisplayRuntime:
     def show_countdown(self, seconds: int) -> bool:
         return self.command({"type": "countdown", "seconds": int(seconds)})
 
+    def show_image_message_preview(
+        self,
+        *,
+        image_url: str,
+        title: str = "Captured Image",
+        message: str = "",
+        hold_sec: float = 5.0,
+        timeout_ms: int = 2000,
+        clear_after: bool = True,
+    ) -> bool:
+        rendered_image_url = str(image_url or "").strip()
+        rendered_message = str(message or "").strip()
+        if not rendered_image_url or not rendered_message:
+            return False
+        with self._modal_lock:
+            sent = self.command(
+                {
+                    "type": "image_message_preview",
+                    "imageUrl": rendered_image_url,
+                    "title": str(title or "").strip() or "Captured Image",
+                    "message": rendered_message,
+                },
+                timeout_ms=timeout_ms,
+                critical=True,
+            )
+            if not sent:
+                return False
+            if hold_sec > 0:
+                time.sleep(float(hold_sec))
+            if clear_after:
+                self.clear()
+            return True
+
     def show_live_image(
         self,
         *,
@@ -181,28 +217,38 @@ class DisplayRuntime:
     ) -> bool:
         if not self._enabled:
             return False
-        try:
-            self._request(OP_DISPLAY_COMMAND, dict(payload or {}), timeout_ms=timeout_ms)
-            return True
-        except Exception as exc:
-            if critical or not is_provider_error(exc):
-                logger.warning("Display command failed: %s", exc)
-            else:
-                logger.debug("Display command failed: %s", exc)
-            return False
+        with self._modal_lock:
+            try:
+                self._request(
+                    OP_DISPLAY_COMMAND,
+                    dict(payload or {}),
+                    timeout_ms=timeout_ms,
+                )
+                return True
+            except Exception as exc:
+                if critical or not is_provider_error(exc):
+                    logger.warning("Display command failed: %s", exc)
+                else:
+                    logger.debug("Display command failed: %s", exc)
+                return False
 
     def _image(self, payload: dict[str, Any], *, timeout_ms: int = 250) -> bool:
         if not self._enabled:
             return False
-        try:
-            self._request(OP_DISPLAY_IMAGE, dict(payload or {}), timeout_ms=timeout_ms)
-            return True
-        except Exception as exc:
-            if not is_provider_error(exc):
-                logger.warning("Display image update failed: %s", exc)
-            else:
-                logger.debug("Display image update failed: %s", exc)
-            return False
+        with self._modal_lock:
+            try:
+                self._request(
+                    OP_DISPLAY_IMAGE,
+                    dict(payload or {}),
+                    timeout_ms=timeout_ms,
+                )
+                return True
+            except Exception as exc:
+                if not is_provider_error(exc):
+                    logger.warning("Display image update failed: %s", exc)
+                else:
+                    logger.debug("Display image update failed: %s", exc)
+                return False
 
     def review_face_capture(
         self,
@@ -216,59 +262,62 @@ class DisplayRuntime:
     ) -> dict[str, Any]:
         if not self._enabled:
             return {"available": False, "accepted": False, "status": "unconfigured"}
-        rendered_request_id = str(request_id or f"face-capture-{uuid4().hex[:12]}").strip()
-        sent = self.command(
-            {
-                "type": "face_capture_preview",
-                "requestId": rendered_request_id,
-                "imageUrl": str(image_url or "").strip(),
-                "title": title,
-                "acceptLabel": accept_label,
-                "rejectLabel": reject_label,
-            },
-            timeout_ms=2000,
-            critical=True,
-        )
-        if not sent:
-            return {
-                "available": False,
-                "accepted": False,
-                "status": "display_unavailable",
-                "requestId": rendered_request_id,
-            }
-        try:
-            response = self._request(
-                OP_DISPLAY_AWAIT_RESPONSE,
-                {"requestId": rendered_request_id},
-                timeout_ms=max(1, int(float(timeout_sec) * 1000)),
+        with self._modal_lock:
+            rendered_request_id = str(
+                request_id or f"face-capture-{uuid4().hex[:12]}"
+            ).strip()
+            sent = self.command(
+                {
+                    "type": "face_capture_preview",
+                    "requestId": rendered_request_id,
+                    "imageUrl": str(image_url or "").strip(),
+                    "title": title,
+                    "acceptLabel": accept_label,
+                    "rejectLabel": reject_label,
+                },
+                timeout_ms=2000,
+                critical=True,
             )
-        except ProviderTimeout:
-            self.clear()
+            if not sent:
+                return {
+                    "available": False,
+                    "accepted": False,
+                    "status": "display_unavailable",
+                    "requestId": rendered_request_id,
+                }
+            try:
+                response = self._request(
+                    OP_DISPLAY_AWAIT_RESPONSE,
+                    {"requestId": rendered_request_id},
+                    timeout_ms=max(1, int(float(timeout_sec) * 1000)),
+                )
+            except ProviderTimeout:
+                self.clear()
+                return {
+                    "available": True,
+                    "accepted": False,
+                    "status": "review_timeout",
+                    "requestId": rendered_request_id,
+                }
+            except ProviderError as exc:
+                logger.warning("Display review failed: %s", exc)
+                self.clear()
+                return {
+                    "available": False,
+                    "accepted": False,
+                    "status": "display_unavailable",
+                    "requestId": rendered_request_id,
+                }
+            accepted = bool(response.get("accepted", False))
+            action = str(response.get("action") or ("accept" if accepted else "reject"))
             return {
                 "available": True,
-                "accepted": False,
-                "status": "review_timeout",
+                "accepted": accepted,
+                "action": action,
+                "status": "accepted" if accepted else "rejected",
                 "requestId": rendered_request_id,
+                "response": response,
             }
-        except ProviderError as exc:
-            logger.warning("Display review failed: %s", exc)
-            self.clear()
-            return {
-                "available": False,
-                "accepted": False,
-                "status": "display_unavailable",
-                "requestId": rendered_request_id,
-            }
-        accepted = bool(response.get("accepted", False))
-        action = str(response.get("action") or ("accept" if accepted else "reject"))
-        return {
-            "available": True,
-            "accepted": accepted,
-            "action": action,
-            "status": "accepted" if accepted else "rejected",
-            "requestId": rendered_request_id,
-            "response": response,
-        }
 
     def _request(
         self,

@@ -1031,6 +1031,45 @@ def test_enroll_visible_person_reports_already_known_failure(monkeypatch):
     assert result["recognized_name"] == "Sakshee Patil"
 
 
+def test_enroll_visible_person_shows_multiple_face_warning_preview(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    image = _good_image(size=240)
+    previews = []
+
+    class _Display:
+        is_configured = True
+
+        def show_image_message_preview(self, **kwargs):
+            previews.append(kwargs)
+            return True
+
+    service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
+    service._prepare_faces_for_recognition_result = (
+        lambda *_args, **_kwargs: module.FacePreparationResult(
+            faces=[
+                _face(area=6400, x=20, y=20),
+                _face(area=6400, x=140, y=20),
+            ],
+            detected_count=2,
+        )
+    )
+
+    result = module.FaceRecognitionService.enroll_visible_person(
+        service,
+        official_name="Sakshee Patil",
+        display_runtime=_Display(),
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "retry_single_face"
+    assert result["failure_reason"] == "multiple_faces"
+    assert len(previews) == 1
+    assert previews[0]["title"] == "Multiple Faces Detected"
+    assert previews[0]["hold_sec"] == 5.0
+    assert previews[0]["image_url"].startswith("data:image/png;base64,")
+
+
 def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)

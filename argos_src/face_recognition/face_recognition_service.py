@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
+import cv2
 import numpy as np
 import torch
 
@@ -1030,6 +1031,7 @@ class FaceRecognitionService:
             username=username,
             employee_profile=employee_profile,
             camera_resource_id=camera_resource_id,
+            display_runtime=display_runtime,
         )
         if failure is not None:
             return failure
@@ -1111,6 +1113,7 @@ class FaceRecognitionService:
         username: str = "",
         employee_profile: dict[str, Any] | None = None,
         camera_resource_id: str | None = None,
+        display_runtime: Any | None = None,
     ) -> tuple[FaceEnrollmentCandidate | None, dict[str, Any] | None]:
         verified_profile = {
             key: str(value or "").strip()
@@ -1177,6 +1180,11 @@ class FaceRecognitionService:
                     raw_detected_count,
                     len(usable_faces),
                     rejected_count,
+                )
+                self._show_multiple_faces_enrollment_preview(
+                    display_runtime,
+                    image=image,
+                    faces=usable_faces,
                 )
                 return (
                     None,
@@ -1373,6 +1381,75 @@ class FaceRecognitionService:
                 "Pets are usually the best default topic, then preferred name, team, or current work."
             ),
         )
+
+    def _show_multiple_faces_enrollment_preview(
+        self,
+        display_runtime: Any | None,
+        *,
+        image: Any,
+        faces: list[dict[str, Any]],
+    ) -> None:
+        if display_runtime is None or not bool(
+            getattr(display_runtime, "is_configured", False)
+        ):
+            return
+        show_preview = getattr(display_runtime, "show_image_message_preview", None)
+        if not callable(show_preview):
+            return
+        image_url = self._enrollment_preview_data_url(
+            self._enrollment_diagnostic_image(image, faces)
+        )
+        if not image_url:
+            return
+        try:
+            show_preview(
+                image_url=image_url,
+                title="Multiple Faces Detected",
+                message=(
+                    "I can see more than one face. Please make sure you are the only "
+                    "person in view before enrollment."
+                ),
+                hold_sec=5.0,
+            )
+        except Exception as exc:
+            logger.warning("Multiple-face enrollment preview failed: %s", exc)
+
+    @staticmethod
+    def _enrollment_diagnostic_image(image: Any, faces: list[dict[str, Any]]) -> Any:
+        if image is None or not hasattr(image, "shape"):
+            return image
+        try:
+            annotated = image.copy()
+            height, width = annotated.shape[:2]
+            for idx, face in enumerate(faces, start=1):
+                bbox = face.get("bbox") or {}
+                x = max(0, min(int(bbox.get("x", 0) or 0), width - 1))
+                y = max(0, min(int(bbox.get("y", 0) or 0), height - 1))
+                w = max(0, int(bbox.get("w", 0) or 0))
+                h = max(0, int(bbox.get("h", 0) or 0))
+                x2 = max(0, min(x + w, width - 1))
+                y2 = max(0, min(y + h, height - 1))
+                if x2 <= x or y2 <= y:
+                    continue
+                color = (255, 221, 0)
+                cv2.rectangle(annotated, (x, y), (x2, y2), color, 2)
+                confidence = float(face.get("confidence", 0.0) or 0.0)
+                label = f"{idx}: {confidence:.2f}"
+                text_y = max(14, y - 6)
+                cv2.putText(
+                    annotated,
+                    label,
+                    (x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+            return annotated
+        except Exception:
+            logger.exception("Failed to prepare multiple-face enrollment preview")
+            return image.copy() if hasattr(image, "copy") else image
 
     @staticmethod
     def _enrollment_preview_data_url(image: Any) -> str:
