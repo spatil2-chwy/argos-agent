@@ -58,6 +58,8 @@ Tool-related signals still matter:
 |---|---|---|
 | `action` | `metric=tool_dispatch_s` | speech end to first robot command dispatch for action-style tools |
 | `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
+| `tool` | `event=memory_query_start` | a Tailwag memory query tool started; logs tool name, query kind, and person id but not memory text |
+| `tool` | `metric=memory_query_s` | Tailwag memory query duration and result count |
 
 ## Preference Extraction
 

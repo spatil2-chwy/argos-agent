@@ -30,6 +30,8 @@ class RealtimeAgentToolsMixin:
         else:
             set_request_context(
                 req_id=turn.req_id,
+                owner_id=turn.owner_id,
+                owner_source=turn.owner_source,
                 speech_end_perf_s=turn.speech_end_perf_s,
                 speech_end_unix_s=turn.speech_end_unix_s,
                 transcript_perf_s=turn.transcript_perf_s,

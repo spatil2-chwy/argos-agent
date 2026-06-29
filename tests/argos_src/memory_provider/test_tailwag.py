@@ -79,6 +79,7 @@ class FakeTailwagClient:
         self.raise_context = False
         self.raise_record = False
         self.raise_archive = False
+        self.semantic_search_kwargs = None
 
     def person_context(self, person_id: str, **kwargs):
         self.context_person_id = person_id
@@ -106,6 +107,41 @@ class FakeTailwagClient:
             raise RuntimeError("tailwag archive unavailable")
         self.archived.append(person_id)
         return True
+
+    def search_semantic_memory(self, **kwargs):
+        self.semantic_search_kwargs = kwargs
+        return {
+            "episodes": [
+                {
+                    "episode_id": "episode-1",
+                    "transcript": "Robot demos are scheduled.",
+                    "score": 0.7,
+                    "start_time": "2026-06-01T10:00:00Z",
+                    "end_time": "2026-06-01T10:05:00Z",
+                    "building_code": "BOS",
+                    "room_id": "lab",
+                }
+            ],
+            "memory_items": [
+                {
+                    "memory_id": "memory-1",
+                    "person_id": "person-1",
+                    "kind": "preference",
+                    "key": "drink",
+                    "summary": "Likes tea.",
+                    "source": "extracted",
+                    "source_ref": "episode-1",
+                    "status": "active",
+                    "observed_at": "",
+                    "created_at": "",
+                    "updated_at": "",
+                    "due_at": "",
+                    "expires_at": "",
+                    "metadata": {},
+                    "score": 0.9,
+                }
+            ],
+        }
 
 
 def _provider_for(client: FakeTailwagClient, **kwargs) -> TailwagMemoryProvider:
@@ -262,6 +298,55 @@ def test_record_encounter_rekeys_by_email_and_upserts_without_embeddings():
     assert person.source == "argos"
     assert person.face_embedding is None
     assert person.audio_embedding is None
+
+
+def test_tailwag_provider_search_semantic_memory_uses_episodes_and_memory_items():
+    client = FakeTailwagClient()
+    provider = _provider_for(client)
+
+    results = provider.search_semantic_memory(
+        text="demos",
+        person_id="person-1",
+        building_code="BOS",
+        limit=50,
+    )
+
+    assert client.semantic_search_kwargs == {
+        "text": "demos",
+        "person_id": "person-1",
+        "building_code": "BOS",
+        "limit": 50,
+    }
+    assert results["episodes"] == [
+        {
+            "episode_id": "episode-1",
+            "transcript": "Robot demos are scheduled.",
+            "score": 0.7,
+            "start_time": "2026-06-01T10:00:00Z",
+            "end_time": "2026-06-01T10:05:00Z",
+            "building_code": "BOS",
+            "room_id": "lab",
+        }
+    ]
+    assert results["memory_items"] == [
+        {
+            "memory_id": "memory-1",
+            "person_id": "person-1",
+            "kind": "preference",
+            "key": "drink",
+            "summary": "Likes tea.",
+            "source": "extracted",
+            "source_ref": "episode-1",
+            "status": "active",
+            "observed_at": "",
+            "created_at": "",
+            "updated_at": "",
+            "due_at": "",
+            "expires_at": "",
+            "metadata": {},
+            "score": 0.9,
+        }
+    ]
 
 
 def test_archive_person_delegates_to_tailwag_and_falls_back_on_errors():

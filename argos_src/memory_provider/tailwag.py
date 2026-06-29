@@ -245,6 +245,26 @@ class TailwagMemoryProvider:
             extract_memory=extract_memory,
         )
 
+    def search_semantic_memory(
+        self,
+        *,
+        text: str,
+        person_id: str,
+        building_code: str | None = None,
+        limit: int = 5,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return semantic episode and memory-item results from Tailwag."""
+        rendered_text = str(text or "").strip()
+        rendered_person_id = str(person_id or "").strip()
+        if not rendered_text or not rendered_person_id:
+            return {"episodes": [], "memory_items": []}
+        return self._client().search_semantic_memory(
+            text=rendered_text,
+            person_id=rendered_person_id,
+            building_code=building_code,
+            limit=limit,
+        )
+
     def _client(self) -> Any:
         if self._client_instance is None:
             if self._client_factory is not None:

@@ -27,6 +27,7 @@ from argos_src.provider_api.client import ProviderClient
 from argos_src.provider_api.factory import create_provider_client
 from argos_src.nav_support.locations import LocationStore, NavigationState
 from argos_src.tools import (
+    MEMORY_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     build_builtin_tools,
     build_knowledge_tools,
@@ -270,6 +271,7 @@ def create_agent(
     needs_navigation_state = runtime_flags["needs_navigation_state"]
     needs_face_runtime = runtime_flags["needs_face_runtime"]
     self_charge_available = runtime_flags["self_charge_available"]
+    memory_tools_enabled = any(name in MEMORY_TOOL_NAMES for name in resolved_tool_names)
     display_runtime = _create_display_runtime(scenario_profile=scenario_profile)
 
     face_service = None
@@ -294,6 +296,7 @@ def create_agent(
         needs_face_runtime
         or scenario_profile.face_recognition.preference_extraction.enabled
         or scenario_profile.slack_memory.enabled
+        or memory_tools_enabled
     ):
         from argos_src.memory_provider import TailwagMemoryProvider
 
@@ -460,6 +463,7 @@ def create_agent(
         battery_cache=battery_cache,
         default_camera_resource=scenario_profile.resources.scene_camera,
         display_runtime=display_runtime,
+        memory_provider=memory_provider,
     )
     tools.extend(build_knowledge_tools(scenario_profile.knowledge_bases))
 
