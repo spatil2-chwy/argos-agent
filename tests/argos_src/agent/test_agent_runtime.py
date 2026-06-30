@@ -227,7 +227,7 @@ class _FakeSpeakerService:
         else:
             result = VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_clipped",
                 person_id=str(person_id or "").strip(),
                 attempt_kind=attempt_kind,
             )
@@ -2163,13 +2163,13 @@ def test_voice_reference_capture_arms_one_prompt_after_two_quality_failures():
         enrollment_results=[
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_empty",
                 person_id="person-1",
                 attempt_kind="silent",
             ),
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_quiet",
+                reason="reject_clipped",
                 person_id="person-1",
                 attempt_kind="silent",
             ),

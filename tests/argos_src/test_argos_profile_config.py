@@ -743,7 +743,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
                 "query_match_threshold": 0.81,
                 "query_margin_threshold": 0.11,
                 "reference_update_threshold": 0.57,
-                "enroll_min_rms_level": 420.0,
                 "max_clipped_fraction": 0.05,
             },
         },
@@ -755,7 +754,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
     assert policy.query_match_threshold == pytest.approx(0.81)
     assert policy.query_margin_threshold == pytest.approx(0.11)
     assert policy.reference_update_threshold == pytest.approx(0.57)
-    assert policy.enroll_min_rms_level == pytest.approx(420.0)
     assert policy.max_clipped_fraction == pytest.approx(0.05)
 
 
@@ -771,5 +769,23 @@ def test_speaker_recognition_rejects_removed_word_count_knobs():
                 },
             },
             profile_path=Path("/tmp/speaker-old-knobs.yaml"),
+            framework_config={},
+        )
+
+
+def test_speaker_recognition_rejects_removed_disabled_gate_knobs():
+    with pytest.raises(ProfileValidationError, match="speaker_recognition"):
+        _parse_profile(
+            {
+                "name": "speaker-disabled-gates",
+                "speaker_recognition": {
+                    "enabled": True,
+                    "query_min_voiced_sec": 0.0,
+                    "enroll_min_voiced_sec": 0.0,
+                    "enroll_max_voiced_sec": 0.0,
+                    "enroll_min_rms_level": 0.0,
+                },
+            },
+            profile_path=Path("/tmp/speaker-disabled-gates.yaml"),
             framework_config={},
         )

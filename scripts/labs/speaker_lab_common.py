@@ -26,7 +26,6 @@ from argos_src.speaker_recognition.policy import (
     SAMPLE_RATE,
     clip_stats,
     enrollment_rejection_reason,
-    is_query_clip_safe,
 )
 
 if TYPE_CHECKING:
@@ -157,13 +156,9 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_policy_override_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--query-min-voiced-sec", type=float, default=None)
     parser.add_argument("--query-match-threshold", type=float, default=None)
     parser.add_argument("--query-margin-threshold", type=float, default=None)
     parser.add_argument("--reference-update-threshold", type=float, default=None)
-    parser.add_argument("--enroll-min-voiced-sec", type=float, default=None)
-    parser.add_argument("--enroll-max-voiced-sec", type=float, default=None)
-    parser.add_argument("--enroll-min-rms-level", type=float, default=None)
     parser.add_argument("--max-clipped-fraction", type=float, default=None)
 
 
@@ -173,13 +168,9 @@ def build_lab_config(args: argparse.Namespace) -> SpeakerLabConfig:
     base_policy = profile.speaker_recognition.policy
     replacements: dict[str, Any] = {}
     for attr in (
-        "query_min_voiced_sec",
         "query_match_threshold",
         "query_margin_threshold",
         "reference_update_threshold",
-        "enroll_min_voiced_sec",
-        "enroll_max_voiced_sec",
-        "enroll_min_rms_level",
         "max_clipped_fraction",
     ):
         value = getattr(args, attr, None)
@@ -424,7 +415,6 @@ def summarize_attempt_diagnostics(
     raw_vad_frames: dict[str, Any],
     trimmed_vad_frames: dict[str, Any],
     capture_vad_positive_blocks: int = 0,
-    query_safe: bool | None = None,
     top_score: float | None = None,
     reference_count: int | None = None,
     enrollment_rejection: str = "",
@@ -447,13 +437,11 @@ def summarize_attempt_diagnostics(
         notes.append("trim_used_raw_audio_fallback_no_voiced_frames")
     if capture_vad_positive_blocks > 0 and raw_voiced_frames <= 0:
         notes.append("capture_vad_detected_speech_but_trim_vad_found_none")
-    if trimmed_stats["rms_level"] < float(policy.enroll_min_rms_level):
-        notes.append("clip_quieter_than_enrollment_min_rms")
-    if query_safe and top_score is not None and top_score < (
+    if top_score is not None and top_score < (
         float(policy.query_match_threshold) + 0.05
     ):
         notes.append("query_match_is_borderline")
-    if query_safe and int(reference_count or 0) <= 1:
+    if int(reference_count or 0) <= 1:
         notes.append("single_reference_match_not_discriminative")
     if enrollment_rejection:
         notes.append(str(enrollment_rejection))
@@ -566,13 +554,12 @@ def diagnose_recognition_attempt(
 ) -> dict[str, Any]:
     trimmed_waveform = np.frombuffer(trimmed_audio_pcm16 or b"", dtype=np.int16).copy()
     references = service.db.get_reference_embeddings()
-    query_safe = is_query_clip_safe(service.policy, audio_pcm16=trimmed_waveform)
     scores_payload: list[dict[str, Any]] = []
     top_score = 0.0
     runner_up_score = 0.0
     top_person_id = None
     corroborated_by_face = False
-    if query_safe and trimmed_waveform.size > 0 and references:
+    if trimmed_waveform.size > 0 and references:
         query_embedding = service.backend.embed_query_clip(
             trimmed_waveform,
             sample_rate=SAMPLE_RATE,
@@ -609,11 +596,6 @@ def diagnose_recognition_attempt(
             ),
             4,
         ),
-        "query_gate": {
-            "accepted": bool(query_safe),
-            "rejection_reason": "" if query_safe else "query_too_short",
-            "query_min_voiced_sec": float(service.policy.query_min_voiced_sec),
-        },
         "scored_matches": scores_payload,
         "decision_inputs": {
             "top_person_id": top_person_id,

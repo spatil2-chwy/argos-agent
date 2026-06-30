@@ -101,12 +101,11 @@ robot audio: raw ECAPA embeddings with four-clip person centroids produced
 rule had no false accepts but rejected many correct clips, so the runtime uses
 `top_score >= 0.4` and `margin >= 0.2` as the starting policy.
 
-### 3. Query gate
+### 3. Query scoring
 
-For query ownership, Argos now allows any captured speaker turn to be embedded.
-The default profile sets:
+For query ownership, Argos embeds any captured speaker turn with audio. The
+default profile sets:
 
-- `query_min_voiced_sec: 0.0`
 - `query_match_threshold: 0.40`
 - `query_margin_threshold: 0.20`
 
@@ -162,13 +161,11 @@ The turn must have:
 
 ### 3. Enrollment safety gates
 
-The enrollment path now avoids arbitrary duration and loudness gates. The
-current default gates are:
+The current enrollment gates are:
 
 - reject empty audio
-- maximum voiced duration: uncapped
-- minimum RMS level: disabled by default (`0.0`)
 - maximum clipped fraction: `0.02`
+- reject updates whose embedding is inconsistent with the existing reference
 
 If the clip passes, Argos saves or updates one normalized voice reference
 centroid for that person.

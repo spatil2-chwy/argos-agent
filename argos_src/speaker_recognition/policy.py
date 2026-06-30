@@ -78,17 +78,6 @@ def clip_stats(audio_pcm16: np.ndarray) -> AudioClipStats:
     )
 
 
-def is_query_clip_safe(
-    policy: SpeakerRecognitionPolicy,
-    *,
-    audio_pcm16: np.ndarray,
-) -> bool:
-    stats = clip_stats(audio_pcm16)
-    if stats.duration_s < policy.query_min_voiced_sec:
-        return False
-    return True
-
-
 def enrollment_rejection_reason(
     policy: SpeakerRecognitionPolicy,
     *,
@@ -97,12 +86,6 @@ def enrollment_rejection_reason(
     stats = clip_stats(audio_pcm16)
     if stats.duration_s <= 0.0:
         return "reject_empty"
-    if stats.duration_s < policy.enroll_min_voiced_sec:
-        return "reject_too_short"
-    if policy.enroll_max_voiced_sec > 0.0 and stats.duration_s > policy.enroll_max_voiced_sec:
-        return "reject_too_long"
-    if stats.rms_level < policy.enroll_min_rms_level:
-        return "reject_too_quiet"
     if stats.clipped_fraction > policy.max_clipped_fraction:
         return "reject_clipped"
     return ""

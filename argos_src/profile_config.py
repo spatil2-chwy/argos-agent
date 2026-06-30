@@ -399,13 +399,9 @@ class ScenarioProfile:
             policy=SpeakerRecognitionPolicy(
                 backend="speechbrain_ecapa",
                 db_path=DEFAULT_SPEAKER_DB_PATH,
-                query_min_voiced_sec=0.0,
                 query_match_threshold=0.40,
                 query_margin_threshold=0.20,
                 reference_update_threshold=0.55,
-                enroll_min_voiced_sec=0.0,
-                enroll_max_voiced_sec=0.0,
-                enroll_min_rms_level=0.0,
                 max_clipped_fraction=0.02,
                 explicit_prompt_after_silent_failures=2,
             ),
@@ -1530,7 +1526,6 @@ def _parse_speaker_recognition(data: dict[str, Any]) -> SpeakerRecognitionProfil
         policy = SpeakerRecognitionPolicy(
             backend="speechbrain_ecapa",
             db_path=str(resolve_repo_path(DEFAULT_SPEAKER_DB_PATH)),
-            query_min_voiced_sec=_pop_float(data, "query_min_voiced_sec", default=0.0),
             query_match_threshold=_pop_float(data, "query_match_threshold", default=0.40),
             query_margin_threshold=_pop_float(data, "query_margin_threshold", default=0.20),
             reference_update_threshold=_pop_float(
@@ -1538,9 +1533,6 @@ def _parse_speaker_recognition(data: dict[str, Any]) -> SpeakerRecognitionProfil
                 "reference_update_threshold",
                 default=0.55,
             ),
-            enroll_min_voiced_sec=_pop_float(data, "enroll_min_voiced_sec", default=0.0),
-            enroll_max_voiced_sec=_pop_float(data, "enroll_max_voiced_sec", default=0.0),
-            enroll_min_rms_level=_pop_float(data, "enroll_min_rms_level", default=0.0),
             max_clipped_fraction=_pop_float(data, "max_clipped_fraction", default=0.02),
             explicit_prompt_after_silent_failures=_pop_int(
                 data,

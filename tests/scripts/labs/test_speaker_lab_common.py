@@ -70,13 +70,9 @@ def test_build_lab_config_keeps_speaker_db_isolated_from_agent_db(tmp_path: Path
         silence_grace_period=None,
         listen_timeout_sec=10.0,
         max_record_sec=8.0,
-        query_min_voiced_sec=None,
         query_match_threshold=None,
         query_margin_threshold=None,
         reference_update_threshold=None,
-        enroll_min_voiced_sec=None,
-        enroll_max_voiced_sec=None,
-        enroll_min_rms_level=None,
         max_clipped_fraction=None,
     )
 
@@ -149,13 +145,9 @@ def test_summarize_attempt_diagnostics_flags_trim_fallback_and_borderline_match(
     policy = SpeakerRecognitionPolicy(
         backend="speechbrain_ecapa",
         db_path="/tmp/test_speaker_db",
-        query_min_voiced_sec=0.8,
         query_match_threshold=0.6,
         query_margin_threshold=0.08,
         reference_update_threshold=0.55,
-        enroll_min_voiced_sec=2.0,
-        enroll_max_voiced_sec=0.0,
-        enroll_min_rms_level=350.0,
         max_clipped_fraction=0.02,
         explicit_prompt_after_silent_failures=2,
     )
@@ -169,7 +161,6 @@ def test_summarize_attempt_diagnostics_flags_trim_fallback_and_borderline_match(
         raw_vad_frames={"voiced_frames": 0},
         trimmed_vad_frames={"voiced_frames": 0},
         capture_vad_positive_blocks=3,
-        query_safe=True,
         top_score=0.62,
         reference_count=1,
     )
@@ -180,6 +171,5 @@ def test_summarize_attempt_diagnostics_flags_trim_fallback_and_borderline_match(
     assert "using_rms_fallback_vad" in payload["notes"]
     assert "trim_used_raw_audio_fallback_no_voiced_frames" in payload["notes"]
     assert "capture_vad_detected_speech_but_trim_vad_found_none" in payload["notes"]
-    assert "clip_quieter_than_enrollment_min_rms" in payload["notes"]
     assert "query_match_is_borderline" in payload["notes"]
     assert "single_reference_match_not_discriminative" in payload["notes"]

@@ -20,7 +20,6 @@ from argos_src.speaker_recognition.models import (
 from argos_src.speaker_recognition.policy import (
     clip_stats,
     enrollment_rejection_reason,
-    is_query_clip_safe,
     resolve_owner_id,
     trim_voice_activity,
 )
@@ -82,15 +81,6 @@ class SpeakerRecognitionService:
     ) -> SpeakerResolutionResult:
         waveform = np.frombuffer(audio_pcm16 or b"", dtype=np.int16).copy()
         if waveform.size <= 0:
-            return resolve_owner_id(
-                policy=self.policy,
-                primary_face_person_id=primary_face_person_id,
-                audio_speaker_id=None,
-                top_score=0.0,
-                runner_up_score=0.0,
-                visible_face_person_ids=visible_face_person_ids,
-            )
-        if not is_query_clip_safe(self.policy, audio_pcm16=waveform):
             return resolve_owner_id(
                 policy=self.policy,
                 primary_face_person_id=primary_face_person_id,
