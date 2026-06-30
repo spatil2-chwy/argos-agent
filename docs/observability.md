@@ -16,7 +16,6 @@ The primary structured-log components are:
 - `realtime`
 - `tool`
 - `action`
-- `pref_extract`
 
 Cost visibility is folded into those same structured events rather than written to a
 separate billing log.
@@ -61,24 +60,13 @@ Tool-related signals still matter:
 | `tool` | `event=memory_query_start` | a Tailwag memory query tool started; logs tool name, query kind, and person id but not memory text |
 | `tool` | `metric=memory_query_s` | Tailwag memory query duration and result count |
 
-## Preference Extraction
+## Memory Ingestion
 
-Preference extraction runs asynchronously and should not block speech output.
-
-Relevant metrics:
-
-| component | metric | meaning |
-|---|---|---|
-| `pref_extract` | `metric=episode_build` | build Tailwag realtime episode payload |
-| `pref_extract` | `metric=tailwag_record` | Tailwag episode record call |
-| `pref_extract` | `metric=tailwag_extract` | Tailwag-backed memory extraction |
-| `pref_extract` | `metric=total` | total background extraction time |
-
-Relevant usage events:
-
-| component | event | meaning |
-|---|---|---|
-| `pref_extract` | `event=llm_usage` | `gpt-4.1` token usage and estimated extraction cost |
+Tailwag memory ingestion runs asynchronously from completed attributed turns and
+should not block speech output. Argos logs scheduling and provider failures
+through the normal runtime logger. The Tailwag `record_episode(...,
+extract_memory=...)` result is treated as Tailwag-owned; Argos does not emit
+structured latency fields for Tailwag memory extraction outcomes.
 
 ## Example
 
@@ -91,8 +79,6 @@ ts=2026-04-24 13:23:47.220 | component=realtime | event=transcription_usage | re
 ts=2026-04-24 13:23:47.492 | component=realtime | metric=first_audio_latency_s | duration_s=0.392 | req_id=rt-abc123
 ts=2026-04-24 13:23:48.002 | component=realtime | event=response_usage | req_id=rt-abc123 | input_tokens=1800 | cached_tokens=1320 | uncached_input_tokens=480 | cache_hit_ratio=0.733 | estimated_cost_usd=0.01492000 | session_total_cost_usd=0.01517000
 ts=2026-04-24 13:23:48.010 | component=tool | event=tool_result | tool=capture_scene | req_id=rt-abc123
-ts=2026-04-24 13:23:50.118 | component=pref_extract | event=llm_usage | person_id=p-001 | model=gpt-4.1 | estimated_cost_usd=0.00034000
-ts=2026-04-24 13:23:50.120 | component=pref_extract | metric=llm_extract | duration_s=1.130 | person_id=p-001
 ```
 
 ## Provider Events

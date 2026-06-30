@@ -74,6 +74,7 @@ class FakeTailwagClient:
         self.context_person_id = ""
         self.context_kwargs = {}
         self.recorded = []
+        self.record_result = None
         self.upserts = []
         self.archived = []
         self.rekeys = []
@@ -93,6 +94,8 @@ class FakeTailwagClient:
         if self.raise_record:
             raise RuntimeError("tailwag record unavailable")
         self.recorded.append((episode, extract_memory))
+        if self.record_result is not None:
+            return self.record_result
         return episode.id
 
     def rekey_person_by_email(self, email: str, new_person_id: str) -> bool:
@@ -277,6 +280,26 @@ def test_segments_append_to_one_episode_until_idle_timeout():
     assert "Second turn." in second_episode.transcript
     assert "New conversation." not in second_episode.transcript
     assert "New conversation." in third_episode.transcript
+
+
+def test_extract_and_store_segment_ignores_tailwag_record_result():
+    class UnreadableRecordResult:
+        def __getattribute__(self, name):
+            raise AssertionError(f"Argos should not inspect Tailwag record result: {name}")
+
+    client = FakeTailwagClient()
+    client.record_result = UnreadableRecordResult()
+    provider = _provider_for(client)
+
+    provider.extract_and_store_segment(
+        _segment("seg-1", "person-1", "Tailwag owns extraction results."),
+        reason="idle_timeout",
+    )
+
+    assert len(client.recorded) == 1
+    episode, extract_memory = client.recorded[0]
+    assert extract_memory is True
+    assert "Tailwag owns extraction results." in episode.transcript
 
 
 def test_record_encounter_rekeys_by_email_and_upserts_without_embeddings():
