@@ -31,7 +31,7 @@ employee_directory:
 
 knowledge_bases: []
 
-slack_memory:true
+slack_memory:
   enabled: false
 
 face_recognition:
