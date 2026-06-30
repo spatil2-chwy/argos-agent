@@ -825,6 +825,14 @@ class RealtimeRobotAgent(
             self._display_mode = rendered
         self._display_queue.put(("mode", rendered))
 
+    def _clear_passive_alert_display_if_needed(self) -> None:
+        if getattr(self, "display_runtime", None) is None:
+            return
+        with self._display_mode_lock:
+            should_clear = self._display_mode == "alert"
+        if should_clear:
+            self._set_display_mode_async("idle")
+
     def _show_display_subtitle_async(self, text: str, *, duration_ms: int = 5000) -> None:
         if getattr(self, "display_runtime", None) is None:
             return

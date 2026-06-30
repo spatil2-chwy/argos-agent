@@ -81,8 +81,9 @@ slack_memory:
 face_recognition:
   enabled: true
   db_path: var/face_recognition
-  loop_interval_sec: 0.3
+  loop_interval_sec: 0.05
   recognition_threshold: 0.6
+  recognition_margin_threshold: 0.20
   live_image_enabled: false
   owner_turn:
     enabled: true
@@ -110,30 +111,18 @@ face_recognition:
     search_radius_px: 12
     max_valid_depth_m: 10.0
   enrollment_policy:
-    min_face_area: 5000
-    min_sharpness: 12.0
+    min_face_area: 1500
     min_brightness: 35.0
     max_brightness: 220.0
     min_contrast: 15.5
-    max_eye_tilt: 0.25
-    max_nose_center_offset: 0.10
     min_embedding_similarity: 0.70
   attention_gate:
     enabled: true
-    min_face_area: 700
-    min_face_area_ratio: 0.00035
-    max_abs_yaw_deg: 25.0
-    max_abs_pitch_deg: 22.0
-    max_abs_roll_deg: 35.0
-    distant_max_abs_yaw_deg: 18.0
-    distant_max_abs_pitch_deg: 32.0
-    distant_max_abs_roll_deg: 28.0
-    near_face_area_ratio: 0.035
-    distant_face_area_ratio: 0.010
-    near_depth_m: 0.8
-    distant_depth_m: 2.0
-    max_center_offset_ratio: 0.70
-    min_confidence: 0.55
+    min_face_area: 1500
+    max_abs_yaw_deg: 20.0
+    max_abs_pitch_deg: 18.0
+    max_abs_roll_deg: 90.0
+    min_abs_pitch_deg: 0.0
     smoothing_window_sec: 1.0
     min_attentive_observations: 2
     hold_sec: 0.8
@@ -148,12 +137,9 @@ face_recognition:
 
 speaker_recognition:
   enabled: true
-  query_min_voiced_sec: 0.8
-  query_match_threshold: 0.60
-  query_margin_threshold: 0.08
+  query_match_threshold: 0.40
+  query_margin_threshold: 0.20
   reference_update_threshold: 0.55
-  enroll_min_voiced_sec: 2.0
-  enroll_min_rms_level: 350.0
   max_clipped_fraction: 0.02
   explicit_prompt_after_silent_failures: 2
 

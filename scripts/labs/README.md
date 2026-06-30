@@ -16,10 +16,54 @@ poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
 poetry run python -m scripts.labs.face_capture_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
+poetry run python -m scripts.labs.enrollment_photo_collection --help
+poetry run python -m scripts.labs.enrollment_audio_collection --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 ```
+
+## Person-centered enrollment data collection
+
+Use these when you want raw, person-labeled artifacts for comparing face/audio
+recognition models and preprocessing choices. The scripts write under
+`data_collection/<person_slug>/<session_id>/` by default.
+Pass the same `--session-id` to the photo and audio scripts when you want both
+modalities in one session folder.
+
+Photo collection using the selected profile's `resources.face_camera`:
+
+```bash
+poetry run python -m scripts.labs.enrollment_photo_collection "Jane Doe" --frames 8
+```
+
+By default, this uses whatever camera resource is in the YAML profile, such as
+`face_camera: arducam_001`, and saves it under `photos/face_camera/`. Photo
+capture is manually triggered: change the person's pose/angle, press Enter, and
+the script captures one frame. Use `--auto` if you want timed capture with
+`--interval-sec` instead.
+
+To collect multiple provider camera resources in one run, repeat `--camera`.
+The value before `=` is only the output folder/sample prefix; the value after
+`=` is the provider resource id:
+
+```bash
+poetry run python -m scripts.labs.enrollment_photo_collection "Jane Doe" \
+  --camera realsense=realsense_001 \
+  --camera arducam_fisheye=arducam_fisheye_001 \
+  --camera arducam_rect=arducam_rect_001
+```
+
+Audio collection:
+
+```bash
+poetry run python -m scripts.labs.enrollment_audio_collection "Jane Doe" --clips 5
+```
+
+The audio script uses the selected profile's microphone/VAD settings, shows
+`Mic admission active`, `Recording...`, and `Saved audio...` on the interaction
+display when configured, waits for Enter before each clip, and saves both the
+input-rate WAV plus an agent-rate 16 kHz WAV for later experiments.
 
 ## Structured perception labs + eval
 
@@ -35,6 +79,13 @@ poetry run python -m scripts.labs.face_capture_lab --mode recognition --frames 1
 poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 20 --interval-sec 1
 poetry run python -m scripts.labs.face_capture_lab --mode depth --frames 10 --interval-sec 1
 poetry run python -m scripts.labs.face_capture_lab --mode all --frames 10 --interval-sec 1
+```
+
+For sparse attention stills, use raw per-frame attention scoring so production
+temporal smoothing does not suppress otherwise attentive head-pose frames:
+
+```bash
+poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 40 --interval-sec 0.5 --attention-eval-raw
 ```
 
 Audio detection capture:
@@ -77,11 +128,11 @@ Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
 waiting indefinitely.
 
 Current registration tuning defaults match the production agent:
-- `min_face_area=5000`
-- `min_sharpness=12`
+- `min_face_area=1500`
 - `min_brightness=35`
 - `min_contrast=15.5`
-- `max_nose_center_offset=0.1`
+- `recognition_threshold=0.6`
+- `recognition_margin_threshold=0.20`
 
 Use `--details` when you want the full diagnostic dump.
 

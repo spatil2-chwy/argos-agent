@@ -132,17 +132,16 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.robot.bridge.resource_id == "base"
     assert "motion.move_robot" in profile.tools.enabled_tool_ids
     assert profile.face_recognition.attention_gate.enabled is True
-    assert profile.face_recognition.attention_gate.min_face_area == 700
-    assert profile.face_recognition.attention_gate.distant_max_abs_yaw_deg == pytest.approx(
-        18.0
-    )
-    assert profile.face_recognition.attention_gate.max_center_offset_ratio == pytest.approx(
-        0.70
-    )
-    assert profile.face_recognition.enrollment_policy.min_face_area == 5000
-    assert profile.face_recognition.enrollment_policy.min_sharpness == pytest.approx(12.0)
+    assert profile.face_recognition.attention_gate.min_face_area == 1500
+    assert profile.face_recognition.attention_gate.max_abs_yaw_deg == pytest.approx(20.0)
+    assert profile.face_recognition.attention_gate.max_abs_pitch_deg == pytest.approx(18.0)
+    assert profile.face_recognition.attention_gate.max_abs_roll_deg == pytest.approx(90.0)
+    assert profile.face_recognition.attention_gate.min_abs_pitch_deg == pytest.approx(0.0)
+    assert profile.face_recognition.enrollment_policy.min_face_area == 1500
     assert profile.face_recognition.enrollment_policy.min_brightness == pytest.approx(35.0)
     assert profile.face_recognition.enrollment_policy.min_contrast == pytest.approx(15.5)
+    assert profile.face_recognition.recognition_threshold == pytest.approx(0.6)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.20)
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
@@ -499,19 +498,10 @@ def test_face_attention_gate_profile_is_configurable():
                 "attention_gate": {
                     "enabled": True,
                     "min_face_area": 900,
-                    "min_face_area_ratio": 0.0005,
                     "max_abs_yaw_deg": 21.0,
                     "max_abs_pitch_deg": 17.0,
                     "max_abs_roll_deg": 31.0,
-                    "distant_max_abs_yaw_deg": 14.0,
-                    "distant_max_abs_pitch_deg": 29.0,
-                    "distant_max_abs_roll_deg": 24.0,
-                    "near_face_area_ratio": 0.03,
-                    "distant_face_area_ratio": 0.008,
-                    "near_depth_m": 0.7,
-                    "distant_depth_m": 2.3,
-                    "max_center_offset_ratio": 0.4,
-                    "min_confidence": 0.5,
+                    "min_abs_pitch_deg": 2.0,
                     "smoothing_window_sec": 0.8,
                     "min_attentive_observations": 3,
                     "hold_sec": 0.6,
@@ -534,19 +524,10 @@ def test_face_attention_gate_profile_is_configurable():
     attention = profile.face_recognition.attention_gate
     assert attention.enabled is True
     assert attention.min_face_area == 900
-    assert attention.min_face_area_ratio == pytest.approx(0.0005)
     assert attention.max_abs_yaw_deg == pytest.approx(21.0)
     assert attention.max_abs_pitch_deg == pytest.approx(17.0)
     assert attention.max_abs_roll_deg == pytest.approx(31.0)
-    assert attention.distant_max_abs_yaw_deg == pytest.approx(14.0)
-    assert attention.distant_max_abs_pitch_deg == pytest.approx(29.0)
-    assert attention.distant_max_abs_roll_deg == pytest.approx(24.0)
-    assert attention.near_face_area_ratio == pytest.approx(0.03)
-    assert attention.distant_face_area_ratio == pytest.approx(0.008)
-    assert attention.near_depth_m == pytest.approx(0.7)
-    assert attention.distant_depth_m == pytest.approx(2.3)
-    assert attention.max_center_offset_ratio == pytest.approx(0.4)
-    assert attention.min_confidence == pytest.approx(0.5)
+    assert attention.min_abs_pitch_deg == pytest.approx(2.0)
     assert attention.smoothing_window_sec == pytest.approx(0.8)
     assert attention.min_attentive_observations == 3
     assert attention.hold_sec == pytest.approx(0.6)
@@ -577,14 +558,12 @@ def test_face_enrollment_policy_profile_is_configurable():
             "face_recognition": {
                 "enrollment_policy": {
                     "min_face_area": 6200,
-                    "min_sharpness": 14.0,
                     "min_brightness": 34.0,
                     "max_brightness": 215.0,
                     "min_contrast": 16.0,
-                    "max_eye_tilt": 0.22,
-                    "max_nose_center_offset": 0.09,
                     "min_embedding_similarity": 0.74,
                 },
+                "recognition_margin_threshold": 0.18,
             },
         },
         profile_path=Path("/tmp/enrollment-policy.yaml"),
@@ -593,13 +572,11 @@ def test_face_enrollment_policy_profile_is_configurable():
 
     policy = profile.face_recognition.enrollment_policy
     assert policy.min_face_area == 6200
-    assert policy.min_sharpness == pytest.approx(14.0)
     assert policy.min_brightness == pytest.approx(34.0)
     assert policy.max_brightness == pytest.approx(215.0)
     assert policy.min_contrast == pytest.approx(16.0)
-    assert policy.max_eye_tilt == pytest.approx(0.22)
-    assert policy.max_nose_center_offset == pytest.approx(0.09)
     assert policy.min_embedding_similarity == pytest.approx(0.74)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.18)
 
 
 def test_face_recognition_rejects_provider_internal_camera_keys():
@@ -833,7 +810,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
                 "query_match_threshold": 0.81,
                 "query_margin_threshold": 0.11,
                 "reference_update_threshold": 0.57,
-                "enroll_min_rms_level": 420.0,
                 "max_clipped_fraction": 0.05,
             },
         },
@@ -845,7 +821,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
     assert policy.query_match_threshold == pytest.approx(0.81)
     assert policy.query_margin_threshold == pytest.approx(0.11)
     assert policy.reference_update_threshold == pytest.approx(0.57)
-    assert policy.enroll_min_rms_level == pytest.approx(420.0)
     assert policy.max_clipped_fraction == pytest.approx(0.05)
 
 
@@ -861,5 +836,23 @@ def test_speaker_recognition_rejects_removed_word_count_knobs():
                 },
             },
             profile_path=Path("/tmp/speaker-old-knobs.yaml"),
+            framework_config={},
+        )
+
+
+def test_speaker_recognition_rejects_removed_disabled_gate_knobs():
+    with pytest.raises(ProfileValidationError, match="speaker_recognition"):
+        _parse_profile(
+            {
+                "name": "speaker-disabled-gates",
+                "speaker_recognition": {
+                    "enabled": True,
+                    "query_min_voiced_sec": 0.0,
+                    "enroll_min_voiced_sec": 0.0,
+                    "enroll_max_voiced_sec": 0.0,
+                    "enroll_min_rms_level": 0.0,
+                },
+            },
+            profile_path=Path("/tmp/speaker-disabled-gates.yaml"),
             framework_config={},
         )

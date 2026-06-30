@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 
+import cv2
 import numpy as np
 import torch
 
@@ -52,13 +53,10 @@ LOOP_HEARTBEAT_LOG_SEC = 5.0
 
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 5000
-    min_sharpness: float = 12.0
+    min_face_area: int = 1500
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    max_eye_tilt: float = 0.25
-    max_nose_center_offset: float = 0.10
     min_embedding_similarity: float = 0.70
 
 
@@ -87,12 +85,8 @@ class FaceEnrollmentQualityMetrics:
     bbox_area: int = 0
     clipped: bool = False
     crop_valid: bool = False
-    has_required_landmarks: bool = False
-    eye_tilt: float = 0.0
-    nose_center_offset: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
-    sharpness: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -127,6 +121,7 @@ class FaceRecognitionService:
         self,
         db_path: str = DEFAULT_FACE_DB_PATH,
         recognition_threshold: float = 0.6,
+        recognition_margin_threshold: float = 0.20,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
         attention_gate_settings: AttentionGateSettings | None = None,
@@ -152,6 +147,7 @@ class FaceRecognitionService:
 
         self.robot_client = robot_client
         self._recognition_threshold = float(recognition_threshold)
+        self._recognition_margin_threshold = float(recognition_margin_threshold)
         self.db = FaceRecognitionStore(
             db_path=db_path,
             identity_db_path=identity_db_path,
@@ -345,12 +341,18 @@ class FaceRecognitionService:
         depth_m,
     ) -> list[dict[str, Any]]:
         """Run detection, optional depth gating, then embedding extraction."""
-        return self._prepare_faces_for_recognition_result(image, depth_m).faces
+        return self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        ).faces
 
     def _prepare_faces_for_recognition_result(
         self,
         image,
         depth_m,
+        *,
+        min_face_area: int | None = None,
     ) -> FacePreparationResult:
         """Run detection, optional depth gating, and embedding extraction with diagnostics."""
         detected_faces = self.detect_faces(image)
@@ -363,13 +365,34 @@ class FaceRecognitionService:
 
         detected_count = len(detected_faces)
         rejected_count = 0
+        if min_face_area is not None and int(min_face_area) > 0:
+            kept_faces = [
+                face
+                for face in detected_faces
+                if self._bbox_area(face) >= int(min_face_area)
+            ]
+            area_rejected_count = len(detected_faces) - len(kept_faces)
+            rejected_count += area_rejected_count
+            detected_faces = kept_faces
+            if area_rejected_count and not detected_faces:
+                logger.debug(
+                    "[FaceLoop] min face area rejected all detected faces threshold=%s",
+                    int(min_face_area),
+                )
+                return FacePreparationResult(
+                    faces=[],
+                    reason="face_too_small",
+                    detected_count=detected_count,
+                    rejected_count=rejected_count,
+                )
         if depth_m is not None and self._depth_gate_settings is not None:
-            gated_faces, rejected_count = filter_detections_by_depth(
+            gated_faces, depth_rejected_count = filter_detections_by_depth(
                 detected_faces,
                 depth_m,
                 self._depth_gate_settings,
             )
-            if rejected_count:
+            rejected_count += depth_rejected_count
+            if depth_rejected_count:
                 kept = len(gated_faces)
                 total = len(detected_faces)
                 if kept == 0:
@@ -416,6 +439,16 @@ class FaceRecognitionService:
             rejected_count=rejected_count,
         )
 
+    def _recognition_min_face_area(self) -> int:
+        policy = getattr(self, "_enrollment_policy", DEFAULT_FACE_ENROLLMENT_POLICY)
+        return int(
+            getattr(
+                policy,
+                "min_face_area",
+                DEFAULT_FACE_ENROLLMENT_POLICY.min_face_area,
+            )
+        )
+
     @staticmethod
     def _bbox_area(face: dict[str, Any]) -> int:
         bbox = face["bbox"]
@@ -456,15 +489,42 @@ class FaceRecognitionService:
         """Return one enrollment face from the already-usable face list.
 
         Callers should pass only faces that survived any active depth gate.
-        Enrollment should block only when more than one usable face remains.
+        Enrollment should block only when more than one enrollment-sized face remains.
         """
         if not detected_faces:
             return None, False
-        if len(detected_faces) == 1:
-            return detected_faces[0], False
+        min_face_area = int(
+            getattr(
+                getattr(self, "_enrollment_policy", DEFAULT_FACE_ENROLLMENT_POLICY),
+                "min_face_area",
+                DEFAULT_FACE_ENROLLMENT_POLICY.min_face_area,
+            )
+        )
+        ordered_all = sorted(
+            detected_faces,
+            key=lambda candidate: (
+                -float(candidate.get("confidence", 0.0)),
+                -float(self._bbox_area(candidate)),
+            ),
+        )
+        enrollment_sized = [
+            candidate
+            for candidate in ordered_all
+            if self._bbox_area(candidate) >= min_face_area
+        ]
+        if not enrollment_sized:
+            return ordered_all[0], False
+        if len(enrollment_sized) == 1:
+            ignored = len(ordered_all) - 1
+            if ignored > 0:
+                logger.info(
+                    "Enrollment ignored %s below-min-area face detection(s) and kept the strongest enrollment-sized candidate.",
+                    ignored,
+                )
+            return enrollment_sized[0], False
 
         ordered = sorted(
-            detected_faces,
+            enrollment_sized,
             key=lambda candidate: (
                 -float(candidate.get("confidence", 0.0)),
                 -float(self._bbox_area(candidate)),
@@ -489,8 +549,8 @@ class FaceRecognitionService:
         if significant_others:
             return None, True
         logger.info(
-            "Enrollment ignored %s extra face detection(s) and kept the strongest candidate.",
-            len(ordered) - 1,
+            "Enrollment ignored %s extra face detection(s) and kept the strongest enrollment-sized candidate.",
+            len(ordered_all) - 1,
         )
         return primary, False
 
@@ -511,9 +571,6 @@ class FaceRecognitionService:
         guidance_by_reason = {
             "face_too_small": "Come a little closer so I can see your face clearly.",
             "face_clipped": "Please center your whole face in view.",
-            "missing_landmarks": "Please face me directly.",
-            "side_face": "Please face me directly.",
-            "too_blurry": "Hold still for a second so the image is clear.",
             "too_dark": "Please move to better light.",
             "too_bright": "Please move away from the bright light.",
             "low_contrast": "Please move to better light.",
@@ -567,44 +624,20 @@ class FaceRecognitionService:
         bbox_area = int(w * h)
         clipped = x <= 1 or y <= 1 or (x + w) >= (width - 1) or (y + h) >= (height - 1)
 
-        landmarks = face.get("landmarks") or {}
-        required = ("left_eye", "right_eye", "nose", "mouth_left", "mouth_right")
-        has_required_landmarks = all(name in landmarks for name in required)
-        eye_tilt = 0.0
-        nose_offset = 0.0
-        if has_required_landmarks:
-            left_eye = np.asarray(landmarks["left_eye"], dtype=np.float32)
-            right_eye = np.asarray(landmarks["right_eye"], dtype=np.float32)
-            nose = np.asarray(landmarks["nose"], dtype=np.float32)
-            eye_distance = float(np.linalg.norm(right_eye - left_eye))
-            if eye_distance > 1e-6:
-                eye_tilt = abs(float(left_eye[1] - right_eye[1])) / eye_distance
-                nose_offset = abs(float(nose[0] - ((left_eye[0] + right_eye[0]) / 2.0))) / eye_distance
-            else:
-                has_required_landmarks = False
-
         crop = image[y : y + h, x : x + w]
         crop_valid = bool(crop.size > 0)
         brightness = 0.0
         contrast = 0.0
-        sharpness = 0.0
         if crop_valid:
             gray = crop.astype(np.float32).mean(axis=2) if crop.ndim == 3 else crop.astype(np.float32)
             brightness = float(np.mean(gray))
             contrast = float(np.std(gray))
-            if gray.shape[0] >= 2 and gray.shape[1] >= 2:
-                dy, dx = np.gradient(gray)
-                sharpness = float(np.var(dx) + np.var(dy))
         return FaceEnrollmentQualityMetrics(
             bbox_area=bbox_area,
             clipped=clipped,
             crop_valid=crop_valid,
-            has_required_landmarks=has_required_landmarks,
-            eye_tilt=eye_tilt,
-            nose_center_offset=nose_offset,
             brightness=brightness,
             contrast=contrast,
-            sharpness=sharpness,
         )
 
     @staticmethod
@@ -655,26 +688,9 @@ class FaceRecognitionService:
         if metrics.clipped:
             reason, guidance = self._quality_response_for_reason("face_clipped")
             return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if not metrics.has_required_landmarks:
-            reason, guidance = self._quality_response_for_reason("missing_landmarks")
-            return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if (
-            metrics.eye_tilt > policy.max_eye_tilt
-            or metrics.nose_center_offset > policy.max_nose_center_offset
-        ):
-            reason, guidance = self._quality_response_for_reason("side_face")
-            return FaceEnrollmentQuality(
-                False,
-                reason,
-                guidance,
-                max(metrics.eye_tilt, metrics.nose_center_offset),
-            )
         if not metrics.crop_valid:
             reason, guidance = self._quality_response_for_reason("face_clipped")
             return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if metrics.sharpness < policy.min_sharpness:
-            reason, guidance = self._quality_response_for_reason("too_blurry")
-            return FaceEnrollmentQuality(False, reason, guidance, metrics.sharpness)
         if metrics.brightness < policy.min_brightness:
             reason, guidance = self._quality_response_for_reason("too_dark")
             return FaceEnrollmentQuality(False, reason, guidance, metrics.brightness)
@@ -689,12 +705,26 @@ class FaceRecognitionService:
     def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
         matches = self.db.recognize_face(
             face_embedding=face["embedding"],
-            threshold=self._recognition_threshold,
-            top_k=1,
+            threshold=-1.0,
+            top_k=2,
         )
         if not matches:
             return None
-        return matches[0]
+        top_match = matches[0]
+        top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
+        runner_up_similarity = (
+            float(matches[1].get("similarity", 0.0) or 0.0)
+            if len(matches) > 1
+            else 0.0
+        )
+        margin = top_similarity - runner_up_similarity
+        if top_similarity < self._recognition_threshold:
+            return None
+        if margin < self._recognition_margin_threshold:
+            return None
+        top_match["runner_up_similarity"] = runner_up_similarity
+        top_match["similarity_margin"] = margin
+        return top_match
 
     def _build_scene_state(
         self,
@@ -909,7 +939,11 @@ class FaceRecognitionService:
                 )
             return result
 
-        prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepared = self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        )
         detected_faces = prepared.faces
         result["faces_detected"] = len(detected_faces)
 
@@ -997,6 +1031,7 @@ class FaceRecognitionService:
             username=username,
             employee_profile=employee_profile,
             camera_resource_id=camera_resource_id,
+            display_runtime=display_runtime,
         )
         if failure is not None:
             return failure
@@ -1078,6 +1113,7 @@ class FaceRecognitionService:
         username: str = "",
         employee_profile: dict[str, Any] | None = None,
         camera_resource_id: str | None = None,
+        display_runtime: Any | None = None,
     ) -> tuple[FaceEnrollmentCandidate | None, dict[str, Any] | None]:
         verified_profile = {
             key: str(value or "").strip()
@@ -1144,6 +1180,11 @@ class FaceRecognitionService:
                     raw_detected_count,
                     len(usable_faces),
                     rejected_count,
+                )
+                self._show_multiple_faces_enrollment_preview(
+                    display_runtime,
+                    image=image,
+                    faces=usable_faces,
                 )
                 return (
                     None,
@@ -1340,6 +1381,75 @@ class FaceRecognitionService:
                 "Pets are usually the best default topic, then preferred name, team, or current work."
             ),
         )
+
+    def _show_multiple_faces_enrollment_preview(
+        self,
+        display_runtime: Any | None,
+        *,
+        image: Any,
+        faces: list[dict[str, Any]],
+    ) -> None:
+        if display_runtime is None or not bool(
+            getattr(display_runtime, "is_configured", False)
+        ):
+            return
+        show_preview = getattr(display_runtime, "show_image_message_preview", None)
+        if not callable(show_preview):
+            return
+        image_url = self._enrollment_preview_data_url(
+            self._enrollment_diagnostic_image(image, faces)
+        )
+        if not image_url:
+            return
+        try:
+            show_preview(
+                image_url=image_url,
+                title="Multiple Faces Detected",
+                message=(
+                    "I can see more than one face. Please make sure you are the only "
+                    "person in view before enrollment."
+                ),
+                hold_sec=5.0,
+            )
+        except Exception as exc:
+            logger.warning("Multiple-face enrollment preview failed: %s", exc)
+
+    @staticmethod
+    def _enrollment_diagnostic_image(image: Any, faces: list[dict[str, Any]]) -> Any:
+        if image is None or not hasattr(image, "shape"):
+            return image
+        try:
+            annotated = image.copy()
+            height, width = annotated.shape[:2]
+            for idx, face in enumerate(faces, start=1):
+                bbox = face.get("bbox") or {}
+                x = max(0, min(int(bbox.get("x", 0) or 0), width - 1))
+                y = max(0, min(int(bbox.get("y", 0) or 0), height - 1))
+                w = max(0, int(bbox.get("w", 0) or 0))
+                h = max(0, int(bbox.get("h", 0) or 0))
+                x2 = max(0, min(x + w, width - 1))
+                y2 = max(0, min(y + h, height - 1))
+                if x2 <= x or y2 <= y:
+                    continue
+                color = (255, 221, 0)
+                cv2.rectangle(annotated, (x, y), (x2, y2), color, 2)
+                confidence = float(face.get("confidence", 0.0) or 0.0)
+                label = f"{idx}: {confidence:.2f}"
+                text_y = max(14, y - 6)
+                cv2.putText(
+                    annotated,
+                    label,
+                    (x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+            return annotated
+        except Exception:
+            logger.exception("Failed to prepare multiple-face enrollment preview")
+            return image.copy() if hasattr(image, "copy") else image
 
     @staticmethod
     def _enrollment_preview_data_url(image: Any) -> str:
@@ -1556,7 +1666,11 @@ class FaceRecognitionService:
             captured_at=time.time(),
         )
         prepare_started = perf_now()
-        prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepared = self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        )
         prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
         if not detected_faces:
@@ -1622,6 +1736,7 @@ class FaceRecognitionService:
             now=now,
         )
         attentive_names = [p.name for p in persons if bool(p.attentive)]
+        recognized_details = self._format_recognition_log_details(persons)
         primary_attention = analysis.primary_attention_target
         attention_details = self._format_attention_log_details(detected_faces)
         logger.debug(
@@ -1629,7 +1744,7 @@ class FaceRecognitionService:
             "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
             "attention_details=%s",
             len(detected_faces),
-            [p.name for p in persons],
+            recognized_details,
             unknown_count,
             attentive_names,
             analysis.attentive_unknown_count,
@@ -1664,7 +1779,7 @@ class FaceRecognitionService:
             "ok",
             len(detected_faces),
             prepared.rejected_count,
-            [p.name for p in persons],
+            recognized_details,
             unknown_count,
             attentive_names,
             analysis.attentive_unknown_count,
@@ -1676,6 +1791,14 @@ class FaceRecognitionService:
             ),
             attention_details,
         )
+
+    def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
+        threshold = float(getattr(self, "_recognition_threshold", 0.0) or 0.0)
+        details: list[str] = []
+        for person in persons:
+            label = str(person.name or person.person_id).replace(" ", "_")
+            details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
+        return details
 
     @staticmethod
     def _format_attention_log_details(faces: list[dict[str, Any]]) -> list[str]:

@@ -8,7 +8,7 @@ human-labeling template for later quantitative eval.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 import sys
 import time
@@ -21,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from argos_src.face_recognition.attention_gate import draw_attention_overlay
 from argos_src.profile_config import load_scenario_profile
 from scripts.labs.face_lab_common import (
     add_enrollment_policy_args,
@@ -61,6 +62,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-root",
         default=str(DEFAULT_LAB_ROOT),
         help="Root directory for lab runs. Default: var/labs.",
+    )
+    parser.add_argument(
+        "--attention-eval-raw",
+        action="store_true",
+        help=(
+            "For attention captures, score each still frame with the raw head-pose "
+            "gate before temporal smoothing. Useful for sparse lab datasets."
+        ),
     )
     parser.add_argument("--run-id", default="")
     return parser
@@ -151,9 +160,6 @@ def _enrollment_predictions(
                     "bbox_area": metrics.get("bbox_area", 0),
                     "brightness": metrics.get("brightness", 0.0),
                     "contrast": metrics.get("contrast", 0.0),
-                    "sharpness": metrics.get("sharpness", 0.0),
-                    "eye_tilt": metrics.get("eye_tilt", 0.0),
-                    "nose_center_offset": metrics.get("nose_center_offset", 0.0),
                 },
                 "policy": quality.get("policy", {}),
             }
@@ -172,6 +178,8 @@ def _attention_predictions(
     image_shape: tuple[int, ...],
     faces: list[dict[str, Any]],
     now: float,
+    *,
+    eval_raw: bool,
 ) -> dict[str, Any]:
     gate = getattr(service, "_attention_gate", None)
     settings = getattr(gate, "settings", None)
@@ -191,17 +199,39 @@ def _attention_predictions(
             track_id=track_id,
             now=now,
         )
-        if observation.attentive:
+        scored_attentive = (
+            bool(observation.raw_attentive) if eval_raw else bool(observation.attentive)
+        )
+        scored_confidence = (
+            float(observation.raw_confidence)
+            if eval_raw
+            else float(observation.confidence)
+        )
+        scored_reason = (
+            "raw_attentive"
+            if eval_raw and observation.raw_attentive
+            else observation.reason
+        )
+        face["attention"] = replace(
+            observation,
+            attentive=scored_attentive,
+            confidence=scored_confidence,
+            reason=scored_reason,
+        )
+        if scored_attentive:
             attentive_count += 1
         predictions.append(
             {
                 "face_index": index,
-                "attentive": bool(observation.attentive),
-                "confidence": round(float(observation.confidence), 4),
-                "reason": observation.reason,
+                "attentive": scored_attentive,
+                "confidence": round(scored_confidence, 4),
+                "reason": scored_reason,
                 "yaw_deg": observation.yaw_deg,
                 "pitch_deg": observation.pitch_deg,
                 "roll_deg": observation.roll_deg,
+                "smoothed_attentive": bool(observation.attentive),
+                "smoothed_confidence": round(float(observation.confidence), 4),
+                "smoothed_reason": observation.reason,
                 "raw_attentive": bool(observation.raw_attentive),
                 "raw_confidence": round(float(observation.raw_confidence), 4),
             }
@@ -275,6 +305,7 @@ def _capture_one(
     mode: str,
     timeout: float,
     max_frame_wait_sec: float,
+    attention_eval_raw: bool,
     frame_index: int,
 ) -> dict[str, Any]:
     sample_id = f"frame_{frame_index:04d}"
@@ -380,6 +411,12 @@ def _capture_one(
             tuple(image.shape),
             faces,
             now=time.time(),
+            eval_raw=attention_eval_raw,
+        )
+        overlay_path = writer.artifacts_dir / f"{sample_id}_attention.png"
+        base_sample["artifacts"]["attention_overlay_path"] = _save_image(
+            overlay_path,
+            draw_attention_overlay(np.asarray(image), faces),
         )
     return base_sample
 
@@ -427,6 +464,7 @@ def main() -> int:
             },
             "requested_frames": int(args.frames),
             "interval_sec": float(args.interval_sec),
+            "attention_eval_raw": bool(args.attention_eval_raw),
             "profile_depth_gate_enabled": bool(profile.face_recognition.depth_gate.enabled),
             "profile_attention_gate_enabled": bool(
                 profile.face_recognition.attention_gate.enabled
@@ -448,6 +486,7 @@ def main() -> int:
                 mode=args.mode,
                 timeout=float(timeout),
                 max_frame_wait_sec=max(0.0, float(args.max_frame_wait_sec)),
+                attention_eval_raw=bool(args.attention_eval_raw),
                 frame_index=frame_index,
             )
             writer.append_sample(sample, _label_template(sample))
