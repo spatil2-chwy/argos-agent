@@ -15,6 +15,7 @@ source setup_shell.sh
 poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
 poetry run python -m scripts.labs.face_capture_lab --help
+poetry run python -m scripts.labs.owner_turn_calibration_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
 poetry run python -m scripts.labs.enrollment_audio_collection --help
@@ -152,6 +153,23 @@ Recognition loop:
 
 ```bash
 poetry run python -m scripts.labs.face_recognition_lab --loop --interval 0.5
+```
+
+Owner-turn centering dry run. Press Enter for each sample; it captures the
+configured face camera, applies depth/attention if enabled, prints each face's
+signed yaw bearing, and shows the exact turn command that would be issued:
+
+```bash
+poetry run python -m scripts.labs.owner_turn_calibration_lab
+```
+
+To actually run the production closed-loop centering command after each capture,
+use `--move`. Try camera offset and gain overrides here before editing the
+profile YAML:
+
+```bash
+poetry run python -m scripts.labs.owner_turn_calibration_lab --move \
+  --camera-yaw-offset-deg -4.0 --turn-gain 0.8
 ```
 
 Speaker enrollment to a temporary lab DB:

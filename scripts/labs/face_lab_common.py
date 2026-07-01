@@ -269,6 +269,9 @@ def build_face_service(
         recognition_margin_threshold=config["recognition_margin_threshold"],
         robot_client=robot_client,
         camera_resource_id=config["camera_resource_id"],
+        camera_yaw_offset_rad=(
+            profile.face_recognition.owner_turn.camera_yaw_offset_rad
+        ),
         depth_gate_settings=config["depth_settings"],
         attention_gate_settings=build_attention_gate_settings(profile),
         enrollment_policy=enrollment_policy,
