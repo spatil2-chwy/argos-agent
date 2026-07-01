@@ -72,9 +72,15 @@ The service returns one of these statuses:
 Successful results include up to 3 candidates, each with:
 
 - `official_name`
+- `employee_name`
+- `username`
 - `business_title`
 - `tenure`
 - `match_score`
+
+Internal Snowflake/org fields stay cached in the directory service. They are not
+sent in the lookup response; enrollment rehydrates them locally from the verified
+`username`.
 
 ## Why It Is Designed This Way
 

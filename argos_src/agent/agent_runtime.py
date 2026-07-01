@@ -33,7 +33,7 @@ from argos_src.agent.agent_audio import (
 from argos_src.agent.agent_playback import RealtimeAgentPlaybackMixin
 from argos_src.agent.agent_preferences import RealtimeAgentPreferenceMixin
 from argos_src.agent.agent_state import RealtimeAgentStateMixin
-from argos_src.agent.agent_tools import RealtimeAgentToolsMixin
+from argos_src.agent.agent_tools import RealtimeAgentToolsMixin, _debug_log_value
 from argos_src.agent.realtime_turns import (
     NO_AUDIO_RESPONSE_RETRY_LIMIT,
     PLAYBACK_STALL_TIMEOUT_SEC,
@@ -1636,6 +1636,17 @@ class RealtimeRobotAgent(
         if has_function_call or turn.pending_tool_calls > 0:
             self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
             return
+
+        completed_tools = tuple(turn.metadata.get("completed_tools", ()) or ())
+        if "resolve_employee_identity" in completed_tools:
+            self._latency.emit(
+                event="assistant_response_after_tool",
+                req_id=turn.req_id,
+                tool="resolve_employee_identity",
+                response_id=response_id,
+                status=status,
+                transcript=_debug_log_value(turn.assistant_transcript.strip()),
+            )
 
         incomplete_details = response.get("incomplete_details")
         has_audio_reply = turn.audio_started

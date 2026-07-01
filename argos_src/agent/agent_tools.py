@@ -13,6 +13,13 @@ from argos_src.observability.observability import (
 )
 
 
+def _debug_log_value(value: object, *, limit: int = 1200) -> str:
+    rendered = str(value or "").replace("\n", " ").replace("\r", " ").replace("|", "/")
+    if len(rendered) > limit:
+        return rendered[: max(0, limit - 3)] + "..."
+    return rendered
+
+
 class RealtimeAgentToolsMixin:
     def _execute_tool_call(self, pending: PendingToolCall) -> None:
         turn = self._turns_by_req_id.get(pending.turn_req_id)
@@ -60,6 +67,32 @@ class RealtimeAgentToolsMixin:
             req_id=turn.req_id,
             tool=pending.tool_name,
         )
+        if pending.tool_name == "resolve_employee_identity":
+            payload = parse_tool_output(content) or {}
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            candidates = data.get("candidates", []) if isinstance(data, dict) else []
+            if not isinstance(candidates, list):
+                candidates = []
+            turn.metadata.setdefault("completed_tools", []).append(pending.tool_name)
+            self._tool_latency.emit(
+                event="tool_result_payload",
+                req_id=turn.req_id,
+                tool=pending.tool_name,
+                success=payload.get("success") if isinstance(payload, dict) else None,
+                status=payload.get("status") if isinstance(payload, dict) else None,
+                candidate_count=(
+                    payload.get("candidate_count") if isinstance(payload, dict) else None
+                ),
+                message=_debug_log_value(
+                    payload.get("message") if isinstance(payload, dict) else ""
+                ),
+                shared_first_name=_debug_log_value(arguments.get("shared_first_name")),
+                shared_last_name=_debug_log_value(arguments.get("shared_last_name")),
+                shared_name=_debug_log_value(arguments.get("shared_name")),
+                candidates_json=_debug_log_value(
+                    json.dumps(candidates[:3], ensure_ascii=True, separators=(",", ":"))
+                ),
+            )
         self._queue_pending_local_created_item(turn.req_id, "function_call_output")
         self._send_event(
             {

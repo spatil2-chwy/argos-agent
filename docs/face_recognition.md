@@ -109,10 +109,10 @@ result = self.face_service.enroll_visible_person(
 )
 ```
 
-That means the LLM no longer has to pass title, manager, cost center, job family,
-tenure, or similar fields back into the tool. It should pass the verified username
-when `resolve_employee_identity` returned one. The rest is loaded locally from
-`EmployeeDirectoryService.get_verified_profile()`.
+That means the LLM does not receive or pass manager, cost center, job family, or
+similar internal org fields through the tool surface. It should pass the verified
+username when `resolve_employee_identity` returned one. The rest is loaded locally
+from `EmployeeDirectoryService.get_verified_profile()`.
 
 ## Enrollment Preprocessing
 

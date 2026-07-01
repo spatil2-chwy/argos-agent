@@ -682,7 +682,14 @@ class EmployeeDirectoryService:
 
     @staticmethod
     def _candidate_payload(candidate: _ScoredCandidate) -> dict[str, Any]:
-        payload = EmployeeDirectoryService._profile_payload(candidate.record)
+        record = candidate.record
+        payload = {
+            "official_name": record.official_name,
+            "employee_name": record.employee_name,
+            "username": record.username,
+            "business_title": record.business_title,
+            "tenure": record.tenure,
+        }
         payload["match_score"] = round(candidate.score, 1)
         return payload
 

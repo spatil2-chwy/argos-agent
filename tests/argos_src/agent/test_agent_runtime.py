@@ -119,6 +119,34 @@ class _FakeTool:
         return {"success": True, "arguments": arguments}
 
 
+class _FakeResolveEmployeeIdentityTool:
+    name = "resolve_employee_identity"
+    description = "resolve"
+
+    def invoke(self, arguments):
+        return {
+            "success": True,
+            "status": "needs_clarification",
+            "message": "I found a possible employee match, but I need a bit more detail to be sure.",
+            "site_code": "BOS3",
+            "candidate_count": 1,
+            "data": {
+                "site_code": "BOS3",
+                "candidate_count": 1,
+                "candidates": [
+                    {
+                        "official_name": "Sakshee Patil",
+                        "employee_name": "Sakshee Patil",
+                        "username": "spatil2",
+                        "business_title": "AI Technologist II",
+                        "tenure": "2 years",
+                        "match_score": 91.6,
+                    }
+                ],
+            },
+        }
+
+
 class _FakeGestureRuntime:
     def __init__(self):
         self.recording_active = []
@@ -511,6 +539,83 @@ def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     assert turn.pending_tool_calls == 0
     assert followups == [turn.req_id]
     assert owner_turn.cancellations == []
+
+
+def test_resolve_employee_identity_logs_payload_and_followup_response():
+    agent = _make_agent()
+    turn = _make_turn("rt-resolve-debug")
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-resolve"}
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._tool_registry = {
+        "resolve_employee_identity": _FakeResolveEmployeeIdentityTool()
+    }
+    followups = []
+    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
+
+    agent._execute_tool_call(
+        realtime_mod.PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-resolve",
+            tool_name="resolve_employee_identity",
+            arguments_json=(
+                '{"shared_first_name":"Sakshi",'
+                '"shared_last_name":"Patel",'
+                '"shared_name":"Sakshi Patel"}'
+            ),
+        )
+    )
+
+    payload_event = next(
+        evt for evt in agent._tool_latency.events
+        if evt.get("event") == "tool_result_payload"
+    )
+    assert payload_event["req_id"] == turn.req_id
+    assert payload_event["tool"] == "resolve_employee_identity"
+    assert payload_event["status"] == "needs_clarification"
+    assert payload_event["candidate_count"] == 1
+    assert payload_event["shared_first_name"] == "Sakshi"
+    assert payload_event["shared_last_name"] == "Patel"
+    assert '"official_name":"Sakshee Patil"' in payload_event["candidates_json"]
+    assert followups == [turn.req_id]
+    assert turn.metadata["completed_tools"] == ["resolve_employee_identity"]
+
+    turn.response_id = "resp-resolve-debug"
+    turn.audio_started = True
+    turn.audio_started_at = time.time()
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-resolve-debug",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-resolve-debug",
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "I found Sakshee Patil. Is that you?",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    response_event = next(
+        evt for evt in agent._latency.events
+        if evt.get("event") == "assistant_response_after_tool"
+    )
+    assert response_event["req_id"] == turn.req_id
+    assert response_event["tool"] == "resolve_employee_identity"
+    assert response_event["status"] == "completed"
+    assert response_event["transcript"] == "I found Sakshee Patil. Is that you?"
+
 
 def test_recording_hooks_update_gesture_runtime():
     agent = _make_agent()
