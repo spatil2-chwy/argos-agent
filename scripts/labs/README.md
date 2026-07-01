@@ -165,6 +165,12 @@ the interaction display. The screen shows `Detected | Attentive`,
 poetry run python -m scripts.labs.attention_display_lab
 ```
 
+To bypass temporal smoothing and show the raw per-frame attention decision:
+
+```bash
+poetry run python -m scripts.labs.attention_display_lab --raw-attention
+```
+
 Owner-turn centering dry run. Press Enter for each sample; it captures the
 configured face camera, applies depth/attention if enabled, prints each face's
 signed yaw bearing, and shows the exact turn command that would be issued:
