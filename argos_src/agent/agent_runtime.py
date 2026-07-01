@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import atexit
 import base64
-import hashlib
 import json
 import logging
 import os
@@ -906,27 +905,6 @@ class RealtimeRobotAgent(
                 instructions
                 + "\n\n[DELIVERY] Continue the current answer naturally from exactly where you left off. Do not restart, repeat, or summarize what you already said."
             )
-        digest = hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:12]
-        context = turn.context_snapshot
-        person_names = [
-            str(getattr(person, "name", "") or getattr(person, "person_id", "") or "").strip()
-            for person in (context.persons or [])
-            if str(getattr(person, "name", "") or getattr(person, "person_id", "") or "").strip()
-        ]
-        self.logger.info(
-            "Built response.create prompt req_id=%s owner_id=%s owner_source=%s "
-            "primary_face_person_id=%s audio_speaker_id=%s prompt_sha256=%s "
-            "prompt_chars=%s people=%s memory_blocks=%s",
-            turn.req_id,
-            context.owner_id,
-            context.owner_source,
-            context.primary_face_person_id,
-            context.audio_speaker_id,
-            digest,
-            len(instructions),
-            ",".join(person_names) or "<none>",
-            len(tuple(context.memory_context_blocks or ())),
-        )
         return realtime_response_payload(
             instructions=instructions,
             output_modalities=["audio"],

@@ -494,7 +494,6 @@ class RealtimeAgentAudioMixin:
                 owner_source=resolution.owner_source,
                 owner_confidence=resolution.owner_confidence,
                 speaker_visible=resolution.speaker_visible,
-                allow_live_primary_lookup=False,
             ),
             input_audio_pcm16=audio_pcm16,
             trimmed_input_audio_pcm16=trimmed_audio_pcm16,
