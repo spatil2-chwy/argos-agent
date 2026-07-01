@@ -113,9 +113,9 @@ face_recognition:
     max_abs_pitch_deg: 18.0
     max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-    smoothing_window_sec: 1.5
-    min_attentive_observations: 2
-    hold_sec: 1.0
+    smoothing_window_sec: 0.001
+    min_attentive_observations: 1
+    hold_sec: 0.0
   preference_extraction:
     enabled: true
   proactive_greeting:

@@ -47,6 +47,9 @@ face_recognition:
     enabled: false
   attention_gate:
     enabled: true
+    smoothing_window_sec: 0.001
+    min_attentive_observations: 1
+    hold_sec: 0.0
   proactive_greeting:
     recognized_enabled: false
     unknown_enabled: false
