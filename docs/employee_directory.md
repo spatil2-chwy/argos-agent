@@ -31,12 +31,15 @@ is first name plus last name.
 For each employee row, the service loads:
 
 - `EMPLOYEE_NAME`
-- `FIRST_NAME`
-- `LAST_NAME`
 - `BUSINESS_TITLE`
 - `TIME_IN_JOB_PROFILE`
 
 The directory is filtered by `LOCATION_CODE`, so matching is site-specific.
+Name matching uses `EMPLOYEE_NAME` as the source of truth. The tool still asks
+the model for first and last name separately, then the service joins those inputs
+into a spoken full-name query. It compares that query against `EMPLOYEE_NAME`
+instead of loading or trusting Snowflake first-name and last-name component
+columns, because those may be masked.
 
 ## How Matching Works
 
@@ -47,10 +50,9 @@ It then scores candidates in this order:
 1. exact normalized full-name match
 2. exact token-order-insensitive full-name match
 3. fuzzy full-name match with RapidFuzz
-4. supporting first-name and last-name similarity checks
 
-Full-name similarity is the main signal. First and last name are used as supporting
-evidence so a shared surname alone does not incorrectly validate the wrong person.
+Full-name similarity against `EMPLOYEE_NAME` is the match signal. Imperfect fuzzy
+matches are returned for clarification rather than auto-confirmed.
 
 The matcher is intentionally conservative:
 

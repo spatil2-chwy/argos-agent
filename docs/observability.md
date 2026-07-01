@@ -60,8 +60,6 @@ Tool-related signals still matter:
 |---|---|---|
 | `action` | `metric=tool_dispatch_s` | speech end to first robot command dispatch for action-style tools |
 | `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
-| `tool` | `event=tool_result_payload` | debug payload summary for `resolve_employee_identity`, including status and candidates sent to the model |
-| `realtime` | `event=assistant_response_after_tool` | assistant transcript after a `resolve_employee_identity` follow-up response |
 
 ## Preference Extraction
 
