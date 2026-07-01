@@ -119,8 +119,9 @@ person into Tailwag and ask Tailwag to rekey the email-matched `slack:<id>`
 person to the Argos `person_id`.
 
 Tailwag changes the matched `Person.id` in place, so existing Slack episodes and
-relationships stay attached to the same graph node. Existing memory item IDs are
-not renamed; callers should use person-scoped APIs/relationships after rekey.
+relationships stay attached to the same graph node. Tailwag memory item IDs are
+opaque and should not be parsed, renamed, or derived by Argos; callers should
+use person-scoped APIs/relationships after rekey.
 
 If Slack email is missing, `include_email` is false, the local-part does not
 match a Snowflake username, multiple Argos identities claim the same username,

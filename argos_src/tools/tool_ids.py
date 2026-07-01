@@ -66,6 +66,10 @@ SPOT_MOBILITY_TOOL_NAMES = (
     "spot_reset_body_pose",
 )
 
+MEMORY_TOOL_NAMES = (
+    "search_memory_semantic",
+)
+
 TOOL_RUNTIME_BY_ID_BY_FAMILY: dict[str, dict[str, str]] = {
     "motion.move_robot": {
         ROBOT_FAMILY_UNITREE_GO2: "move_robot",
@@ -142,6 +146,10 @@ TOOL_RUNTIME_BY_ID_BY_FAMILY: dict[str, dict[str, str]] = {
     },
     "spot.system.power_off": {
         ROBOT_FAMILY_SPOT: "spot_power_off",
+    },
+    "memory.search_semantic": {
+        ROBOT_FAMILY_UNITREE_GO2: "search_memory_semantic",
+        ROBOT_FAMILY_SPOT: "search_memory_semantic",
     },
 }
 
@@ -237,12 +245,15 @@ def required_capability_ids_for_tool_id(
         return ("embodiment.action",)
     if raw_name.startswith("spot.system."):
         return ("posture.command",)
+    if raw_name.startswith("memory."):
+        return ()
     return ()
 
 
 __all__ = [
     "BUILT_IN_TOOL_NAMES",
     "GO2_ACTION_TOOL_NAMES",
+    "MEMORY_TOOL_NAMES",
     "NAVIGATION_TOOL_NAMES",
     "ROBOT_FAMILY_SPOT",
     "ROBOT_FAMILY_UNITREE_GO2",

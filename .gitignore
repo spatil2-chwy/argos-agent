@@ -181,3 +181,4 @@ scripts/labs/face_preview/
 
 *.snowflake_env
 .tailwag
+.DS_Store

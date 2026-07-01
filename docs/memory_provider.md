@@ -7,7 +7,7 @@ Identity, face recognition, and speaker recognition remain local to Argos:
 - `IdentityStore` owns Argos `person_id`, names, aliases, and employee metadata.
 - Face and speaker embedding stores stay inside Argos.
 - Tailwag owns social memory, Slack memory, episode storage, person context
-  synthesis, archival, and durable follow-up extraction.
+  synthesis, append-only durable memory items, and follow-up support/addressing.
 
 ## Runtime Switches
 
@@ -47,6 +47,12 @@ completed recognized turns
     -> Tailwag record_episode(..., extract_memory=memory.extract_live_turn_memory)
 ```
 
+Argos treats live episode extraction as fire-and-forget. Tailwag decides whether
+the episode should create append-only durable memory records, support an active
+follow-up, or address an active follow-up. Argos does not send hidden follow-up
+IDs, does not create caller-supplied memory IDs, and does not update or archive
+Tailwag memory items directly.
+
 Speaker handoff does not start a new Tailwag episode. It only flushes the
 current speaker-owned text into the same active conversation episode. The
 episode ends on idle timeout or runtime shutdown.
@@ -54,6 +60,9 @@ episode ends on idle timeout or runtime shutdown.
 Episode participants are Argos `person_id` values. Argos sends transcript text,
 place, role/source metadata, and retention class. Argos does not send
 face embeddings, audio embeddings, raw images, or raw audio to Tailwag.
+Memory IDs returned by Tailwag are opaque external identifiers; Argos may display
+or pass them through in read-only query results but must not parse them or derive
+them from person, kind, or key fields.
 
 ## Person Context
 
@@ -63,7 +72,7 @@ context for the current Argos `person_id`.
 The provider maps Tailwag-rendered context into the existing prompt projection:
 
 - `About`: durable person facts/preferences/boundaries/notes
-- `Potential Followups`: due short-lived check-ins
+- `Potential Followups`: Tailwag-selected active short-lived check-ins
 - preferred language defaults to English unless Tailwag context says otherwise
 
 Site context is not currently pulled from Tailwag by Argos. The provider returns
@@ -99,9 +108,10 @@ person remains under the temporary `slack:<user_id>` id until it can be resolved
 
 ## Inspection
 
-Use Tailwag operator tooling to inspect, archive, or repair social memory. Argos
-operator docs treat Tailwag as the source of truth for social/context memory,
-while local Argos tools remain responsible for identity and biometric stores.
+Use Tailwag operator tooling to inspect, consolidate, archive, or repair
+social memory. Argos operator docs treat Tailwag as the source of truth for
+social/context memory, while local Argos tools remain responsible for identity
+and biometric stores.
 
 ## Local Reset
 

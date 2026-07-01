@@ -12,6 +12,7 @@ import types
 from argos_src.agent.runtime_context import (
     format_people_context,
 )
+from argos_src.observability.observability import get_request_context
 from argos_src.speaker_recognition.models import (
     SpeakerRecognitionPolicy,
     SpeakerResolutionResult,
@@ -207,6 +208,10 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def start_loop(self, **kwargs):
             self.start_calls.append(kwargs)
 
+    class _FakeFaceEnrollmentPolicy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     class _FakeNavigationPolicy:
         def __init__(
             self,
@@ -278,11 +283,25 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
 
     tools_mod = types.ModuleType("argos_src.tools")
     tools_mod.__path__ = []
+    tools_mod.MEMORY_TOOL_NAMES = (
+        "search_memory_semantic",
+    )
     tools_mod.NAVIGATION_TOOL_NAMES = ()
-    tools_mod.build_builtin_tools = lambda **_kwargs: []
+    def _fake_build_builtin_tools(**kwargs):
+        created.setdefault("build_builtin_tools_kwargs", []).append(kwargs)
+        return []
+
+    def _fake_resolve_builtin_tool_name(name, **_kwargs):
+        if name == "memory.search_semantic":
+            return "search_memory_semantic"
+        return name
+
+    tools_mod.build_builtin_tools = _fake_build_builtin_tools
     tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
-    tools_mod.resolve_builtin_tool_name = lambda name, **_kwargs: name
-    tools_mod.resolve_builtin_tool_names = lambda names, **_kwargs: tuple(names)
+    tools_mod.resolve_builtin_tool_name = _fake_resolve_builtin_tool_name
+    tools_mod.resolve_builtin_tool_names = lambda names, **kwargs: tuple(
+        _fake_resolve_builtin_tool_name(name, **kwargs) for name in names
+    )
     monkeypatch.setitem(sys.modules, "argos_src.tools", tools_mod)
     unitree_tools_mod = types.ModuleType("argos_src.tools.unitree_go2")
     unitree_tools_mod.__path__ = []
@@ -339,7 +358,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     face_service_mod = types.ModuleType(
         "argos_src.face_recognition.face_recognition_service"
     )
-    face_service_mod.FaceEnrollmentPolicy = lambda **kwargs: SimpleNamespace(**kwargs)
+    face_service_mod.FaceEnrollmentPolicy = _FakeFaceEnrollmentPolicy
     face_service_mod.FaceRecognitionService = _FakeFaceRecognitionService
     monkeypatch.setitem(
         sys.modules,
@@ -751,6 +770,38 @@ def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     assert turn.pending_tool_calls == 0
     assert followups == [turn.req_id]
     assert owner_turn.cancellations == []
+
+
+def test_tool_invocation_context_includes_owner_id():
+    agent = _make_agent()
+    seen = {}
+
+    class _ContextTool:
+        name = "context_tool"
+
+        def invoke(self, _arguments):
+            seen.update(get_request_context())
+            return {"success": True}
+
+    agent._tool_registry = {"context_tool": _ContextTool()}
+    turn = _make_turn("rt-owner-tool", owner_id="person-owner", owner_source="audio")
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-owner"}
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._send_response_create = lambda _turn: None
+
+    agent._execute_tool_call(
+        realtime_mod.PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-owner",
+            tool_name="context_tool",
+            arguments_json="{}",
+        )
+    )
+
+    assert seen["owner_id"] == "person-owner"
+    assert seen["owner_source"] == "audio"
+
 
 def test_recording_hooks_update_gesture_runtime():
     agent = _make_agent()
@@ -2175,6 +2226,42 @@ def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(mo
     assert agent.kwargs["preference_extraction_enabled"] is True
     assert len(created["face_services"]) == 1
     assert created["face_services"][0].kwargs["memory_store"] is None
+
+
+def test_factory_memory_query_tools_create_tailwag_provider_without_face_runtime(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "sqlite_memory_stores": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-memory-tools-only",
+            "memory": {"enabled": True},
+            "tools": {
+                "enabled_tool_ids": [
+                    "memory.search_semantic",
+                ],
+            },
+            "face_recognition": {"enabled": False},
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert len(created["memory_providers"]) == 1
+    provider = created["memory_providers"][0]
+    assert created["identity_stores"] == []
+    assert agent.kwargs["memory_context_compiler"] is provider
+    build_kwargs = created["build_builtin_tools_kwargs"][0]
+    assert build_kwargs["memory_provider"] is provider
 
 
 def test_audio_turn_pending_internal_text_uses_system_role_message():
