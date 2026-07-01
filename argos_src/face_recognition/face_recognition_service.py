@@ -1635,22 +1635,8 @@ class FaceRecognitionService:
         image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
         capture_s = perf_now() - capture_started
         if image is None:
-            if self._depth_gate_settings is None:
-                self._log_loop_heartbeat(
-                    "no_color_frame",
-                    "[FaceLoop] no color frame available from camera resource %s within %.2fs",
-                    camera_resource_id,
-                    1.5,
-                )
-            else:
-                self._log_loop_heartbeat(
-                    "no_rgbd_pair",
-                    "[FaceLoop] no synced RGBD pair available from camera resource %s within %.2fs",
-                    camera_resource_id,
-                    min(1.5, self._depth_gate_settings.capture_timeout_sec),
-                )
             if self._presence_cache.clear_if_expired(now):
-                logger.info("[FaceLoop] no image, cache expired and cleared")
+                logger.debug("[FaceLoop] no image, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
                 camera_resource_id=camera_resource_id,
@@ -1677,24 +1663,8 @@ class FaceRecognitionService:
             publish_started = perf_now()
             self._publish_live_image_frame(image)
             publish_s = perf_now() - publish_started
-            if prepared.reason:
-                self._log_loop_heartbeat(
-                    f"prepare_{prepared.reason}",
-                    "[FaceLoop] summary reason=%s detected=%s rejected=%s "
-                    "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-                    "primary_face=%s primary_attention=%s",
-                    prepared.reason,
-                    prepared.detected_count,
-                    prepared.rejected_count,
-                    [],
-                    0,
-                    [],
-                    0,
-                    None,
-                    None,
-                )
             if self._presence_cache.clear_if_expired(now):
-                logger.info("[FaceLoop] no faces, cache expired and cleared")
+                logger.debug("[FaceLoop] no faces, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
                 camera_resource_id=camera_resource_id,

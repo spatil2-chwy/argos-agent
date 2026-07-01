@@ -25,7 +25,6 @@ tools:
     - posture.sit
     - embodiment.unitree_go2.hello
     - embodiment.unitree_go2.stretch
-    - embodiment.unitree_go2.content
     - embodiment.unitree_go2.bow_down
     - embodiment.unitree_go2.look_up
     - embodiment.unitree_go2.left_tilt
@@ -114,9 +113,9 @@ face_recognition:
     max_abs_pitch_deg: 18.0
     max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-    smoothing_window_sec: 1.0
+    smoothing_window_sec: 1.5
     min_attentive_observations: 2
-    hold_sec: 0.8
+    hold_sec: 1.0
   preference_extraction:
     enabled: true
   proactive_greeting:
