@@ -27,7 +27,7 @@ tools:
     - dock.charging
 
 employee_directory:
-  enabled: true
+  enabled: false
 
 knowledge_bases: []
 
@@ -35,7 +35,7 @@ slack_memory:
   enabled: false
 
 face_recognition:
-  enabled: true
+  enabled: false
   db_path: var/face_recognition
   loop_interval_sec: 0.05
   recognition_threshold: 0.6
@@ -46,7 +46,7 @@ face_recognition:
   depth_gate:
     enabled: false
   attention_gate:
-    enabled: true
+    enabled: false
     smoothing_window_sec: 0.001
     min_attentive_observations: 1
     hold_sec: 0.0
@@ -58,7 +58,7 @@ face_recognition:
     enabled: false
 
 speaker_recognition:
-  enabled: true
+  enabled: false
 
 realtime:
   prompt_file: puffle_nav_prompt.md
@@ -81,7 +81,7 @@ realtime:
     block_during_speaking: true
     block_during_engaged: true
     open_on_face_presence: false
-    open_on_attention_presence: true
+    open_on_attention_presence: false
     open_on_interaction_states:
       - alert
     open_on_wake_window: true
