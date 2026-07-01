@@ -27,21 +27,11 @@ class SearchMemorySemanticInput(BaseModel):
             "and extracted memory items."
         ),
     )
-    person_id: str | None = Field(
-        default=None,
-        description=(
-            "Optional Argos person_id. Omit to use the current recognized speaker/owner."
-        ),
-    )
     limit: int = Field(
         default=5,
         ge=1,
         le=MAX_LIMIT,
         description="Maximum number of results to return.",
-    )
-    building_code: str | None = Field(
-        default=None,
-        description="Optional building/site filter.",
     )
 
 
@@ -53,8 +43,7 @@ class SearchMemorySemanticTool(BaseTool):
         "Search Tailwag memory semantically for the current person, including both "
         "raw remembered episode transcripts and extracted durable memory items. "
         "Use this when the user asks about prior conversations, remembered facts, "
-        "or evidence from memory that is not already in the prompt. Omit person_id "
-        "to search memory for the current recognized speaker/owner."
+        "or evidence from memory that is not already in the prompt."
     )
     args_schema: Type[BaseModel] = SearchMemorySemanticInput
     memory_provider: Any = Field(exclude=True)
@@ -64,12 +53,13 @@ class SearchMemorySemanticTool(BaseTool):
     )
 
     @staticmethod
-    def _resolve_person_id(person_id: str | None) -> str:
-        rendered = str(person_id or "").strip()
-        if rendered:
-            return rendered
+    def _current_owner_id() -> str:
         ctx = get_request_context()
         return str(ctx.get("owner_id", "") or "").strip()
+
+    def _site_code(self) -> str | None:
+        rendered = str(getattr(self.memory_provider, "site_code", "") or "").strip()
+        return rendered or None
 
     @staticmethod
     def _missing_owner_response() -> str:
@@ -77,8 +67,7 @@ class SearchMemorySemanticTool(BaseTool):
             success=False,
             status="error",
             message=(
-                "No current recognized owner is available. Provide person_id to query "
-                "person-scoped memory."
+                "No current recognized owner is available for person-scoped memory."
             ),
             result_source="immediate",
         )
@@ -114,11 +103,9 @@ class SearchMemorySemanticTool(BaseTool):
     def _run(
         self,
         query: str,
-        person_id: str | None = None,
-        building_code: str | None = None,
         limit: int = 5,
     ) -> str:
-        resolved_person_id = self._resolve_person_id(person_id)
+        resolved_person_id = self._current_owner_id()
         if not resolved_person_id:
             return self._missing_owner_response()
         started = self._emit_query_start(person_id=resolved_person_id)
@@ -126,7 +113,7 @@ class SearchMemorySemanticTool(BaseTool):
             results = self.memory_provider.search_semantic_memory(
                 text=query,
                 person_id=resolved_person_id,
-                building_code=str(building_code or "").strip() or None,
+                building_code=self._site_code(),
                 limit=limit,
             )
         except Exception as exc:
@@ -151,7 +138,6 @@ class SearchMemorySemanticTool(BaseTool):
             ),
             result_source="tailwag",
             data={
-                "person_id": resolved_person_id,
                 "query": query,
                 "episodes": episode_entries,
                 "memory_items": memory_entries,

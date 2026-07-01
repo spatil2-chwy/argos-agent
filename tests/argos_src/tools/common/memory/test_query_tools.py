@@ -4,12 +4,14 @@ import json
 
 from argos_src.observability.observability import clear_request_context, set_request_context
 from argos_src.tools.common.memory.query_tools import (
+    SearchMemorySemanticInput,
     SearchMemorySemanticTool,
 )
 
 
 class _FakeMemoryProvider:
     def __init__(self) -> None:
+        self.site_code = "BOS3"
         self.calls = []
 
     def search_semantic_memory(self, **kwargs):
@@ -46,6 +48,12 @@ def _payload(raw: str) -> dict:
     return json.loads(raw)
 
 
+def test_search_memory_semantic_schema_only_exposes_query_and_limit():
+    properties = SearchMemorySemanticInput.model_json_schema()["properties"]
+
+    assert set(properties) == {"query", "limit"}
+
+
 def test_search_memory_semantic_defaults_to_request_owner(monkeypatch, tmp_path):
     monkeypatch.setenv("GO2_LATENCY_CONSOLE", "0")
     monkeypatch.setenv("GO2_LATENCY_LOG_PATH", str(tmp_path / "latency.log"))
@@ -58,20 +66,20 @@ def test_search_memory_semantic_defaults_to_request_owner(monkeypatch, tmp_path)
         clear_request_context()
 
     assert result["success"] is True
-    assert result["data"]["person_id"] == "person-1"
+    assert "person_id" not in result["data"]
     assert result["data"]["memory_items"][0]["memory_id"] == "memory-1"
     assert provider.calls[0] == (
         "semantic",
         {
             "person_id": "person-1",
             "text": "snacks",
-            "building_code": None,
+            "building_code": "BOS3",
             "limit": 50,
         },
     )
 
 
-def test_person_scoped_tool_returns_error_without_owner_or_person_id(
+def test_person_scoped_tool_returns_error_without_owner(
     monkeypatch,
     tmp_path,
 ):
@@ -83,7 +91,7 @@ def test_person_scoped_tool_returns_error_without_owner_or_person_id(
     result = _payload(tool._run(query="snacks"))
 
     assert result["success"] is False
-    assert "Provide person_id" in result["message"]
+    assert "No current recognized owner" in result["message"]
 
 
 def test_semantic_search_includes_timestamps_and_truncated_snippet(monkeypatch, tmp_path):
@@ -91,14 +99,11 @@ def test_semantic_search_includes_timestamps_and_truncated_snippet(monkeypatch, 
     monkeypatch.setenv("GO2_LATENCY_LOG_PATH", str(tmp_path / "latency.log"))
     provider = _FakeMemoryProvider()
     tool = SearchMemorySemanticTool(memory_provider=provider)
-
-    result = _payload(
-        tool._run(
-            query="robot demos",
-            person_id="person-2",
-            building_code="BOS",
-        )
-    )
+    set_request_context(owner_id="person-2")
+    try:
+        result = _payload(tool._run(query="robot demos"))
+    finally:
+        clear_request_context()
 
     episode = result["data"]["episodes"][0]
     assert episode["episode_id"] == "episode-1"
