@@ -163,6 +163,7 @@ class RealtimeAgentStateMixin:
         owner_source: str = "unknown",
         owner_confidence: float = 0.0,
         speaker_visible: bool = False,
+        allow_live_primary_lookup: bool = True,
     ) -> FrozenTurnContext:
         def identity_person(person_id: Optional[str]) -> PersonContext | None:
             rendered = str(person_id or "").strip()
@@ -209,6 +210,11 @@ class RealtimeAgentStateMixin:
         try:
             persons = deepcopy(self.face_service.get_cached_persons())
             owner_context_id = str(owner_id or "").strip()
+            has_turn_identity_anchor = bool(
+                str(primary_face_person_id or "").strip()
+                or str(audio_speaker_id or "").strip()
+                or owner_context_id
+            )
             if owner_context_id:
                 persons = [
                     self._enrich_person_context_with_memory(person)
@@ -224,7 +230,10 @@ class RealtimeAgentStateMixin:
                 person = identity_person(owner_context_id)
                 if person is not None:
                     persons.append(person)
-            if primary_face_person_id is None:
+            if not has_turn_identity_anchor and not allow_live_primary_lookup:
+                persons = []
+                face_snapshot = None
+            if primary_face_person_id is None and allow_live_primary_lookup:
                 attention_getter = getattr(
                     self.face_service,
                     "get_primary_attention_person_id",

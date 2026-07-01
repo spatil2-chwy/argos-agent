@@ -1851,6 +1851,103 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
     assert bob.preferred_language == "language-person-2"
 
 
+def test_audio_turn_context_without_identity_anchor_does_not_use_stale_face_cache():
+    agent = _make_agent()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                interaction_count=2,
+                confidence=0.93,
+                bbox_area=20,
+                timestamp=100.0,
+                directory_profile_lines=(),
+                memory_profile_lines=(),
+                potential_followups=(),
+                preferred_language="",
+                visible=True,
+            )
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0, "recognized_names": ["Alice"]},
+    )
+
+    context = agent._capture_turn_context(
+        primary_face_person_id=None,
+        audio_speaker_id=None,
+        owner_id=None,
+        allow_live_primary_lookup=False,
+    )
+
+    assert context.primary_face_person_id is None
+    assert context.owner_id is None
+    assert context.persons == []
+    assert context.face_snapshot is None
+
+
+def test_anonymous_audio_response_prompt_does_not_include_stale_face_name():
+    agent = _make_agent()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                interaction_count=2,
+                confidence=0.93,
+                bbox_area=20,
+                timestamp=100.0,
+                directory_profile_lines=(),
+                memory_profile_lines=(),
+                potential_followups=(),
+                preferred_language="",
+                visible=True,
+            )
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0, "recognized_names": ["Alice"]},
+    )
+    context = agent._capture_turn_context(
+        primary_face_person_id=None,
+        audio_speaker_id=None,
+        owner_id=None,
+        allow_live_primary_lookup=False,
+    )
+    turn = _make_turn(
+        "rt-anonymous-audio",
+        primary_face_person_id=None,
+        audio_speaker_id=None,
+        owner_id=None,
+        context_snapshot=context,
+    )
+
+    request = agent._build_response_request(turn)
+
+    assert "[PEOPLE IN VIEW]" not in request["instructions"]
+    assert "Alice" not in request["instructions"]
+
+
+def test_speech_start_uses_fresh_cached_face_as_owner_candidate():
+    agent = _make_agent()
+    agent._get_current_primary_face_person_id = (
+        realtime_mod.RealtimeRobotAgent._get_current_primary_face_person_id.__get__(
+            agent,
+            realtime_mod.RealtimeRobotAgent,
+        )
+    )
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                visible=True,
+            )
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0, "updated_at": time.time()},
+    )
+
+    assert agent._get_current_primary_face_person_id() == "person-1"
+    assert agent._get_current_visible_face_person_ids() == ("person-1",)
+
+
 def test_audio_turn_pending_internal_text_uses_system_role_message():
     agent = _make_agent()
     followups = []

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-CACHE_EXPIRE_SEC = 5.0
+CACHE_EXPIRE_SEC = 2.0
 INTERACTION_DEDUPE_SEC = 60.0
 
 

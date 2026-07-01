@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from argos_src.face_recognition.models import (
     AttentionTarget,
+    CACHE_EXPIRE_SEC,
     PersonContext,
     SocialSceneContext,
 )
 from argos_src.face_recognition.presence_cache import FacePresenceCache
+
+
+def test_default_presence_cache_expiry_is_two_seconds():
+    assert CACHE_EXPIRE_SEC == 2.0
 
 
 def test_should_record_interaction_uses_interaction_dedupe_window():
