@@ -366,6 +366,12 @@ turn started." If the scene is ambiguous, it is `None`.
 `owner_id` means "the resolved owner of this spoken turn." This is the id used
 for live-chat preference extraction and `MemoryStore` ownership.
 
+Turn prompt person context is also tied to `owner_id`. When `owner_id` is not
+resolved, the runtime does not include visible recognized people as
+person-specific prompt context. When `owner_id` is resolved, the prompt may show
+that person under `[PERSON SPEAKING TO YOU]` and list other visible people only
+as lightweight names under `[OTHER PEOPLE IN VIEW]`.
+
 The canonical face-derived name in turn state is `primary_face_person_id`.
 
 ## Config Knobs

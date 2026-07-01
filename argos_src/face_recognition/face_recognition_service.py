@@ -1869,7 +1869,7 @@ class FaceRecognitionService:
     def get_cached_persons(self) -> list[PersonContext]:
         """
         Thread-safe read of cache: persons in current frame or last seen within CACHE_EXPIRE_SEC.
-        Used for [PEOPLE IN VIEW] and for recognized-person personalization.
+        Used for owner-scoped prompt context and recognized-person personalization.
         """
         return self._presence_cache.get_cached_persons()
 
