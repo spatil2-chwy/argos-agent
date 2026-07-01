@@ -15,6 +15,7 @@ source setup_shell.sh
 poetry run python -m scripts.labs.face_registration_lab --help
 poetry run python -m scripts.labs.face_recognition_lab --help
 poetry run python -m scripts.labs.face_capture_lab --help
+poetry run python -m scripts.labs.attention_display_lab --help
 poetry run python -m scripts.labs.owner_turn_calibration_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
@@ -153,6 +154,15 @@ Recognition loop:
 
 ```bash
 poetry run python -m scripts.labs.face_recognition_lab --loop --interval 0.5
+```
+
+Live attention display range test. This starts the same background face loop the
+agent uses, watches the face-presence cache, and pushes only attention changes to
+the interaction display. The screen shows `Detected | Attentive`,
+`Detected | Non-Attentive`, or `Not Detected`:
+
+```bash
+poetry run python -m scripts.labs.attention_display_lab
 ```
 
 Owner-turn centering dry run. Press Enter for each sample; it captures the
