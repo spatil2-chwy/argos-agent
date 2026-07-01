@@ -8,6 +8,7 @@ import pytest
 from argos_src.agent.owner_turn import OwnerTurnSettings
 from argos_src.provider_api.models import CameraIntrinsics
 from scripts.labs.owner_turn_calibration_lab import (
+    _calibration_target,
     _face_payloads,
     _offset_hint,
     _turn_plan,
@@ -57,9 +58,43 @@ def test_face_payload_uses_camera_yaw_offset_for_bearing() -> None:
 
 def test_offset_hint_subtracts_current_bearing_from_offset() -> None:
     service = types.SimpleNamespace(_camera_yaw_offset_rad=math.radians(5.0))
-    payload = {"selected_target": {"bearing_deg": 2.0}}
+    payload = {"calibration_target": {"bearing_deg": 2.0}}
 
     hint = _offset_hint(payload, service)
 
     assert hint is not None
     assert hint["suggested_camera_yaw_offset_deg"] == pytest.approx(3.0)
+
+
+def test_calibration_target_falls_back_to_single_detected_face() -> None:
+    target = _calibration_target(
+        {
+            "selected_target": None,
+            "faces": [
+                {
+                    "index": 0,
+                    "bearing_deg": -4.0,
+                    "turn_plan": {"status": "turn", "direction": "right"},
+                }
+            ],
+        }
+    )
+
+    assert target is not None
+    assert target["kind"] == "detected_face"
+    assert target["bearing_deg"] == pytest.approx(-4.0)
+
+
+def test_calibration_target_rejects_multiple_detected_faces() -> None:
+    assert (
+        _calibration_target(
+            {
+                "selected_target": None,
+                "faces": [
+                    {"index": 0, "bearing_deg": -4.0},
+                    {"index": 1, "bearing_deg": 3.0},
+                ],
+            }
+        )
+        is None
+    )

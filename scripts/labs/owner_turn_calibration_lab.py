@@ -18,6 +18,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -364,13 +365,39 @@ def _run_one_sample(
             "bearing_deg": round(math.degrees(float(target.bearing_rad)), 3),
             "turn_plan": _turn_plan(target.bearing_rad, settings),
         }
+    payload["calibration_target"] = _calibration_target(payload)
     payload["centered_person_offset_hint"] = _offset_hint(payload, service)
     return payload
 
 
+def _calibration_target(payload: dict[str, Any]) -> dict[str, Any] | None:
+    selected = payload.get("selected_target")
+    if selected:
+        return {
+            "kind": "recognized",
+            "label": selected.get("name") or selected.get("person_id") or "recognized",
+            "person_id": selected.get("person_id"),
+            "bearing_deg": selected.get("bearing_deg"),
+            "turn_plan": selected.get("turn_plan", {}),
+        }
+    faces = list(payload.get("faces") or [])
+    if len(faces) != 1:
+        return None
+    face = faces[0]
+    if face.get("bearing_deg") is None:
+        return None
+    return {
+        "kind": "detected_face",
+        "label": f"face #{face.get('index', 0)}",
+        "person_id": "lab-detected-face",
+        "bearing_deg": face.get("bearing_deg"),
+        "turn_plan": face.get("turn_plan", {}),
+    }
+
+
 def _offset_hint(payload: dict[str, Any], service: Any) -> dict[str, Any] | None:
     """Suggest an offset only when there is one unambiguous selected target."""
-    target = payload.get("selected_target")
+    target = payload.get("calibration_target") or payload.get("selected_target")
     if not target:
         return None
     bearing_deg = target.get("bearing_deg")
@@ -438,6 +465,19 @@ def _print_sample(payload: dict[str, Any]) -> None:
         )
     else:
         print("selected target: none")
+    calibration_target = payload.get("calibration_target")
+    if calibration_target:
+        plan = calibration_target.get("turn_plan", {})
+        print(
+            "calibration target: "
+            f"{calibration_target.get('label')} "
+            f"kind={calibration_target.get('kind')} "
+            f"bearing={calibration_target.get('bearing_deg')}deg "
+            f"plan={plan.get('status')} "
+            f"{plan.get('direction', '')} {plan.get('command_deg', '')}".rstrip()
+        )
+    else:
+        print("calibration target: none")
     hint = payload.get("centered_person_offset_hint")
     if hint:
         print(
@@ -506,18 +546,16 @@ def main() -> int:
             )
             payload["sample_index"] = sample_index
             _print_sample(payload)
-            target = payload.get("selected_target")
+            target = payload.get("calibration_target")
             if args.move and target and controller is not None:
-                controller._execute_request(
-                    OwnerTurnRequest(
-                        person_id=str(target["person_id"]),
-                        req_id=f"owner-turn-lab-{sample_index}",
-                        owner_source="lab",
-                    )
+                _execute_calibration_move(
+                    controller=controller,
+                    target=target,
+                    sample_index=sample_index,
                 )
                 print("move attempt finished")
             elif args.move:
-                print("move skipped: no recognized selected target")
+                print("move skipped: no unambiguous calibration target")
             if args.once:
                 return 0 if payload.get("success") else 2
     except KeyboardInterrupt:
@@ -530,6 +568,47 @@ def main() -> int:
         robot_client = config.get("robot_client") if "config" in locals() else None
         if robot_client is not None:
             robot_client.shutdown()
+
+
+def _execute_calibration_move(
+    *,
+    controller: OwnerTurnController,
+    target: dict[str, Any],
+    sample_index: int,
+) -> None:
+    person_id = str(target.get("person_id") or "lab-detected-face")
+    bearing_rad = math.radians(float(target["bearing_deg"]))
+    if target.get("kind") == "recognized":
+        controller._execute_request(
+            OwnerTurnRequest(
+                person_id=person_id,
+                req_id=f"owner-turn-lab-{sample_index}",
+                owner_source="lab",
+            )
+        )
+        return
+
+    original_face_service = controller.face_service
+    controller.face_service = SimpleNamespace(
+        get_face_turn_target=lambda _person_id: SimpleNamespace(
+            person_id=person_id,
+            name=str(target.get("label") or "detected face"),
+            bearing_rad=bearing_rad,
+            timestamp=time.time(),
+            confidence=0.0,
+            depth_m=None,
+        )
+    )
+    try:
+        controller._execute_request(
+            OwnerTurnRequest(
+                person_id=person_id,
+                req_id=f"owner-turn-lab-{sample_index}",
+                owner_source="lab_detected_face",
+            )
+        )
+    finally:
+        controller.face_service = original_face_service
 
 
 if __name__ == "__main__":
