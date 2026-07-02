@@ -8,6 +8,7 @@ from argos_src.face_recognition.attention_gate import (
     AttentionSmoothingSettings,
 )
 from scripts.labs.attention_display_lab import (
+    RecognitionNameWindow,
     _attention_display_state,
     _disable_attention_smoothing,
 )
@@ -52,6 +53,73 @@ def test_attention_display_state_formats_no_face() -> None:
     )
 
     assert state.text == "Not Detected"
+
+
+def test_recognition_name_window_promotes_after_min_matches() -> None:
+    window = RecognitionNameWindow(window_frames=5, min_matches=2)
+
+    first = window.names_for_snapshot(
+        {
+            "updated_at": 1.0,
+            "faces_detected": 1,
+            "primary_face_name": "Sam",
+        }
+    )
+    second = window.names_for_snapshot(
+        {
+            "updated_at": 2.0,
+            "faces_detected": 1,
+            "recognized_names": [],
+        }
+    )
+    third = window.names_for_snapshot(
+        {
+            "updated_at": 3.0,
+            "faces_detected": 1,
+            "recognized_names": ["Sam"],
+        }
+    )
+    fourth = window.names_for_snapshot(
+        {
+            "updated_at": 4.0,
+            "faces_detected": 1,
+            "recognized_names": [],
+        }
+    )
+
+    assert first == []
+    assert second == []
+    assert third == ["Sam"]
+    assert fourth == ["Sam"]
+
+
+def test_recognition_name_window_decays_when_matches_leave_window() -> None:
+    window = RecognitionNameWindow(window_frames=5, min_matches=2)
+    snapshots = [
+        {"updated_at": 1.0, "faces_detected": 1, "recognized_names": ["Sam"]},
+        {"updated_at": 2.0, "faces_detected": 1, "recognized_names": ["Sam"]},
+        {"updated_at": 3.0, "faces_detected": 1, "recognized_names": []},
+        {"updated_at": 4.0, "faces_detected": 1, "recognized_names": []},
+        {"updated_at": 5.0, "faces_detected": 1, "recognized_names": []},
+        {"updated_at": 6.0, "faces_detected": 1, "recognized_names": []},
+    ]
+
+    results = [window.names_for_snapshot(snapshot) for snapshot in snapshots]
+
+    assert results[1] == ["Sam"]
+    assert results[-1] == []
+
+
+def test_recognition_name_window_does_not_double_count_same_snapshot() -> None:
+    window = RecognitionNameWindow(window_frames=5, min_matches=2)
+    snapshot = {
+        "updated_at": 1.0,
+        "faces_detected": 1,
+        "recognized_names": ["Sam"],
+    }
+
+    assert window.names_for_snapshot(snapshot) == []
+    assert window.names_for_snapshot(snapshot) == []
 
 
 def test_disable_attention_smoothing_switches_gate_to_raw_mode() -> None:

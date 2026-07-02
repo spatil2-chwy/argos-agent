@@ -172,6 +172,14 @@ To bypass temporal smoothing and show the raw per-frame attention decision:
 poetry run python -m scripts.labs.attention_display_lab --raw-attention
 ```
 
+To test frame-window identity voting, require two recognized hits in the last
+five fresh face-loop snapshots:
+
+```bash
+poetry run python -m scripts.labs.attention_display_lab --raw-attention \
+  --recognition-window-frames 5 --recognition-window-min-matches 2
+```
+
 Owner-turn centering dry run. Press Enter for each sample; it captures the
 configured face camera, applies depth/attention if enabled, prints each face's
 signed yaw bearing, and shows the exact turn command that would be issued:

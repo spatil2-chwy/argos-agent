@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -54,6 +54,54 @@ class AttentionDisplayState:
     signature: tuple[Any, ...]
 
 
+@dataclass
+class RecognitionNameWindow:
+    window_frames: int
+    min_matches: int
+    samples: list[tuple[str, ...]] = field(default_factory=list)
+    active_names: tuple[str, ...] = ()
+    last_snapshot_updated_at: float | None = None
+
+    def names_for_snapshot(self, snapshot: dict[str, Any]) -> list[str]:
+        updated_at = _snapshot_updated_at(snapshot)
+        if updated_at is not None and updated_at == self.last_snapshot_updated_at:
+            return list(self.active_names)
+        if updated_at is not None:
+            self.last_snapshot_updated_at = updated_at
+
+        current_names = tuple(_recognized_names_for_display(snapshot))
+        self.samples.append(current_names)
+        max_samples = max(1, int(self.window_frames))
+        if len(self.samples) > max_samples:
+            self.samples = self.samples[-max_samples:]
+
+        counts: dict[str, int] = {}
+        latest_index: dict[str, int] = {}
+        for index, names in enumerate(self.samples):
+            for name in names:
+                counts[name] = counts.get(name, 0) + 1
+                latest_index[name] = index
+
+        required = max(1, int(self.min_matches))
+        candidates = [name for name, count in counts.items() if count >= required]
+        if not candidates:
+            self.active_names = ()
+            return []
+
+        current_set = set(current_names)
+        ranked = sorted(
+            candidates,
+            key=lambda name: (
+                name not in current_set,
+                -counts[name],
+                -latest_index[name],
+                name,
+            ),
+        )
+        self.active_names = tuple(ranked)
+        return list(self.active_names)
+
+
 class ConsolePublisher:
     def publish(self, text: str) -> bool:
         print(text, flush=True)
@@ -79,11 +127,19 @@ class RuntimeDisplayPublisher:
             shutdown()
 
 
-def _attention_display_state(snapshot: dict[str, Any]) -> AttentionDisplayState:
+def _attention_display_state(
+    snapshot: dict[str, Any],
+    *,
+    recognized_names: list[str] | None = None,
+) -> AttentionDisplayState:
     status = str(snapshot.get("attention_status") or "none").strip() or "none"
     faces = int(snapshot.get("faces_detected") or 0)
     attention_count = int(snapshot.get("attention_count") or 0)
-    recognized_names = _recognized_names_for_display(snapshot)
+    display_names = (
+        _recognized_names_for_display(snapshot)
+        if recognized_names is None
+        else recognized_names
+    )
 
     if faces <= 0:
         label = "Not Detected"
@@ -93,13 +149,13 @@ def _attention_display_state(snapshot: dict[str, Any]) -> AttentionDisplayState:
         label = "Detected | Non-Attentive"
 
     lines = [label]
-    if faces > 0 and recognized_names:
-        lines.append(f"recognized: {', '.join(recognized_names)}")
+    if faces > 0 and display_names:
+        lines.append(f"recognized: {', '.join(display_names)}")
 
     return AttentionDisplayState(
         status=status,
         text="\n".join(lines),
-        signature=(label, tuple(recognized_names)),
+        signature=(label, tuple(display_names)),
     )
 
 
@@ -119,6 +175,14 @@ def _recognized_names_for_display(snapshot: dict[str, Any]) -> list[str]:
         if name not in unique_names:
             unique_names.append(name)
     return unique_names
+
+
+def _snapshot_updated_at(snapshot: dict[str, Any]) -> float | None:
+    try:
+        updated_at = float(snapshot.get("updated_at") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return updated_at if updated_at > 0.0 else None
 
 
 def _disable_attention_smoothing(service: Any) -> bool:
@@ -164,8 +228,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--poll-interval",
         type=float,
-        default=0.1,
-        help="How often to poll the presence cache for display changes.",
+        default=None,
+        help=(
+            "How often to poll the presence cache for display changes. "
+            "Defaults to the chosen face-loop interval."
+        ),
     )
     parser.add_argument(
         "--duration-sec",
@@ -185,6 +252,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "Lab-only mode: bypass temporal smoothing so the display follows the "
             "raw per-frame attention decision."
         ),
+    )
+    parser.add_argument(
+        "--recognition-window-frames",
+        type=int,
+        default=0,
+        help=(
+            "Lab-only identity voting window. When >0, display recognized names "
+            "that appear in at least --recognition-window-min-matches of the last "
+            "N fresh face-loop snapshots."
+        ),
+    )
+    parser.add_argument(
+        "--recognition-window-min-matches",
+        type=int,
+        default=2,
+        help="Minimum recognized-name hits needed inside --recognition-window-frames.",
     )
     parser.add_argument(
         "--show-startup-message",
@@ -229,7 +312,22 @@ def main() -> int:
         if args.loop_interval is not None
         else float(config["loop_interval_sec"])
     )
-    poll_interval_sec = max(0.01, float(args.poll_interval))
+    poll_interval_sec = max(
+        0.01,
+        (
+            float(args.poll_interval)
+            if args.poll_interval is not None
+            else loop_interval_sec
+        ),
+    )
+    recognition_window = (
+        RecognitionNameWindow(
+            window_frames=max(1, int(args.recognition_window_frames)),
+            min_matches=max(1, int(args.recognition_window_min_matches)),
+        )
+        if int(args.recognition_window_frames) > 0
+        else None
+    )
     duration_sec = max(0.0, float(args.duration_sec))
     deadline = time.monotonic() + duration_sec if duration_sec > 0.0 else None
     last_signature: tuple[Any, ...] | None = None
@@ -248,6 +346,12 @@ def main() -> int:
                 "camera_resource_id": config["camera_resource_id"],
                 "loop_interval_sec": loop_interval_sec,
                 "poll_interval_sec": poll_interval_sec,
+                "recognition_window_frames": (
+                    recognition_window.window_frames if recognition_window else 0
+                ),
+                "recognition_window_min_matches": (
+                    recognition_window.min_matches if recognition_window else 0
+                ),
                 "display": args.display,
                 "attention_mode": "raw" if args.raw_attention else "smoothed",
             }
@@ -256,7 +360,11 @@ def main() -> int:
             if deadline is not None and time.monotonic() >= deadline:
                 return 0
             snapshot = service.get_presence_snapshot()
-            state = _attention_display_state(snapshot)
+            if recognition_window is not None:
+                display_names = recognition_window.names_for_snapshot(snapshot)
+            else:
+                display_names = _recognized_names_for_display(snapshot)
+            state = _attention_display_state(snapshot, recognized_names=display_names)
             if state.signature != last_signature:
                 last_signature = state.signature
                 publisher.publish(state.text)
