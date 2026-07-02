@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -23,20 +23,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from argos_src.face_recognition.attention_gate import (
-    AttentionSmoother,
-    AttentionSmoothingSettings,
-)
 from argos_src.profile_config import load_scenario_profile
 from scripts.labs.enrollment_collection_common import create_display_runtime_for_profile
-from scripts.labs.face_lab_common import (
-    add_enrollment_policy_args,
-    add_profile_args,
-    build_enrollment_policy,
-    build_face_service,
-    configure_logging,
-    json_print,
-)
 
 
 class AttentionPublisher(Protocol):
@@ -185,23 +173,12 @@ def _snapshot_updated_at(snapshot: dict[str, Any]) -> float | None:
     return updated_at if updated_at > 0.0 else None
 
 
-def _disable_attention_smoothing(service: Any) -> bool:
-    gate = getattr(service, "_attention_gate", None)
-    settings = getattr(gate, "settings", None)
-    if gate is None or settings is None:
-        return False
-
-    smoothing = AttentionSmoothingSettings(
-        window_sec=0.001,
-        min_observations=1,
-        hold_sec=0.0,
-    )
-    gate.settings = replace(settings, smoothing=smoothing)
-    gate._smoother = AttentionSmoother(smoothing)
-    return True
-
-
 def _build_parser() -> argparse.ArgumentParser:
+    from scripts.labs.face_lab_common import (
+        add_enrollment_policy_args,
+        add_profile_args,
+    )
+
     parser = argparse.ArgumentParser(
         description=(
             "Run the production face attention loop and display detected / "
@@ -246,14 +223,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print each changed snapshot as JSON in addition to the display message.",
     )
     parser.add_argument(
-        "--raw-attention",
-        action="store_true",
-        help=(
-            "Lab-only mode: bypass temporal smoothing so the display follows the "
-            "raw per-frame attention decision."
-        ),
-    )
-    parser.add_argument(
         "--recognition-window-frames",
         type=int,
         default=0,
@@ -294,18 +263,19 @@ def _create_publisher(args: argparse.Namespace) -> AttentionPublisher:
 
 
 def main() -> int:
+    from scripts.labs.face_lab_common import (
+        build_enrollment_policy,
+        build_face_service,
+        configure_logging,
+        json_print,
+    )
+
     parser = _build_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
 
     enrollment_policy = build_enrollment_policy(args)
     service, config = build_face_service(args, enrollment_policy=enrollment_policy)
-    if args.raw_attention and not _disable_attention_smoothing(service):
-        print(
-            "Raw attention requested, but the attention gate was unavailable.",
-            file=sys.stderr,
-            flush=True,
-        )
     publisher = _create_publisher(args)
     loop_interval_sec = (
         float(args.loop_interval)
@@ -353,7 +323,7 @@ def main() -> int:
                     recognition_window.min_matches if recognition_window else 0
                 ),
                 "display": args.display,
-                "attention_mode": "raw" if args.raw_attention else "smoothed",
+                "attention_mode": "raw",
             }
         )
         while True:

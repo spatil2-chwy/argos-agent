@@ -101,21 +101,18 @@ face_recognition:
     search_radius_px: 12
     max_valid_depth_m: 10.0
   enrollment_policy:
-    min_face_area: 1500
+    min_face_area: 1300
     min_brightness: 35.0
     max_brightness: 220.0
     min_contrast: 15.5
     min_embedding_similarity: 0.70
   attention_gate:
     enabled: true
-    min_face_area: 1500
+    min_face_area: 1300
     max_abs_yaw_deg: 20.0
     max_abs_pitch_deg: 18.0
     max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-    smoothing_window_sec: 0.001
-    min_attentive_observations: 1
-    hold_sec: 0.0
   preference_extraction:
     enabled: true
   proactive_greeting:

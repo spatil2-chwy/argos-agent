@@ -169,26 +169,27 @@ an Accept response commits the candidate to the face store. Reject, timeout, or
 display-unavailable responses return a failed tool result and do not save
 anything.
 
-## Enrollment Quality Policy
+## Enrollment-Only Quality Policy
 
-The enrollment quality gates live in `FaceEnrollmentPolicy` in
-`face_recognition_service.py`:
+These checks are still active for face enrollment. They are not part of the
+continuous recognition or attention gate path. The enrollment quality gates live
+in `FaceEnrollmentPolicy` in `face_recognition_service.py`:
 
 ```python
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 1500
+    min_face_area: int = 1300
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
     min_embedding_similarity: float = 0.70
 ```
 
-`_assess_enrollment_face_quality()` can reject a frame for:
+`_assess_enrollment_face_quality()` can reject an enrollment frame for:
 
 | Reason | Meaning | User guidance |
 |---|---|---|
-| `face_too_small` | Face bbox area is below `1500` px. | Come closer. |
+| `face_too_small` | Face bbox area is below `1300` px. | Come closer. |
 | `face_clipped` | Face touches image boundary. | Center whole face in view. |
 | `too_dark` | Mean crop brightness below `35.0`. | Move to better light. |
 | `too_bright` | Mean crop brightness above `220.0`. | Move away from bright light. |
@@ -276,7 +277,7 @@ embedding = self.extract_face_embedding(image, detection)
 ```
 
 The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_face_area`
-(`1500` px in the static interaction profile). This keeps tiny distant faces from
+(`1300` px in the static interaction profile). This keeps tiny distant faces from
 becoming recognized-person context while still allowing fisheye captures where
 valid nearby faces are smaller than RealSense crops.
 
@@ -398,14 +399,11 @@ face_recognition:
     max_valid_depth_m: 10.0
   attention_gate:
     enabled: true
-    min_face_area: 1500
+    min_face_area: 1300
     max_abs_yaw_deg: 20.0
     max_abs_pitch_deg: 18.0
     max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-    smoothing_window_sec: 1.0
-    min_attentive_observations: 2
-    hold_sec: 0.8
   proactive_greeting:
     require_attention: true
 ```
@@ -437,14 +435,11 @@ Attention gate settings:
 | Setting | Meaning | Keep it? |
 |---|---|---|
 | `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
-| `min_face_area: 1500` | Absolute minimum detected face bbox area before head-pose scoring. | Lower only if valid distant faces are rejected. |
+| `min_face_area: 1300` | Absolute minimum detected face bbox area before head-pose scoring. | Lower only if valid distant faces are rejected. |
 | `max_abs_yaw_deg: 20.0` | Left/right head angle limit. | Tighten if side conversations falsely open admission. |
 | `max_abs_pitch_deg: 18.0` | Up/down head angle limit. | Tune with camera mounting height. |
 | `max_abs_roll_deg: 90.0` | Head tilt limit. | Wide by default so roll rarely blocks attention. |
 | `min_abs_pitch_deg: 0.0` | Minimum up/down head angle. | Keep low unless the camera geometry needs a pitch band. |
-| `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
-| `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
-| `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
 
 The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
 replace FaceNet and does not add a second face detector. Pose limits are

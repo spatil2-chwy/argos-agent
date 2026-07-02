@@ -9,10 +9,6 @@ from argos_src.face_recognition.attention_gate.models import (
     FaceAttentionObservation,
     HeadPoseObservation,
 )
-from argos_src.face_recognition.attention_gate.smoothing import (
-    AttentionSmoother,
-    AttentionSmoothingSettings,
-)
 from argos_src.face_recognition.attention_gate.sixdrepnet import SixDRepNetHeadPoseEstimator
 
 
@@ -21,12 +17,11 @@ class AttentionGateSettings:
     """Runtime knobs for deciding whether a visible face is attending."""
 
     enabled: bool = True
-    min_face_area: int = 1500
+    min_face_area: int = 1300
     max_abs_yaw_deg: float = 20.0
     max_abs_pitch_deg: float = 18.0
     max_abs_roll_deg: float = 90.0
     min_abs_pitch_deg: float = 0.0
-    smoothing: AttentionSmoothingSettings = AttentionSmoothingSettings()
 
     def __post_init__(self) -> None:
         if self.min_face_area < 1:
@@ -53,7 +48,6 @@ class FaceAttentionGate:
         head_pose_estimator: Any | None = None,
     ) -> None:
         self.settings = settings or AttentionGateSettings()
-        self._smoother = AttentionSmoother(self.settings.smoothing)
         self._head_pose_estimator = head_pose_estimator or SixDRepNetHeadPoseEstimator()
 
     def evaluate(
@@ -79,17 +73,9 @@ class FaceAttentionGate:
             face,
             image_shape=image_shape,
         )
-        attentive, confidence = self._smoother.update(
-            track_id=track_id,
-            now=now,
+        return FaceAttentionObservation(
             attentive=raw_attentive,
             confidence=raw_confidence,
-        )
-        if not attentive and raw_attentive:
-            reason = "smoothing"
-        return FaceAttentionObservation(
-            attentive=attentive,
-            confidence=confidence,
             reason=reason,
             yaw_deg=pose.yaw_deg,
             pitch_deg=pose.pitch_deg,

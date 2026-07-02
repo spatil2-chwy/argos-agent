@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from argos_src.face_recognition.attention_gate import (
     AttentionGateSettings,
-    AttentionSmoothingSettings,
     FaceAttentionGate,
 )
 from argos_src.face_recognition.attention_gate.models import HeadPoseObservation
@@ -50,11 +49,6 @@ def test_attention_gate_uses_sixdrepnet_estimator_result():
     gate = FaceAttentionGate(
         AttentionGateSettings(
             min_face_area=100,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -71,50 +65,6 @@ def test_attention_gate_uses_sixdrepnet_estimator_result():
     assert result.yaw_deg == 0.0
     assert len(estimator.calls) == 1
 
-
-def test_attention_gate_requires_smoothing_before_marking_attentive():
-    estimator = _Estimator(
-        HeadPoseObservation(
-            success=True,
-            yaw_deg=0.0,
-            pitch_deg=0.0,
-            roll_deg=0.0,
-        )
-    )
-    gate = FaceAttentionGate(
-        AttentionGateSettings(
-            min_face_area=100,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=2,
-                hold_sec=0.0,
-            ),
-        ),
-        head_pose_estimator=estimator,
-    )
-
-    first = gate.evaluate(
-        object(),
-        _face(),
-        image_shape=(240, 320, 3),
-        track_id="person-1",
-        now=10.0,
-    )
-    second = gate.evaluate(
-        object(),
-        _face(),
-        image_shape=(240, 320, 3),
-        track_id="person-1",
-        now=10.2,
-    )
-
-    assert first.raw_attentive is True
-    assert first.attentive is False
-    assert first.reason == "smoothing"
-    assert second.attentive is True
-    assert second.reason == "attentive"
-
-
 def test_attention_gate_treats_configured_pose_limits_as_acceptance_bounds():
     estimator = _Estimator(
         HeadPoseObservation(
@@ -128,11 +78,6 @@ def test_attention_gate_treats_configured_pose_limits_as_acceptance_bounds():
         AttentionGateSettings(
             min_face_area=100,
             max_abs_yaw_deg=25.0,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -163,11 +108,6 @@ def test_attention_gate_rejects_pose_outside_configured_limits():
         AttentionGateSettings(
             min_face_area=100,
             max_abs_yaw_deg=25.0,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -244,11 +184,6 @@ def test_attention_gate_does_not_reject_off_center_faces():
     gate = FaceAttentionGate(
         AttentionGateSettings(
             min_face_area=100,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -279,11 +214,6 @@ def test_attention_gate_uses_fixed_pitch_limit():
         AttentionGateSettings(
             min_face_area=100,
             max_abs_pitch_deg=20.0,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -314,11 +244,6 @@ def test_attention_gate_can_require_pitch_magnitude():
             min_face_area=100,
             max_abs_pitch_deg=22.0,
             min_abs_pitch_deg=8.0,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )
@@ -349,11 +274,6 @@ def test_attention_gate_accepts_pitch_inside_configured_band():
             min_face_area=100,
             max_abs_pitch_deg=22.0,
             min_abs_pitch_deg=8.0,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=1.0,
-                min_observations=1,
-                hold_sec=0.0,
-            ),
         ),
         head_pose_estimator=estimator,
     )

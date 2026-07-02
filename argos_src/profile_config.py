@@ -116,9 +116,6 @@ class FaceAttentionGateProfile:
     max_abs_pitch_deg: float
     max_abs_roll_deg: float
     min_abs_pitch_deg: float
-    smoothing_window_sec: float
-    min_attentive_observations: int
-    hold_sec: float
 
 
 @dataclass(frozen=True)
@@ -340,17 +337,14 @@ class ScenarioProfile:
             ),
             attention_gate=FaceAttentionGateProfile(
                 enabled=True,
-                min_face_area=1500,
+                min_face_area=1300,
                 max_abs_yaw_deg=20.0,
                 max_abs_pitch_deg=18.0,
                 max_abs_roll_deg=90.0,
                 min_abs_pitch_deg=0.0,
-                smoothing_window_sec=1.0,
-                min_attentive_observations=2,
-                hold_sec=0.8,
             ),
             enrollment_policy=FaceEnrollmentPolicyProfile(
-                min_face_area=1500,
+                min_face_area=1300,
                 min_brightness=35.0,
                 max_brightness=220.0,
                 min_contrast=15.5,
@@ -1114,7 +1108,6 @@ def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
 def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     from argos_src.face_recognition.attention_gate import (
         AttentionGateSettings,
-        AttentionSmoothingSettings,
     )
     from argos_src.face_recognition.depth_gate import DepthGateSettings
 
@@ -1188,7 +1181,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
     attention_gate = FaceAttentionGateProfile(
         enabled=_pop_bool(attention_gate_data, "enabled", default=True),
-        min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1500),
+        min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1300),
         max_abs_yaw_deg=_pop_float(
             attention_gate_data,
             "max_abs_yaw_deg",
@@ -1209,17 +1202,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "min_abs_pitch_deg",
             default=0.0,
         ),
-        smoothing_window_sec=_pop_float(
-            attention_gate_data,
-            "smoothing_window_sec",
-            default=1.0,
-        ),
-        min_attentive_observations=_pop_int(
-            attention_gate_data,
-            "min_attentive_observations",
-            default=2,
-        ),
-        hold_sec=_pop_float(attention_gate_data, "hold_sec", default=0.8),
     )
     try:
         AttentionGateSettings(
@@ -1229,11 +1211,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
             max_abs_roll_deg=attention_gate.max_abs_roll_deg,
             min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=attention_gate.smoothing_window_sec,
-                min_observations=attention_gate.min_attentive_observations,
-                hold_sec=attention_gate.hold_sec,
-            ),
         )
     except ValueError as exc:
         raise ProfileValidationError(
@@ -1245,7 +1222,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         min_face_area=_pop_int(
             enrollment_policy_data,
             "min_face_area",
-            default=1500,
+            default=1300,
         ),
         min_brightness=_pop_float(
             enrollment_policy_data,

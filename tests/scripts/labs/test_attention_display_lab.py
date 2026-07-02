@@ -1,16 +1,8 @@
 from __future__ import annotations
 
-import types
-
-from argos_src.face_recognition.attention_gate import (
-    AttentionGateSettings,
-    AttentionSmoother,
-    AttentionSmoothingSettings,
-)
 from scripts.labs.attention_display_lab import (
     RecognitionNameWindow,
     _attention_display_state,
-    _disable_attention_smoothing,
 )
 
 
@@ -120,25 +112,3 @@ def test_recognition_name_window_does_not_double_count_same_snapshot() -> None:
 
     assert window.names_for_snapshot(snapshot) == []
     assert window.names_for_snapshot(snapshot) == []
-
-
-def test_disable_attention_smoothing_switches_gate_to_raw_mode() -> None:
-    service = types.SimpleNamespace(
-        _attention_gate=types.SimpleNamespace(
-            settings=AttentionGateSettings(
-                smoothing=AttentionSmoothingSettings(
-                    window_sec=1.5,
-                    min_observations=2,
-                    hold_sec=1.0,
-                )
-            ),
-            _smoother=object(),
-        )
-    )
-
-    assert _disable_attention_smoothing(service)
-
-    gate = service._attention_gate
-    assert gate.settings.smoothing.min_observations == 1
-    assert gate.settings.smoothing.hold_sec == 0.0
-    assert isinstance(gate._smoother, AttentionSmoother)

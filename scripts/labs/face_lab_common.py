@@ -24,7 +24,6 @@ if str(_REPO_ROOT) not in sys.path:
 from argos_src.face_recognition.depth_gate import DepthGateSettings
 from argos_src.face_recognition.attention_gate import (
     AttentionGateSettings,
-    AttentionSmoothingSettings,
 )
 from argos_src.face_recognition.face_recognition_service import (
     DEFAULT_FACE_ENROLLMENT_POLICY,
@@ -230,11 +229,6 @@ def build_attention_gate_settings(profile: Any) -> AttentionGateSettings:
         max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
         max_abs_roll_deg=attention_gate.max_abs_roll_deg,
         min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
-        smoothing=AttentionSmoothingSettings(
-            window_sec=attention_gate.smoothing_window_sec,
-            min_observations=attention_gate.min_attentive_observations,
-            hold_sec=attention_gate.hold_sec,
-        ),
     )
 
 

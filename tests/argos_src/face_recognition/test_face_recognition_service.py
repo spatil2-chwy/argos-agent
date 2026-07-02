@@ -195,7 +195,7 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
                 "attention": FaceAttentionObservation(
                     attentive=False,
                     confidence=0.74,
-                    reason="smoothing",
+                    reason="head_pose_outside_threshold",
                     yaw_deg=8.25,
                     pitch_deg=-3.5,
                     roll_deg=1.0,
@@ -207,7 +207,7 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
     )
 
     assert details == [
-        "Sakshee_Patil:att=no,raw=yes,reason=smoothing,"
+        "Sakshee_Patil:att=no,raw=yes,reason=head_pose_outside_threshold,"
         "conf=0.74,raw_conf=0.74,yaw=8.2,pitch=-3.5,roll=1.0"
     ]
 
@@ -807,7 +807,7 @@ def test_enrollment_face_selection_ignores_small_weak_extra_detection(monkeypatc
 def test_enrollment_face_selection_ignores_below_min_area_extra_detection(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
     primary = {
         "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
         "confidence": 0.99,
@@ -829,7 +829,7 @@ def test_enrollment_face_selection_ignores_below_min_area_extra_detection(monkey
 def test_enrollment_face_selection_returns_small_face_for_quality_rejection(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
     small = {
         "bbox": {"x": 10, "y": 10, "w": 30, "h": 30},
         "confidence": 0.99,
@@ -847,7 +847,7 @@ def test_enrollment_face_selection_returns_small_face_for_quality_rejection(monk
 def test_enrollment_face_selection_rejects_two_distinct_strong_faces(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1500)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
     left = {
         "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
         "confidence": 0.99,
@@ -907,14 +907,14 @@ def test_prepare_faces_for_recognition_filters_faces_below_min_area(monkeypatch)
         service,
         np.zeros((128, 128, 3), dtype=np.uint8),
         None,
-        min_face_area=1500,
+        min_face_area=1300,
     )
 
     assert result.reason == ""
     assert result.detected_count == 2
     assert result.rejected_count == 1
     assert result.rejection_details == [
-        "face0:face_too_small area=400 min_face_area=1500"
+        "face0:face_too_small area=400 min_face_area=1300"
     ]
     assert len(result.faces) == 1
     assert result.faces[0]["bbox"] == usable["bbox"]
@@ -935,7 +935,7 @@ def test_prepare_faces_for_recognition_reports_all_faces_below_min_area(monkeypa
         service,
         np.zeros((128, 128, 3), dtype=np.uint8),
         None,
-        min_face_area=1500,
+        min_face_area=1300,
     )
 
     assert result.faces == []
@@ -943,7 +943,7 @@ def test_prepare_faces_for_recognition_reports_all_faces_below_min_area(monkeypa
     assert result.detected_count == 1
     assert result.rejected_count == 1
     assert result.rejection_details == [
-        "face0:face_too_small area=400 min_face_area=1500"
+        "face0:face_too_small area=400 min_face_area=1300"
     ]
 
 

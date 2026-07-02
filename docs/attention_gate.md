@@ -47,7 +47,7 @@ camera frame
   -> optional depth filtering
   -> FaceNet embedding / identity match
   -> SixDRepNet head pose on each usable face crop
-  -> attention gate thresholds + smoothing
+  -> attention gate thresholds
   -> FacePresenceSnapshot(attention_status=...)
   -> FacePresenceGate local cache
   -> resolve_record_admission(...)
@@ -66,7 +66,6 @@ For each detected face, `FaceAttentionGate.evaluate(...)` does this:
 3. Reject very small faces before running head pose.
 4. Run SixDRepNet on the face crop to estimate yaw, pitch, and roll.
 5. Compare the pose against fixed yaw/pitch/roll limits.
-6. Pass the raw attentive/not-attentive result through temporal smoothing.
 
 The result is stored on the face as a `FaceAttentionObservation`:
 
@@ -80,15 +79,13 @@ raw_confidence
 ```
 
 `confidence` and `raw_confidence` are compatibility fields. They are binary:
-`1.0` when the corresponding smoothed or raw attention decision is true, and
-`0.0` otherwise.
+`1.0` when the attention decision is true and `0.0` otherwise.
 
 Important reasons:
 
 | Reason | Meaning |
 |---|---|
-| `attentive` | Face passed pose, size, and smoothing. |
-| `smoothing` | Current frame passed, but not enough recent positives yet. |
+| `attentive` | Face passed pose and size checks. |
 | `face_too_small` | Face bbox is below the configured minimum. |
 | `head_pose_outside_threshold` | Yaw, pitch, or roll exceeded the configured limit. |
 | `sixdrepnet_unavailable` | The head-pose model could not be initialized. |
@@ -101,7 +98,7 @@ center is from the camera optical axis.
 
 ```yaml
 attention_gate:
-  min_face_area: 1500
+  min_face_area: 1300
   max_abs_yaw_deg: 20.0
   max_abs_pitch_deg: 18.0
   max_abs_roll_deg: 90.0
@@ -113,7 +110,6 @@ The intent is:
 - reject very small crops before spending time on head pose
 - keep yaw and pitch strict enough to avoid obvious side conversations
 - keep roll permissive so head tilt rarely blocks otherwise plausible attention
-- let smoothing handle frame-level noise
 
 ## Scene-Level Attention
 
@@ -187,7 +183,6 @@ given the current stack:
 
 - face detection tells us a person is visible
 - head pose tells us whether their face is broadly oriented toward the robot
-- smoothing handles frame-level noise
 - VAD prevents silent visual attention from becoming a turn
 
 The design deliberately avoids pretending that head pose is exact gaze. It only
@@ -218,4 +213,3 @@ Then tune in this order:
 2. `max_abs_yaw_deg` if side conversations falsely open admission.
 3. `max_abs_pitch_deg` if users facing the robot while looking up or down are rejected.
 4. `max_abs_roll_deg` if tilted heads are incorrectly blocked or admitted.
-5. `smoothing_window_sec` and `min_attentive_observations` if attention flickers.

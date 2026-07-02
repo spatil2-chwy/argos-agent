@@ -53,7 +53,7 @@ LOOP_HEARTBEAT_LOG_SEC = 5.0
 
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 1500
+    min_face_area: int = 1300
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
@@ -936,7 +936,7 @@ class FaceRecognitionService:
         face: dict[str, Any],
         image_shape: tuple[int, ...],
     ) -> str:
-        """Return a coarse stable key for smoothing unknown attentive faces."""
+        """Return a coarse stable key for unknown attention tracks."""
         center = face_center_px(face)
         if center is None:
             return "unknown"

@@ -83,13 +83,6 @@ poetry run python -m scripts.labs.face_capture_lab --mode depth --frames 10 --in
 poetry run python -m scripts.labs.face_capture_lab --mode all --frames 10 --interval-sec 1
 ```
 
-For sparse attention stills, use raw per-frame attention scoring so production
-temporal smoothing does not suppress otherwise attentive head-pose frames:
-
-```bash
-poetry run python -m scripts.labs.face_capture_lab --mode attention --frames 40 --interval-sec 0.5 --attention-eval-raw
-```
-
 Audio detection capture:
 
 ```bash
@@ -130,7 +123,7 @@ Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
 waiting indefinitely.
 
 Current registration tuning defaults match the production agent:
-- `min_face_area=1500`
+- `min_face_area=1300`
 - `min_brightness=35`
 - `min_contrast=15.5`
 - `recognition_threshold=0.6`
@@ -166,17 +159,11 @@ when face recognition has a known person:
 poetry run python -m scripts.labs.attention_display_lab
 ```
 
-To bypass temporal smoothing and show the raw per-frame attention decision:
-
-```bash
-poetry run python -m scripts.labs.attention_display_lab --raw-attention
-```
-
 To test frame-window identity voting, require two recognized hits in the last
 five fresh face-loop snapshots:
 
 ```bash
-poetry run python -m scripts.labs.attention_display_lab --raw-attention \
+poetry run python -m scripts.labs.attention_display_lab \
   --recognition-window-frames 5 --recognition-window-min-matches 2
 ```
 
