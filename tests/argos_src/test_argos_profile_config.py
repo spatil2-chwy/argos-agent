@@ -143,6 +143,8 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.face_recognition.enrollment_policy.min_contrast == pytest.approx(15.5)
     assert profile.face_recognition.recognition_threshold == pytest.approx(0.6)
     assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.20)
+    assert profile.face_recognition.recognition_stability.window_frames == 5
+    assert profile.face_recognition.recognition_stability.min_hits == 2
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
@@ -518,6 +520,26 @@ def test_face_attention_gate_profile_is_configurable():
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
+
+
+def test_face_recognition_stability_profile_is_configurable():
+    profile = _parse_profile(
+        {
+            "name": "face-stability",
+            "face_recognition": {
+                "recognition_stability": {
+                    "window_frames": 7,
+                    "min_hits": 3,
+                },
+            },
+        },
+        profile_path=Path("/tmp/face-stability.yaml"),
+        framework_config={},
+    )
+
+    stability = profile.face_recognition.recognition_stability
+    assert stability.window_frames == 7
+    assert stability.min_hits == 3
 
 
 def test_face_live_image_profile_is_configurable():

@@ -74,6 +74,9 @@ face_recognition:
   loop_interval_sec: 0.05
   recognition_threshold: 0.6
   recognition_margin_threshold: 0.20
+  recognition_stability:
+    window_frames: 5
+    min_hits: 2
   live_image_enabled: false
   owner_turn:
     enabled: true

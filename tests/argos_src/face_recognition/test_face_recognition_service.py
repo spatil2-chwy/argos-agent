@@ -100,6 +100,200 @@ def _face(
     }
 
 
+def _person(
+    person_id: str = "person-1",
+    name: str = "Alex",
+    *,
+    attentive: bool = False,
+    bbox_area: int = 1600,
+) -> object:
+    from argos_src.face_recognition.models import PersonContext
+
+    return PersonContext(
+        person_id=person_id,
+        name=name,
+        interaction_count=1,
+        confidence=0.93,
+        bbox_area=bbox_area,
+        timestamp=100.0,
+        center_distance=0.0,
+        attentive=attentive,
+        attention_confidence=1.0 if attentive else 0.0,
+    )
+
+
+def test_recognition_stability_promotes_after_min_hits(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    person = _person()
+
+    first, first_ids = window.update([person])
+    second, second_ids = window.update([person])
+
+    assert first == []
+    assert first_ids == set()
+    assert [p.person_id for p in second] == ["person-1"]
+    assert second_ids == {"person-1"}
+
+
+def test_recognition_stability_keeps_multiple_people(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    alice = _person("person-1", "Alice", bbox_area=1200)
+    bob = _person("person-2", "Bob", bbox_area=1800)
+
+    window.update([alice, bob])
+    stable, stable_ids = window.update([alice, bob])
+
+    assert [p.person_id for p in stable] == ["person-2", "person-1"]
+    assert stable_ids == {"person-1", "person-2"}
+
+
+def test_recognition_stability_decays_when_hits_leave_window(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    person = _person()
+
+    window.update([person])
+    stable, _ = window.update([person])
+    assert [p.person_id for p in stable] == ["person-1"]
+
+    for _ in range(4):
+        stable, stable_ids = window.update([])
+
+    assert stable == []
+    assert stable_ids == set()
+
+
+def test_stable_scene_treats_one_hit_attentive_recognition_as_unknown(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    face = _face()
+    face["recognized_person_id"] = "person-1"
+    face["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.8,
+        reason="attentive",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face],
+        raw_persons=[_person(attentive=True)],
+        image_shape=(100, 100, 3),
+        now=100.0,
+    )
+
+    assert persons == []
+    assert unknown_count == 1
+    assert current_ids == set()
+    assert analysis.primary_attention_target is not None
+    assert analysis.primary_attention_target.kind == "unknown"
+    assert analysis.attentive_unknown_count == 1
+
+
+def test_stable_scene_single_face_miss_keeps_one_stable_identity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    stable_person = _person("person-1", "Alice", attentive=True)
+    service._recognition_stability.update([stable_person])
+    service._recognition_stability.update([stable_person])
+
+    face = _face()
+    face["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.9,
+        reason="attentive",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face],
+        raw_persons=[],
+        image_shape=(100, 100, 3),
+        now=101.0,
+    )
+
+    assert [person.person_id for person in persons] == ["person-1"]
+    assert unknown_count == 0
+    assert current_ids == {"person-1"}
+    assert analysis.attention_target is not None
+    assert analysis.attention_target.person_id == "person-1"
+
+
+def test_stable_scene_ambiguous_miss_does_not_create_extra_faces(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    stable_person = _person("person-1", "Alice", attentive=True)
+    service._recognition_stability.update([stable_person])
+    service._recognition_stability.update([stable_person])
+    face_one = _face(x=10)
+    face_two = _face(x=80)
+    face_one["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.9,
+        reason="attentive",
+    )
+    face_two["attention"] = FaceAttentionObservation(
+        attentive=False,
+        confidence=0.0,
+        reason="head_pose_outside_threshold",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face_one, face_two],
+        raw_persons=[],
+        image_shape=(140, 140, 3),
+        now=101.0,
+    )
+
+    assert persons == []
+    assert unknown_count == 2
+    assert current_ids == set()
+    assert analysis.attention_target is None
+    assert analysis.attentive_unknown_count == 1
+
+
+def test_face_presence_subscriber_receives_updates(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
+    seen = []
+
+    unsubscribe = module.FaceRecognitionService.subscribe_presence(
+        service,
+        lambda snapshot: seen.append(snapshot),
+        replay_latest=False,
+    )
+    module.FaceRecognitionService._notify_presence_subscribers(
+        service,
+        {"status": "unknown"},
+    )
+    unsubscribe()
+    module.FaceRecognitionService._notify_presence_subscribers(
+        service,
+        {"status": "recognized"},
+    )
+
+    assert seen == [{"status": "unknown"}]
+
+
 def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)

@@ -133,12 +133,19 @@ class PreferenceExtractionProfile:
 
 
 @dataclass(frozen=True)
+class FaceRecognitionStabilityProfile:
+    window_frames: int
+    min_hits: int
+
+
+@dataclass(frozen=True)
 class FaceRecognitionProfile:
     enabled: bool
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
     recognition_margin_threshold: float
+    recognition_stability: FaceRecognitionStabilityProfile
     live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
@@ -323,6 +330,10 @@ class ScenarioProfile:
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
             recognition_margin_threshold=0.20,
+            recognition_stability=FaceRecognitionStabilityProfile(
+                window_frames=5,
+                min_hits=2,
+            ),
             live_image_enabled=True,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
@@ -1117,6 +1128,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     enrollment_policy_data = _pop_section(data, "enrollment_policy")
     owner_turn_data = _pop_section(data, "owner_turn")
     preference_extraction_data = _pop_section(data, "preference_extraction")
+    recognition_stability_data = _pop_section(data, "recognition_stability")
 
     proactive = ProactiveGreetingProfile(
         recognized_enabled=_pop_bool(proactive_data, "recognized_enabled", default=True),
@@ -1360,6 +1372,35 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         "face_recognition.preference_extraction",
     )
 
+    recognition_stability = FaceRecognitionStabilityProfile(
+        window_frames=_pop_int(
+            recognition_stability_data,
+            "window_frames",
+            default=5,
+        ),
+        min_hits=_pop_int(
+            recognition_stability_data,
+            "min_hits",
+            default=2,
+        ),
+    )
+    if recognition_stability.window_frames < 1:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.window_frames must be >= 1"
+        )
+    if recognition_stability.min_hits < 1:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.min_hits must be >= 1"
+        )
+    if recognition_stability.min_hits > recognition_stability.window_frames:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.min_hits must be <= window_frames"
+        )
+    _reject_unknown(
+        recognition_stability_data,
+        "face_recognition.recognition_stability",
+    )
+
     profile = FaceRecognitionProfile(
         enabled=_pop_bool(data, "enabled", default=True),
         db_path=_pop_optional_str(
@@ -1379,6 +1420,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_margin_threshold",
             default=0.20,
         ),
+        recognition_stability=recognition_stability,
         live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,

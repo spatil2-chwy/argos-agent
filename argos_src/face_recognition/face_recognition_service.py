@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from collections import deque
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 import cv2
@@ -61,6 +62,72 @@ class FaceEnrollmentPolicy:
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()
+
+
+@dataclass(frozen=True)
+class FaceRecognitionStabilitySettings:
+    window_frames: int = 5
+    min_hits: int = 2
+
+    def __post_init__(self) -> None:
+        if int(self.window_frames) < 1:
+            raise ValueError("window_frames must be >= 1")
+        if int(self.min_hits) < 1:
+            raise ValueError("min_hits must be >= 1")
+        if int(self.min_hits) > int(self.window_frames):
+            raise ValueError("min_hits must be <= window_frames")
+
+
+class RecognitionStabilityWindow:
+    """Promote recognized identities only after repeated recent frame hits."""
+
+    def __init__(self, settings: FaceRecognitionStabilitySettings | None = None) -> None:
+        self.settings = settings or FaceRecognitionStabilitySettings()
+        self._samples: deque[set[str]] = deque(maxlen=int(self.settings.window_frames))
+        self._latest_persons: dict[str, PersonContext] = {}
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._latest_persons.clear()
+
+    def update(self, persons: list[PersonContext]) -> tuple[list[PersonContext], set[str]]:
+        current_ids: set[str] = set()
+        latest_by_id: dict[str, PersonContext] = {}
+        for person in persons:
+            person_id = str(getattr(person, "person_id", "") or "").strip()
+            if not person_id:
+                continue
+            current_ids.add(person_id)
+            previous = latest_by_id.get(person_id)
+            if previous is None or int(person.bbox_area) > int(previous.bbox_area):
+                latest_by_id[person_id] = person
+
+        self._samples.append(current_ids)
+        for person_id, person in latest_by_id.items():
+            self._latest_persons[person_id] = person
+
+        counts: dict[str, int] = {}
+        for sample in self._samples:
+            for person_id in sample:
+                counts[person_id] = counts.get(person_id, 0) + 1
+        stable_ids = {
+            person_id
+            for person_id, count in counts.items()
+            if count >= int(self.settings.min_hits)
+        }
+
+        live_window_ids = set(counts)
+        for person_id in list(self._latest_persons):
+            if person_id not in live_window_ids:
+                del self._latest_persons[person_id]
+
+        stable_persons = [
+            person
+            for person_id, person in self._latest_persons.items()
+            if person_id in stable_ids
+        ]
+        stable_persons.sort(key=lambda person: int(person.bbox_area), reverse=True)
+        return stable_persons, stable_ids
 
 
 def _format_optional_float(value: Any) -> str:
@@ -137,6 +204,7 @@ class FaceRecognitionService:
         live_image_title: str = "Camera",
         live_image_ttl_ms: int = 1000,
         live_image_enabled: bool = True,
+        recognition_stability_settings: FaceRecognitionStabilitySettings | None = None,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
         self._pipeline: Optional[FaceEmbeddingPipeline] = None
@@ -164,6 +232,11 @@ class FaceRecognitionService:
         self._live_image_enabled = bool(live_image_enabled)
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
         self._presence_cache = FacePresenceCache(cache_expire_sec=CACHE_EXPIRE_SEC)
+        self._recognition_stability = RecognitionStabilityWindow(
+            recognition_stability_settings
+        )
+        self._presence_subscribers: list[Callable[[dict[str, Any]], None]] = []
+        self._presence_subscribers_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
@@ -185,6 +258,58 @@ class FaceRecognitionService:
             gpu_name,
             self.db.collection.count(),
         )
+
+    def subscribe_presence(
+        self,
+        callback: Callable[[dict[str, Any]], None],
+        *,
+        replay_latest: bool = True,
+    ) -> Callable[[], None]:
+        """Subscribe to immediate face-presence updates from the recognition loop."""
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        if not hasattr(self, "_presence_subscribers_lock"):
+            self._presence_subscribers_lock = threading.Lock()
+        if not hasattr(self, "_presence_subscribers"):
+            self._presence_subscribers = []
+        with self._presence_subscribers_lock:
+            self._presence_subscribers.append(callback)
+        if replay_latest:
+            try:
+                callback(self.get_presence_snapshot())
+            except Exception:
+                logger.exception("Face presence subscriber failed during replay")
+
+        def unsubscribe() -> None:
+            with self._presence_subscribers_lock:
+                try:
+                    self._presence_subscribers.remove(callback)
+                except ValueError:
+                    pass
+
+        return unsubscribe
+
+    def _notify_presence_subscribers(self, snapshot: dict[str, Any]) -> None:
+        if not hasattr(self, "_presence_subscribers_lock"):
+            self._presence_subscribers_lock = threading.Lock()
+        if not hasattr(self, "_presence_subscribers"):
+            self._presence_subscribers = []
+        with self._presence_subscribers_lock:
+            subscribers = list(self._presence_subscribers)
+        for callback in subscribers:
+            try:
+                callback(dict(snapshot or {}))
+            except Exception:
+                logger.exception("Face presence subscriber failed")
+
+    def _clear_presence_if_expired(self, now: float) -> bool:
+        if not self._presence_cache.clear_if_expired(now):
+            return False
+        stability = getattr(self, "_recognition_stability", None)
+        if stability is not None:
+            stability.reset()
+        self._notify_presence_subscribers(self.get_presence_snapshot())
+        return True
 
     # ------------------------------------------------------------------
     # Image capture
@@ -927,9 +1052,114 @@ class FaceRecognitionService:
                     attention_confidence=attention.confidence,
                 )
             )
+            face["recognized_person_id"] = pid
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
+
+    def _ensure_recognition_stability(self) -> RecognitionStabilityWindow:
+        stability = getattr(self, "_recognition_stability", None)
+        if stability is None:
+            stability = RecognitionStabilityWindow()
+            self._recognition_stability = stability
+        return stability
+
+    def _stable_scene_state(
+        self,
+        *,
+        detected_faces: list[dict[str, Any]],
+        raw_persons: list[PersonContext],
+        image_shape: tuple[int, ...],
+        now: float,
+    ) -> tuple[list[PersonContext], int, set[str], Any]:
+        stable_persons, stable_ids = self._ensure_recognition_stability().update(
+            raw_persons
+        )
+        stable_by_id = {
+            str(person.person_id or "").strip(): person
+            for person in stable_persons
+            if str(person.person_id or "").strip()
+        }
+        current_stable_ids: set[str] = set()
+        candidates: list[FaceSceneCandidate] = []
+        unknown_count = 0
+        seen_stable_candidates: set[str] = set()
+        single_face_stable_fallback = (
+            len(detected_faces) == 1
+            and len(stable_by_id) == 1
+            and not str(detected_faces[0].get("recognized_person_id") or "").strip()
+        )
+
+        for face in detected_faces:
+            pid = str(face.get("recognized_person_id") or "").strip()
+            attention = face.get("attention")
+            bbox_area = self._bbox_area(face)
+            center_distance = self._center_distance(face, image_shape)
+            stable_person = None
+            if pid and pid in stable_ids and pid in stable_by_id:
+                stable_person = stable_by_id[pid]
+            elif single_face_stable_fallback:
+                fallback_pid, fallback_person = next(iter(stable_by_id.items()))
+                if fallback_pid in stable_ids:
+                    pid = fallback_pid
+                    stable_person = fallback_person
+
+            if stable_person is not None:
+                person = replace(
+                    stable_person,
+                    bbox_area=bbox_area,
+                    timestamp=now,
+                    depth_m=face.get("depth_m"),
+                    center_distance=center_distance,
+                    attentive=bool(getattr(attention, "attentive", False)),
+                    attention_confidence=float(
+                        getattr(attention, "confidence", 0.0) or 0.0
+                    ),
+                    head_yaw_deg=getattr(attention, "yaw_deg", None),
+                    head_pitch_deg=getattr(attention, "pitch_deg", None),
+                    head_roll_deg=getattr(attention, "roll_deg", None),
+                )
+                stable_by_id[pid] = person
+                current_stable_ids.add(pid)
+                seen_stable_candidates.add(pid)
+                candidates.append(
+                    FaceSceneCandidate(
+                        kind="recognized",
+                        bbox_area=int(person.bbox_area),
+                        center_distance=float(person.center_distance),
+                        depth_m=person.depth_m,
+                        person_id=person.person_id,
+                        name=person.name,
+                        attentive=bool(person.attentive),
+                        attention_confidence=float(person.attention_confidence),
+                    )
+                )
+                continue
+
+            unknown_count += 1
+            candidates.append(
+                FaceSceneCandidate(
+                    kind="unknown",
+                    bbox_area=bbox_area,
+                    center_distance=center_distance,
+                    depth_m=face.get("depth_m"),
+                    attentive=bool(getattr(attention, "attentive", False)),
+                    attention_confidence=float(
+                        getattr(attention, "confidence", 0.0) or 0.0
+                    ),
+                )
+            )
+
+        current_stable_persons = [
+            stable_by_id[person_id]
+            for person_id in current_stable_ids
+            if person_id in stable_by_id
+        ]
+        current_stable_persons.sort(
+            key=lambda person: int(person.bbox_area),
+            reverse=True,
+        )
+        return current_stable_persons, unknown_count, current_stable_ids, analyze_face_scene(candidates)
 
     @staticmethod
     def _unknown_attention_track_id(
@@ -1649,6 +1879,7 @@ class FaceRecognitionService:
             social_scene=social_scene,
             now=now,
         )
+        self._notify_presence_subscribers(self.get_presence_snapshot())
 
     # ------------------------------------------------------------------
     # Background loop (continuous recognition, zero latency at response time)
@@ -1718,7 +1949,7 @@ class FaceRecognitionService:
         image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
         capture_s = perf_now() - capture_started
         if image is None:
-            if self._presence_cache.clear_if_expired(now):
+            if self._clear_presence_if_expired(now):
                 logger.debug("[FaceLoop] no image, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
@@ -1746,7 +1977,7 @@ class FaceRecognitionService:
             publish_started = perf_now()
             self._publish_live_image_frame(image)
             publish_s = perf_now() - publish_started
-            if self._presence_cache.clear_if_expired(now):
+            if self._clear_presence_if_expired(now):
                 logger.debug("[FaceLoop] no faces, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
@@ -1767,9 +1998,15 @@ class FaceRecognitionService:
 
         self._presence_cache.mark_faces_seen(now)
         scene_started = perf_now()
-        persons, unknown_count, current_ids, analysis = self._build_scene_state(
+        raw_persons, raw_unknown_count, _, _ = self._build_scene_state(
             image=image,
             detected_faces=detected_faces,
+            image_shape=image.shape,
+            now=now,
+        )
+        persons, unknown_count, current_ids, analysis = self._stable_scene_state(
+            detected_faces=detected_faces,
+            raw_persons=raw_persons,
             image_shape=image.shape,
             now=now,
         )
@@ -1789,6 +2026,7 @@ class FaceRecognitionService:
             social_scene=analysis.social_scene,
             now=now,
         )
+        self._notify_presence_subscribers(self.get_presence_snapshot())
         attentive_names = [p.name for p in persons if bool(p.attentive)]
         recognized_details = self._format_recognition_log_details(persons)
         recognition_rejection_details = self._format_recognition_attempt_log_details(
@@ -1806,11 +2044,13 @@ class FaceRecognitionService:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
-                "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
+                "raw_recognized=%s raw_unknown=%s attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
                 "recognition_rejections=%s attention_details=%s",
                 len(detected_faces),
                 recognized_details,
                 unknown_count,
+                len(raw_persons),
+                raw_unknown_count,
                 attentive_names,
                 analysis.attentive_unknown_count,
                 primary_face,

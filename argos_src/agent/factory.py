@@ -303,10 +303,12 @@ def create_agent(
         from argos_src.face_recognition.depth_gate import DepthGateSettings
         from argos_src.face_recognition.face_recognition_service import (
             FaceEnrollmentPolicy,
+            FaceRecognitionStabilitySettings,
             FaceRecognitionService,
         )
         attention_gate = scenario_profile.face_recognition.attention_gate
         enrollment_policy = scenario_profile.face_recognition.enrollment_policy
+        recognition_stability = scenario_profile.face_recognition.recognition_stability
 
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
@@ -352,6 +354,10 @@ def create_agent(
                 max_brightness=enrollment_policy.max_brightness,
                 min_contrast=enrollment_policy.min_contrast,
                 min_embedding_similarity=enrollment_policy.min_embedding_similarity,
+            ),
+            recognition_stability_settings=FaceRecognitionStabilitySettings(
+                window_frames=recognition_stability.window_frames,
+                min_hits=recognition_stability.min_hits,
             ),
         )
         if scenario_profile.face_recognition.preference_extraction.enabled:
@@ -530,6 +536,12 @@ def create_agent(
     else:
         engagement._recording_state_provider = recording_state_provider
 
+    if scenario_profile.face_recognition.enabled and face_service is not None:
+        subscribe_presence = getattr(face_service, "subscribe_presence", None)
+        if callable(subscribe_presence):
+            unsubscribe_presence = subscribe_presence(agent.update_face_presence_snapshot)
+            atexit.register(unsubscribe_presence)
+
     coalescer = EventCoalescer(
         agent=agent,
         engagement=engagement,
@@ -572,7 +584,7 @@ def create_agent(
             coalescer=coalescer,
             engagement=engagement,
             nav_state=nav_state,
-            presence_callback=agent.update_face_presence_snapshot,
+            presence_callback=None,
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,
             require_attention=scenario_profile.face_recognition.proactive_greeting.require_attention,

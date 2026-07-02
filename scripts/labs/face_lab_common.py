@@ -28,6 +28,7 @@ from argos_src.face_recognition.attention_gate import (
 from argos_src.face_recognition.face_recognition_service import (
     DEFAULT_FACE_ENROLLMENT_POLICY,
     FaceEnrollmentPolicy,
+    FaceRecognitionStabilitySettings,
     FaceRecognitionService,
 )
 from argos_src.provider_api.factory import create_provider_client
@@ -260,6 +261,10 @@ def build_face_service(
         depth_gate_settings=config["depth_settings"],
         attention_gate_settings=build_attention_gate_settings(profile),
         enrollment_policy=enrollment_policy,
+        recognition_stability_settings=FaceRecognitionStabilitySettings(
+            window_frames=profile.face_recognition.recognition_stability.window_frames,
+            min_hits=profile.face_recognition.recognition_stability.min_hits,
+        ),
     )
     config["robot_client"] = robot_client
     return service, config
