@@ -709,6 +709,7 @@ class FaceRecognitionService:
             top_k=2,
         )
         if not matches:
+            logger.debug("[FaceRecognition] rejected face match reason=no_db_match")
             return None
         top_match = matches[0]
         top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
@@ -719,8 +720,28 @@ class FaceRecognitionService:
         )
         margin = top_similarity - runner_up_similarity
         if top_similarity < self._recognition_threshold:
+            logger.debug(
+                "[FaceRecognition] rejected face match reason=below_threshold "
+                "name=%s sim=%.4f threshold=%.4f runner_up=%.4f margin=%.4f",
+                top_match.get("name", ""),
+                top_similarity,
+                self._recognition_threshold,
+                runner_up_similarity,
+                margin,
+            )
             return None
         if margin < self._recognition_margin_threshold:
+            logger.debug(
+                "[FaceRecognition] rejected face match reason=margin_too_small "
+                "name=%s sim=%.4f threshold=%.4f runner_up=%.4f margin=%.4f "
+                "margin_threshold=%.4f",
+                top_match.get("name", ""),
+                top_similarity,
+                self._recognition_threshold,
+                runner_up_similarity,
+                margin,
+                self._recognition_margin_threshold,
+            )
             return None
         top_match["runner_up_similarity"] = runner_up_similarity
         top_match["similarity_margin"] = margin
