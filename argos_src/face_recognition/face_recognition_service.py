@@ -139,9 +139,6 @@ class FaceRecognitionService:
         live_image_enabled: bool = True,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
-        logger.info(f"Face recognition running on: {self.device}")
-        if self.device.type == "cuda":
-            logger.info(f"  GPU: {torch.cuda.get_device_name(0)}")
         self._pipeline: Optional[FaceEmbeddingPipeline] = None
         self.mtcnn = None
         self.resnet = None
@@ -177,8 +174,17 @@ class FaceRecognitionService:
         self._loop_metric_heartbeat_at: dict[str, float] = {}
         self._loop_latency = LatencyLogger("face_loop")
 
-        logger.info("Face Recognition Service initialized")
-        logger.info(f"Device: {self.device} | DB: {self.db.collection.count()} people enrolled")
+        gpu_name = (
+            f", gpu={torch.cuda.get_device_name(0)}"
+            if self.device.type == "cuda"
+            else ""
+        )
+        logger.info(
+            "Face Recognition Service initialized (device=%s%s, enrolled=%s)",
+            self.device,
+            gpu_name,
+            self.db.collection.count(),
+        )
 
     # ------------------------------------------------------------------
     # Image capture
@@ -330,10 +336,6 @@ class FaceRecognitionService:
         if rgbd is None:
             return None, None
 
-        logger.debug(
-            "Captured synced RGBD pair for face recognition (delta_ms=%.2f)",
-            rgbd.delta_ms,
-        )
         return rgbd.color_image, rgbd.depth_m
 
     def _prepare_faces_for_recognition(
@@ -388,10 +390,6 @@ class FaceRecognitionService:
             rejected_count += area_rejected_count
             detected_faces = kept_faces
             if area_rejected_count and not detected_faces:
-                logger.debug(
-                    "[FaceLoop] min face area rejected all detected faces details=%s",
-                    rejection_details,
-                )
                 return FacePreparationResult(
                     faces=[],
                     reason="face_too_small",
@@ -415,16 +413,16 @@ class FaceRecognitionService:
                         "[FaceLoop] depth gate kept 0/%s face(s); likely no valid aligned depth samples or face beyond %.2fm",
                         total,
                         self._depth_gate_settings.max_face_depth_m,
+                        level=logging.DEBUG,
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "[FaceLoop] depth gate kept %s/%s face(s)",
                         kept,
                         total,
                     )
             detected_faces = gated_faces
             if rejected_count and not detected_faces:
-                logger.debug("[FaceLoop] depth gate rejected all detected faces")
                 return FacePreparationResult(
                     faces=[],
                     reason="depth_rejected",
@@ -534,7 +532,7 @@ class FaceRecognitionService:
         if len(enrollment_sized) == 1:
             ignored = len(ordered_all) - 1
             if ignored > 0:
-                logger.info(
+                logger.debug(
                     "Enrollment ignored %s below-min-area face detection(s) and kept the strongest enrollment-sized candidate.",
                     ignored,
                 )
@@ -565,7 +563,7 @@ class FaceRecognitionService:
             significant_others.append(other)
         if significant_others:
             return None, True
-        logger.info(
+        logger.debug(
             "Enrollment ignored %s extra face detection(s) and kept the strongest enrollment-sized candidate.",
             len(ordered_all) - 1,
         )
@@ -751,7 +749,6 @@ class FaceRecognitionService:
             top_k=2,
         )
         if not matches:
-            logger.debug("[FaceRecognition] rejected face match reason=no_db_match")
             return None, {"status": "rejected", "reason": "no_db_match"}
         top_match = matches[0]
         top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
@@ -762,15 +759,6 @@ class FaceRecognitionService:
         )
         margin = top_similarity - runner_up_similarity
         if top_similarity < self._recognition_threshold:
-            logger.debug(
-                "[FaceRecognition] rejected face match reason=below_threshold "
-                "name=%s sim=%.4f threshold=%.4f runner_up=%.4f margin=%.4f",
-                top_match.get("name", ""),
-                top_similarity,
-                self._recognition_threshold,
-                runner_up_similarity,
-                margin,
-            )
             return None, {
                 "status": "rejected",
                 "reason": "below_threshold",
@@ -783,17 +771,6 @@ class FaceRecognitionService:
                 "margin_threshold": float(self._recognition_margin_threshold),
             }
         if margin < self._recognition_margin_threshold:
-            logger.debug(
-                "[FaceRecognition] rejected face match reason=margin_too_small "
-                "name=%s sim=%.4f threshold=%.4f runner_up=%.4f margin=%.4f "
-                "margin_threshold=%.4f",
-                top_match.get("name", ""),
-                top_similarity,
-                self._recognition_threshold,
-                runner_up_similarity,
-                margin,
-                self._recognition_margin_threshold,
-            )
             return None, {
                 "status": "rejected",
                 "reason": "margin_too_small",
@@ -1080,10 +1057,14 @@ class FaceRecognitionService:
                     "interaction_count": updated_meta.get("interaction_count", 0),
                 })
                 result["faces_recognized"] += 1
-                logger.info(f"Recognized: {match['name']} (similarity: {match['similarity']:.2f})")
+                logger.debug(
+                    "Recognized face name=%s similarity=%.2f",
+                    match["name"],
+                    match["similarity"],
+                )
             else:
                 result["unknown_faces"] += 1
-                logger.info("Detected unknown face")
+                logger.debug("Detected unknown face")
 
         result["success"] = True
         return result
@@ -1258,7 +1239,7 @@ class FaceRecognitionService:
             raw_detected_count = int(prepared.detected_count or 0)
             rejected_count = int(prepared.rejected_count or 0)
             if raw_detected_count > len(usable_faces):
-                logger.info(
+                logger.debug(
                     "Enrollment ignored %s face(s) outside the usable registration scene raw_detected=%s usable=%s rejected=%s",
                     raw_detected_count - len(usable_faces),
                     raw_detected_count,
@@ -1302,7 +1283,7 @@ class FaceRecognitionService:
             quality = self._assess_enrollment_face_quality(image, face)
             if not quality.accepted:
                 last_quality = quality
-                logger.info(
+                logger.debug(
                     "Enrollment frame rejected reason=%s metric=%.3f guidance=%s",
                     quality.reason,
                     quality.metric,
@@ -1814,25 +1795,29 @@ class FaceRecognitionService:
             detected_faces
         )
         primary_attention = analysis.primary_attention_target
-        attention_details = self._format_attention_log_details(detected_faces)
-        logger.debug(
-            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
-            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
-            "recognition_rejections=%s attention_details=%s",
-            len(detected_faces),
-            recognized_details,
-            unknown_count,
-            attentive_names,
-            analysis.attentive_unknown_count,
-            analysis.attention_target.person_id if analysis.attention_target else None,
-            (
-                primary_attention.person_id
-                if primary_attention and primary_attention.person_id
-                else (primary_attention.kind if primary_attention else None)
-            ),
-            recognition_rejection_details,
-            attention_details,
+        primary_face = (
+            analysis.attention_target.person_id if analysis.attention_target else None
         )
+        primary_attention_label = (
+            primary_attention.person_id
+            if primary_attention and primary_attention.person_id
+            else (primary_attention.kind if primary_attention else None)
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
+                "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
+                "recognition_rejections=%s attention_details=%s",
+                len(detected_faces),
+                recognized_details,
+                unknown_count,
+                attentive_names,
+                analysis.attentive_unknown_count,
+                primary_face,
+                primary_attention_label,
+                recognition_rejection_details,
+                self._format_attention_log_details(detected_faces),
+            )
         self._emit_loop_timing(
             tick_started=tick_started,
             camera_resource_id=camera_resource_id,
@@ -1852,25 +1837,16 @@ class FaceRecognitionService:
         )
         self._log_loop_heartbeat(
             "attention_summary",
-            "[FaceLoop] summary reason=%s detected=%s rejected=%s "
-            "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-            "primary_face=%s primary_attention=%s recognition_rejections=%s "
-            "attention_details=%s",
-            "ok",
+            "[FaceLoop] summary detected=%s rejected=%s recognized=%s unknown=%s "
+            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s",
             len(detected_faces),
             prepared.rejected_count,
-            recognized_details,
+            len(persons),
             unknown_count,
-            attentive_names,
+            len(attentive_names),
             analysis.attentive_unknown_count,
-            analysis.attention_target.person_id if analysis.attention_target else None,
-            (
-                primary_attention.person_id
-                if primary_attention and primary_attention.person_id
-                else (primary_attention.kind if primary_attention else None)
-            ),
-            recognition_rejection_details,
-            attention_details,
+            primary_face,
+            primary_attention_label,
         )
 
     def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
