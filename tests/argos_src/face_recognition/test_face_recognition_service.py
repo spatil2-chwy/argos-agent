@@ -281,6 +281,32 @@ def test_recognize_face_match_rejects_low_similarity(monkeypatch):
     assert match is None
 
 
+def test_recognize_face_match_diagnostics_explain_low_similarity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
+        ]
+    )
+
+    match, diagnostics = (
+        module.FaceRecognitionService._recognize_face_match_with_diagnostics(
+            service,
+            {"embedding": [0.1, 0.2, 0.3]},
+        )
+    )
+
+    assert match is None
+    assert diagnostics["reason"] == "below_threshold"
+    assert diagnostics["name"] == "Arushi"
+    assert diagnostics["similarity"] == 0.59
+    assert diagnostics["threshold"] == 0.6
+
+
 def test_recognize_face_match_rejects_small_margin(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
@@ -299,6 +325,31 @@ def test_recognize_face_match_rejects_small_margin(monkeypatch):
     )
 
     assert match is None
+
+
+def test_format_recognition_attempt_log_details(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+
+    details = module.FaceRecognitionService._format_recognition_attempt_log_details(
+        [
+            {
+                "recognition": {
+                    "reason": "below_threshold",
+                    "name": "Arushi",
+                    "similarity": 0.59,
+                    "threshold": 0.6,
+                    "runner_up_similarity": 0.10,
+                    "margin": 0.49,
+                    "margin_threshold": 0.20,
+                }
+            }
+        ]
+    )
+
+    assert details == [
+        "Arushi:below_threshold,sim=0.59,threshold=0.60,"
+        "runner_up=0.10,margin=0.49,margin_threshold=0.20"
+    ]
 
 
 def test_loop_tick_emits_timing_metric(monkeypatch):
@@ -862,6 +913,9 @@ def test_prepare_faces_for_recognition_filters_faces_below_min_area(monkeypatch)
     assert result.reason == ""
     assert result.detected_count == 2
     assert result.rejected_count == 1
+    assert result.rejection_details == [
+        "face0:face_too_small area=400 min_face_area=1500"
+    ]
     assert len(result.faces) == 1
     assert result.faces[0]["bbox"] == usable["bbox"]
 
@@ -888,6 +942,9 @@ def test_prepare_faces_for_recognition_reports_all_faces_below_min_area(monkeypa
     assert result.reason == "face_too_small"
     assert result.detected_count == 1
     assert result.rejected_count == 1
+    assert result.rejection_details == [
+        "face0:face_too_small area=400 min_face_area=1500"
+    ]
 
 
 def test_enrollment_face_quality_rejects_low_contrast_frame(monkeypatch):

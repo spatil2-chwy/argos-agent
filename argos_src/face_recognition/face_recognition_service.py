@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -95,6 +95,7 @@ class FacePreparationResult:
     reason: str = ""
     detected_count: int = 0
     rejected_count: int = 0
+    rejection_details: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -365,25 +366,38 @@ class FaceRecognitionService:
 
         detected_count = len(detected_faces)
         rejected_count = 0
+        rejection_details: list[str] = []
         if min_face_area is not None and int(min_face_area) > 0:
+            min_area = int(min_face_area)
+            area_rejected_faces = [
+                face
+                for face in detected_faces
+                if self._bbox_area(face) < min_area
+            ]
             kept_faces = [
                 face
                 for face in detected_faces
-                if self._bbox_area(face) >= int(min_face_area)
+                if self._bbox_area(face) >= min_area
             ]
-            area_rejected_count = len(detected_faces) - len(kept_faces)
+            area_rejected_count = len(area_rejected_faces)
+            for index, face in enumerate(area_rejected_faces):
+                rejection_details.append(
+                    f"face{index}:face_too_small area={self._bbox_area(face)} "
+                    f"min_face_area={min_area}"
+                )
             rejected_count += area_rejected_count
             detected_faces = kept_faces
             if area_rejected_count and not detected_faces:
                 logger.debug(
-                    "[FaceLoop] min face area rejected all detected faces threshold=%s",
-                    int(min_face_area),
+                    "[FaceLoop] min face area rejected all detected faces details=%s",
+                    rejection_details,
                 )
                 return FacePreparationResult(
                     faces=[],
                     reason="face_too_small",
                     detected_count=detected_count,
                     rejected_count=rejected_count,
+                    rejection_details=rejection_details,
                 )
         if depth_m is not None and self._depth_gate_settings is not None:
             gated_faces, depth_rejected_count = filter_detections_by_depth(
@@ -416,6 +430,7 @@ class FaceRecognitionService:
                     reason="depth_rejected",
                     detected_count=detected_count,
                     rejected_count=rejected_count,
+                    rejection_details=rejection_details,
                 )
 
         faces_with_embeddings: list[dict[str, Any]] = []
@@ -432,11 +447,13 @@ class FaceRecognitionService:
                 reason="no_embedding",
                 detected_count=detected_count,
                 rejected_count=rejected_count,
+                rejection_details=rejection_details,
             )
         return FacePreparationResult(
             faces=faces_with_embeddings,
             detected_count=detected_count,
             rejected_count=rejected_count,
+            rejection_details=rejection_details,
         )
 
     def _recognition_min_face_area(self) -> int:
@@ -702,7 +719,32 @@ class FaceRecognitionService:
             return FaceEnrollmentQuality(False, reason, guidance, metrics.contrast)
         return FaceEnrollmentQuality(True)
 
-    def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
+    def _recognize_face_match_with_diagnostics(
+        self,
+        face: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        match_override = self.__dict__.get("_recognize_face_match")
+        if callable(match_override):
+            match = match_override(face)
+            if match is None:
+                return None, {"status": "rejected", "reason": "no_match"}
+            similarity = float(match.get("similarity", 0.0) or 0.0)
+            return match, {
+                "status": "accepted",
+                "reason": "matched",
+                "name": str(match.get("name", "") or ""),
+                "person_id": str(match.get("person_id", "") or ""),
+                "similarity": similarity,
+                "threshold": float(getattr(self, "_recognition_threshold", 0.0) or 0.0),
+                "runner_up_similarity": float(
+                    match.get("runner_up_similarity", 0.0) or 0.0
+                ),
+                "margin": float(match.get("similarity_margin", 0.0) or 0.0),
+                "margin_threshold": float(
+                    getattr(self, "_recognition_margin_threshold", 0.0) or 0.0
+                ),
+            }
+
         matches = self.db.recognize_face(
             face_embedding=face["embedding"],
             threshold=-1.0,
@@ -710,7 +752,7 @@ class FaceRecognitionService:
         )
         if not matches:
             logger.debug("[FaceRecognition] rejected face match reason=no_db_match")
-            return None
+            return None, {"status": "rejected", "reason": "no_db_match"}
         top_match = matches[0]
         top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
         runner_up_similarity = (
@@ -729,7 +771,17 @@ class FaceRecognitionService:
                 runner_up_similarity,
                 margin,
             )
-            return None
+            return None, {
+                "status": "rejected",
+                "reason": "below_threshold",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": float(self._recognition_threshold),
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": float(self._recognition_margin_threshold),
+            }
         if margin < self._recognition_margin_threshold:
             logger.debug(
                 "[FaceRecognition] rejected face match reason=margin_too_small "
@@ -742,10 +794,34 @@ class FaceRecognitionService:
                 margin,
                 self._recognition_margin_threshold,
             )
-            return None
+            return None, {
+                "status": "rejected",
+                "reason": "margin_too_small",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": float(self._recognition_threshold),
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": float(self._recognition_margin_threshold),
+            }
         top_match["runner_up_similarity"] = runner_up_similarity
         top_match["similarity_margin"] = margin
-        return top_match
+        return top_match, {
+            "status": "accepted",
+            "reason": "matched",
+            "name": str(top_match.get("name", "") or ""),
+            "person_id": str(top_match.get("person_id", "") or ""),
+            "similarity": top_similarity,
+            "threshold": float(self._recognition_threshold),
+            "runner_up_similarity": runner_up_similarity,
+            "margin": margin,
+            "margin_threshold": float(self._recognition_margin_threshold),
+        }
+
+    def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
+        match, _diagnostics = self._recognize_face_match_with_diagnostics(face)
+        return match
 
     def _build_scene_state(
         self,
@@ -776,7 +852,8 @@ class FaceRecognitionService:
                 ),
             )
             face_center = face_center_px(face)
-            match = self._recognize_face_match(face)
+            match, recognition = self._recognize_face_match_with_diagnostics(face)
+            face["recognition"] = recognition
             pid = match["person_id"] if match is not None else ""
             track_id = pid or self._unknown_attention_track_id(face, image_shape)
             attention = attention_gate.evaluate(
@@ -1612,6 +1689,8 @@ class FaceRecognitionService:
         unknown_count: int | None = None,
         rejected_count: int | None = None,
         reason: str | None = None,
+        prepare_details: list[str] | None = None,
+        recognition_details: list[str] | None = None,
     ) -> None:
         latency = getattr(self, "_loop_latency", None)
         if latency is None:
@@ -1641,6 +1720,8 @@ class FaceRecognitionService:
             unknown=unknown_count,
             rejected=rejected_count,
             reason=reason,
+            prepare_details=prepare_details,
+            recognition_details=recognition_details,
         )
 
     def _loop_tick(
@@ -1699,6 +1780,7 @@ class FaceRecognitionService:
                 unknown_count=0,
                 rejected_count=prepared.rejected_count,
                 reason=prepared.reason,
+                prepare_details=prepared.rejection_details or None,
             )
             return
 
@@ -1728,12 +1810,15 @@ class FaceRecognitionService:
         )
         attentive_names = [p.name for p in persons if bool(p.attentive)]
         recognized_details = self._format_recognition_log_details(persons)
+        recognition_rejection_details = self._format_recognition_attempt_log_details(
+            detected_faces
+        )
         primary_attention = analysis.primary_attention_target
         attention_details = self._format_attention_log_details(detected_faces)
         logger.debug(
             "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
             "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
-            "attention_details=%s",
+            "recognition_rejections=%s attention_details=%s",
             len(detected_faces),
             recognized_details,
             unknown_count,
@@ -1745,6 +1830,7 @@ class FaceRecognitionService:
                 if primary_attention and primary_attention.person_id
                 else (primary_attention.kind if primary_attention else None)
             ),
+            recognition_rejection_details,
             attention_details,
         )
         self._emit_loop_timing(
@@ -1761,12 +1847,15 @@ class FaceRecognitionService:
             unknown_count=unknown_count,
             rejected_count=prepared.rejected_count,
             reason="ok",
+            prepare_details=prepared.rejection_details or None,
+            recognition_details=recognition_rejection_details or None,
         )
         self._log_loop_heartbeat(
             "attention_summary",
             "[FaceLoop] summary reason=%s detected=%s rejected=%s "
             "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-            "primary_face=%s primary_attention=%s attention_details=%s",
+            "primary_face=%s primary_attention=%s recognition_rejections=%s "
+            "attention_details=%s",
             "ok",
             len(detected_faces),
             prepared.rejected_count,
@@ -1780,6 +1869,7 @@ class FaceRecognitionService:
                 if primary_attention and primary_attention.person_id
                 else (primary_attention.kind if primary_attention else None)
             ),
+            recognition_rejection_details,
             attention_details,
         )
 
@@ -1789,6 +1879,38 @@ class FaceRecognitionService:
         for person in persons:
             label = str(person.name or person.person_id).replace(" ", "_")
             details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
+        return details
+
+    @staticmethod
+    def _format_recognition_attempt_log_details(faces: list[dict[str, Any]]) -> list[str]:
+        details: list[str] = []
+        for index, face in enumerate(faces):
+            recognition = dict(face.get("recognition") or {})
+            reason = str(recognition.get("reason") or "not_evaluated")
+            if reason == "matched":
+                continue
+            label = str(
+                recognition.get("name")
+                or face.get("recognized_name")
+                or f"face{index}"
+            ).replace(" ", "_")
+            similarity = recognition.get("similarity")
+            threshold = recognition.get("threshold")
+            runner_up = recognition.get("runner_up_similarity")
+            margin = recognition.get("margin")
+            margin_threshold = recognition.get("margin_threshold")
+            parts = [f"{label}:{reason}"]
+            if similarity is not None:
+                parts.append(f"sim={float(similarity):.2f}")
+            if threshold is not None:
+                parts.append(f"threshold={float(threshold):.2f}")
+            if runner_up is not None:
+                parts.append(f"runner_up={float(runner_up):.2f}")
+            if margin is not None:
+                parts.append(f"margin={float(margin):.2f}")
+            if margin_threshold is not None:
+                parts.append(f"margin_threshold={float(margin_threshold):.2f}")
+            details.append(",".join(parts))
         return details
 
     @staticmethod
