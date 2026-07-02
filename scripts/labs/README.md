@@ -159,7 +159,8 @@ poetry run python -m scripts.labs.face_recognition_lab --loop --interval 0.5
 Live attention display range test. This starts the same background face loop the
 agent uses, watches the face-presence cache, and pushes only attention changes to
 the interaction display. The screen shows `Detected | Attentive`,
-`Detected | Non-Attentive`, or `Not Detected`:
+`Detected | Non-Attentive`, or `Not Detected`, plus a `recognized: <name>` line
+when face recognition has a known person:
 
 ```bash
 poetry run python -m scripts.labs.attention_display_lab

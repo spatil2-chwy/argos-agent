@@ -83,6 +83,7 @@ def _attention_display_state(snapshot: dict[str, Any]) -> AttentionDisplayState:
     status = str(snapshot.get("attention_status") or "none").strip() or "none"
     faces = int(snapshot.get("faces_detected") or 0)
     attention_count = int(snapshot.get("attention_count") or 0)
+    recognized_names = _recognized_names_for_display(snapshot)
 
     if faces <= 0:
         label = "Not Detected"
@@ -91,11 +92,33 @@ def _attention_display_state(snapshot: dict[str, Any]) -> AttentionDisplayState:
     else:
         label = "Detected | Non-Attentive"
 
+    lines = [label]
+    if faces > 0 and recognized_names:
+        lines.append(f"recognized: {', '.join(recognized_names)}")
+
     return AttentionDisplayState(
         status=status,
-        text=label,
-        signature=(label,),
+        text="\n".join(lines),
+        signature=(label, tuple(recognized_names)),
     )
+
+
+def _recognized_names_for_display(snapshot: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("primary_attention_name", "primary_face_name"):
+        rendered = str(snapshot.get(key) or "").strip()
+        if rendered:
+            candidates.append(rendered)
+    for name in snapshot.get("recognized_names") or ():
+        rendered = str(name or "").strip()
+        if rendered:
+            candidates.append(rendered)
+
+    unique_names: list[str] = []
+    for name in candidates:
+        if name not in unique_names:
+            unique_names.append(name)
+    return unique_names
 
 
 def _disable_attention_smoothing(service: Any) -> bool:
