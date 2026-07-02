@@ -152,6 +152,28 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.realtime.admission.open_on_interaction_states == ("alert",)
 
 
+def test_navigation_profile_extends_static_interaction_capabilities():
+    profile = load_scenario_profile("navigation")
+
+    assert profile.name == "navigation"
+    assert profile.manifest_id == "navigation"
+    assert profile.realtime.prompt_file == "navigation_prompt.md"
+    assert profile.navigation.locations_file == "lab.json"
+
+    assert "motion.move_robot" in profile.tools.enabled_tool_ids
+    assert "vision.capture_scene" in profile.tools.enabled_tool_ids
+    assert "identity.enroll_visible_person" in profile.tools.enabled_tool_ids
+    assert "identity.resolve_employee_identity" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_to_location" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_relative" in profile.tools.enabled_tool_ids
+    assert "dock.charging" in profile.tools.enabled_tool_ids
+
+    assert profile.employee_directory.enabled is True
+    assert profile.face_recognition.enabled is True
+    assert profile.speaker_recognition.enabled is True
+    assert profile.realtime.admission.open_on_attention_presence is True
+
+
 def test_display_can_be_disabled_even_when_manifest_has_display_resource():
     profile = _parse_profile(
         {
