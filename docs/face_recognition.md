@@ -365,7 +365,7 @@ At audio commit, the queued turn carries:
 turn started." If the scene is ambiguous, it is `None`.
 
 `owner_id` means "the resolved owner of this spoken turn." This is the id used
-for live-chat preference extraction and `MemoryStore` ownership.
+for Tailwag realtime episode participants and person-context lookup.
 
 Turn prompt person context is also tied to `owner_id`. When `owner_id` is not
 resolved, the runtime does not include visible recognized people as
@@ -449,7 +449,7 @@ camera treat a person standing around two meters back differently from a close
 webcam-like face crop. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
-presence snapshot keeps the old face fields and adds:
+presence snapshot includes:
 
 - `attention_status`
 - `attention_count`

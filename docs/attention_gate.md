@@ -173,7 +173,7 @@ VAD/silence controls when active recording ends
 
 Wake word and selected interaction states can also open admission depending on
 profile settings. In the static interaction profile, `alert` can open admission
-by state, while `cooldown` no longer opens the mic by itself; a cooldown
+by state, while `cooldown` does not open the mic by itself; a cooldown
 follow-up still needs attention or wake word.
 
 ## Why This Design

@@ -60,7 +60,7 @@ successful face enrollment
 | `argos_src/speaker_recognition/backend.py` | SpeechBrain ECAPA backend wrapper. |
 | `argos_src/identity/embeddings/speaker_store.py` | Persistent ChromaDB storage for one voice reference embedding per `person_id`. |
 | `argos_src/identity/store.py` | Shared identity store used after speaker ownership resolves. |
-| `argos_src/memory/store.py` | Source-aware social/context memory store keyed by `person_id` or site. |
+| `argos_src/memory_provider/` | Tailwag-backed social/context memory provider keyed by Argos `person_id`. |
 | `argos_src/speaker_recognition/manage_voice.py` | CLI for listing and showing saved voice references. |
 
 ## Query Flow

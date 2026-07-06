@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import os
 from pathlib import Path
@@ -105,6 +105,7 @@ def connect_snowflake_from_env() -> Any:
 def load_directory_records_by_site(
     site_codes: list[str] | tuple[str, ...],
     *,
+    email_domain: str = "",
     env_loader: Callable[[], None] = load_env_file,
     connector_factory: Callable[[], Any] = connect_snowflake_from_env,
 ) -> dict[str, list["EmployeeRecord"]]:
@@ -119,7 +120,8 @@ def load_directory_records_by_site(
                 cursor.execute(EMPLOYEE_DIRECTORY_SQL, (site_code,))
                 rows = cursor.fetchall()
                 records_by_site[site_code] = [
-                    EmployeeRecord.from_row(tuple(row)) for row in rows
+                    EmployeeRecord.from_row(tuple(row), email_domain=email_domain)
+                    for row in rows
                 ]
         return records_by_site
     finally:
@@ -139,6 +141,20 @@ def _token_sort_key(value: str) -> str:
     if not normalized:
         return ""
     return " ".join(sorted(normalized.split()))
+
+
+def employee_email_from_username(username: str, email_domain: str) -> str:
+    """Return a normalized employee email derived from username and domain."""
+    cleaned_username = str(username or "").strip().lower()
+    if not cleaned_username:
+        return ""
+    if "@" in cleaned_username:
+        return cleaned_username
+
+    cleaned_domain = str(email_domain or "").strip().lower().lstrip("@")
+    if not cleaned_domain:
+        return ""
+    return f"{cleaned_username}@{cleaned_domain}"
 
 
 def _query_name_parts(value: str) -> tuple[str, str]:
@@ -203,20 +219,27 @@ class EmployeeRecord:
     tenure: str
     normalized_name: str
     token_sorted_name: str
+    employee_email: str = ""
 
     @classmethod
-    def from_row(cls, row: tuple[Any, ...]) -> "EmployeeRecord":
+    def from_row(
+        cls,
+        row: tuple[Any, ...],
+        *,
+        email_domain: str = "",
+    ) -> "EmployeeRecord":
         def _value(index: int) -> str:
             if index >= len(row):
                 return ""
             return str(row[index] or "").strip()
 
         official_name = _value(0)
+        username = _value(3)
         normalized_name = _normalize_name(official_name)
         return cls(
             official_name=official_name,
             employee_name=official_name,
-            username=_value(3),
+            username=username,
             business_title=_value(1),
             job_family=_value(4),
             job_family_group=_value(5),
@@ -229,6 +252,7 @@ class EmployeeRecord:
             tenure=_value(2),
             normalized_name=normalized_name,
             token_sorted_name=_token_sort_key(official_name),
+            employee_email=employee_email_from_username(username, email_domain),
         )
 
 
@@ -245,10 +269,12 @@ class EmployeeDirectoryService:
         self,
         *,
         site_code: str,
+        email_domain: str = "",
         env_loader: Callable[[], None] = load_env_file,
         connector_factory: Callable[[], Any] = connect_snowflake_from_env,
     ) -> None:
         self.site_code = str(site_code or "").strip()
+        self.email_domain = str(email_domain or "").strip()
         self._env_loader = env_loader
         self._connector_factory = connector_factory
         self._records: list[EmployeeRecord] = []
@@ -302,19 +328,31 @@ class EmployeeDirectoryService:
 
     def set_loaded_records(self, records: list[EmployeeRecord]) -> list[EmployeeRecord]:
         """Hydrate the in-memory directory cache with preloaded employee records."""
+        hydrated_records = [
+            record
+            if record.employee_email
+            else replace(
+                record,
+                employee_email=employee_email_from_username(
+                    record.username,
+                    self.email_domain,
+                ),
+            )
+            for record in records
+        ]
         normalized_name_index: dict[str, list[EmployeeRecord]] = defaultdict(list)
         token_sorted_name_index: dict[str, list[EmployeeRecord]] = defaultdict(list)
-        for record in records:
+        for record in hydrated_records:
             normalized_name_index[record.normalized_name].append(record)
             token_sorted_name_index[record.token_sorted_name].append(record)
         with self._lock:
-            self._records = records
+            self._records = hydrated_records
             self._normalized_name_index = dict(normalized_name_index)
             self._token_sorted_name_index = dict(token_sorted_name_index)
             self._last_error = ""
             self._ready.set()
             self._warmup_finished.set()
-        return records
+        return hydrated_records
 
     def mark_load_failed(self, error: str) -> None:
         """Mark the directory as unavailable after a load failure."""
@@ -486,7 +524,10 @@ class EmployeeDirectoryService:
                 rows = cursor.fetchall()
         finally:
             connection.close()
-        return [EmployeeRecord.from_row(tuple(row)) for row in rows]
+        return [
+            EmployeeRecord.from_row(tuple(row), email_domain=self.email_domain)
+            for row in rows
+        ]
 
     def _score_candidates(
         self,
@@ -624,6 +665,7 @@ class EmployeeDirectoryService:
             "official_name": record.official_name,
             "employee_name": record.employee_name,
             "username": record.username,
+            "employee_email": record.employee_email,
             "business_title": record.business_title,
             "job_family": record.job_family,
             "job_family_group": record.job_family_group,

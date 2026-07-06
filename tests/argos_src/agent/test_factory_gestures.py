@@ -47,6 +47,7 @@ def _load_factory_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
 
     tools_mod = types.ModuleType("argos_src.tools")
+    tools_mod.MEMORY_TOOL_NAMES = ()
     tools_mod.NAVIGATION_TOOL_NAMES = ()
     tools_mod.build_builtin_tools = lambda **_kwargs: []
     tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
@@ -220,8 +221,9 @@ def test_factory_startup_does_not_block_when_employee_directory_warmup_fails(mon
             return None
 
     class _FailingEmployeeDirectoryService:
-        def __init__(self, *, site_code):
+        def __init__(self, *, site_code, email_domain=""):
             self.site_code = site_code
+            self.email_domain = email_domain
             self.started = False
             self.stopped = False
             created_services.append(self)
@@ -263,6 +265,7 @@ def test_factory_startup_does_not_block_when_employee_directory_warmup_fails(mon
             "employee_directory": {
                 "enabled": True,
                 "site_code": "BOS3",
+                "email_domain": "chewy.com",
             },
             "battery": {
                 "enabled": False,
@@ -282,4 +285,5 @@ def test_factory_startup_does_not_block_when_employee_directory_warmup_fails(mon
 
     assert isinstance(agent, _FakeRealtimeRobotAgent)
     assert created_services and created_services[0].started is True
+    assert created_services[0].email_domain == "chewy.com"
     assert agent.kwargs["employee_directory_service"] is created_services[0]

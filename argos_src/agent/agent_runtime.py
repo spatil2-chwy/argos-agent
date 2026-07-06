@@ -376,7 +376,14 @@ class RealtimeRobotAgent(
             try:
                 self.slack_memory_service.shutdown()
             except Exception:
-                self.logger.exception("Failed to stop Slack memory service cleanly")
+                self.logger.exception("Failed to stop Tailwag Slack memory service cleanly")
+        if getattr(self, "memory_context_compiler", None) is not None:
+            try:
+                close_memory = getattr(self.memory_context_compiler, "close", None)
+                if callable(close_memory):
+                    close_memory()
+            except Exception:
+                self.logger.exception("Failed to stop memory provider cleanly")
         if getattr(self, "battery_cache", None) is not None:
             try:
                 shutdown_battery = getattr(self.battery_cache, "shutdown", None)
@@ -463,6 +470,14 @@ class RealtimeRobotAgent(
         self._retry_ready_preference_turns()
         completed_segment = self._preference_segments.flush_active()
         if completed_segment is None:
+            if reason in {"idle_timeout", "shutdown"}:
+                finish_episode = getattr(
+                    self.preference_extractor,
+                    "finish_active_episode",
+                    None,
+                )
+                if callable(finish_episode):
+                    finish_episode(reason=reason)
             return
         self._schedule_preference_segment_extraction(completed_segment, reason=reason)
 

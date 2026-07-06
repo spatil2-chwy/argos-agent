@@ -20,6 +20,10 @@ def test_capability_style_tool_ids_resolve_for_go2():
         "embodiment.unitree_go2.hello",
         robot_family="unitree_go2",
     ) == "go2_hello"
+    assert resolve_builtin_tool_name(
+        "memory.search_semantic",
+        robot_family="unitree_go2",
+    ) == "search_memory_semantic"
 
 
 def test_capability_style_posture_ids_resolve_for_spot():
@@ -27,6 +31,10 @@ def test_capability_style_posture_ids_resolve_for_spot():
     assert resolve_builtin_tool_name("posture.self_right", robot_family="spot") == (
         "spot_self_right"
     )
+    assert resolve_builtin_tool_name(
+        "memory.search_semantic",
+        robot_family="spot",
+    ) == "search_memory_semantic"
 
 
 def test_old_tool_ids_are_rejected():
@@ -58,3 +66,7 @@ def test_required_capabilities_for_common_tool_ids():
         "posture.stand",
         robot_family="unitree_go2",
     ) == ("posture.command",)
+    assert required_capability_ids_for_tool_id(
+        "memory.search_semantic",
+        robot_family="unitree_go2",
+    ) == ()

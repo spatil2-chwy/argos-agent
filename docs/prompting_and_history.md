@@ -105,9 +105,9 @@ even if a recognized person is visible. This avoids addressing a visible
 bystander as the speaker when someone else talks off-camera or speaker
 recognition is inconclusive.
 
-Those lines are compiled from `MemoryStore` by `MemoryContextCompiler`. The
-memory extractor writes future-facing summaries so the realtime model can use
-them without seeing the original conversation.
+Those lines come from `TailwagMemoryProvider.person_context(...)`. Tailwag
+writes future-facing summaries so the realtime model can use them without seeing
+the original conversation.
 
 Two important design choices are hiding here.
 
@@ -305,10 +305,10 @@ Examples:
 - one function call
 - one function-call output
 
-Argos no longer applies a fixed item-count tail limit. History is instead scoped
-to the current resolved owner: consecutive turns from the same `owner_id` keep
-their Realtime conversation context, and a resolved owner handoff clears older
-conversation items before the new owner's response.
+Conversation history is scoped to the current resolved owner. Consecutive turns
+from the same `owner_id` keep their Realtime conversation context, and a
+resolved owner handoff clears older conversation items before the new owner's
+response.
 
 ## How Conversation History Is Tracked
 
@@ -349,7 +349,7 @@ These transcripts are used for:
 
 - observability
 - debugging
-- preference extraction / MemoryStore writes
+- Tailwag realtime episode ingestion
 
 They are not inserted as separate extra history items.
 

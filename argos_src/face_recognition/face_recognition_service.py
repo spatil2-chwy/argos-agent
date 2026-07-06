@@ -36,7 +36,7 @@ from argos_src.face_recognition.presence_cache import FacePresenceCache
 from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyze_face_scene
 from argos_src.face_recognition.store import FaceRecognitionStore
 from argos_src.identity.prompting import format_identity_profile_lines
-from argos_src.memory.encounters import build_encounter_metadata
+from argos_src.memory_provider.encounters import build_encounter_metadata
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error

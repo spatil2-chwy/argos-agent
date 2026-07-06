@@ -1,13 +1,11 @@
-name: static_interaction
+name: cody_interaction
 
-manifest: puffle
+manifest: cody
 
 resources:
   primary_robot: base
-  face_camera: arducam_001
-  scene_camera: arducam_001
-  # face_camera: realsense_001
-  # scene_camera: realsense_001
+  face_camera: realsense_002
+  scene_camera: realsense_002
   interaction_display: screen_001
 
 display:
@@ -25,6 +23,7 @@ tools:
     - posture.sit
     - embodiment.unitree_go2.hello
     - embodiment.unitree_go2.stretch
+    - embodiment.unitree_go2.content
     - embodiment.unitree_go2.bow_down
     - embodiment.unitree_go2.look_up
     - embodiment.unitree_go2.left_tilt
@@ -33,6 +32,7 @@ tools:
     - vision.capture_scene
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
+    - memory.search_semantic
 
 employee_directory:
   enabled: true
@@ -80,17 +80,13 @@ slack_memory:
 face_recognition:
   enabled: true
   db_path: var/face_recognition
-  loop_interval_sec: 0.05
+  loop_interval_sec: 0.5
   recognition_threshold: 0.6
-  recognition_margin_threshold: 0.20
-  recognition_stability:
-    window_frames: 5
-    min_hits: 2
   live_image_enabled: false
   owner_turn:
     enabled: true
-    camera_yaw_offset_rad: -0.06981317
-    deadband_deg: 4.5
+    camera_yaw_offset_rad: 0.0
+    deadband_deg: 3.0
     turn_gain: 0.8
     max_turn_deg: 25.0
     angular_speed_rad_s: 0.8
@@ -98,8 +94,8 @@ face_recognition:
     delay_after_recording_sec: 0.05
     odom_frame: odom
     robot_frame: base_link
-    yaw_tolerance_deg: 2.5
-    max_duration_sec: 2.5
+    yaw_tolerance_deg: 1.5
+    max_duration_sec: 1.5
     slow_zone_deg: 8.0
     min_angular_speed_rad_s: 0.25
   depth_gate:
@@ -112,19 +108,25 @@ face_recognition:
     patch_size: 3
     search_radius_px: 12
     max_valid_depth_m: 10.0
-  enrollment_policy:
-    min_face_area: 1300
-    min_brightness: 35.0
-    max_brightness: 220.0
-    min_contrast: 15.5
-    min_embedding_similarity: 0.70
   attention_gate:
-    enabled: true
-    min_face_area: 1300
-    max_abs_yaw_deg: 20.0
-    max_abs_pitch_deg: 18.0
-    max_abs_roll_deg: 90.0
-    min_abs_pitch_deg: 0.0
+    enabled: false
+    min_face_area: 700
+    min_face_area_ratio: 0.00035
+    max_abs_yaw_deg: 25.0
+    max_abs_pitch_deg: 22.0
+    max_abs_roll_deg: 35.0
+    distant_max_abs_yaw_deg: 18.0
+    distant_max_abs_pitch_deg: 32.0
+    distant_max_abs_roll_deg: 28.0
+    near_face_area_ratio: 0.035
+    distant_face_area_ratio: 0.010
+    near_depth_m: 0.8
+    distant_depth_m: 2.0
+    max_center_offset_ratio: 0.70
+    min_confidence: 0.55
+    smoothing_window_sec: 1.0
+    min_attentive_observations: 2
+    hold_sec: 0.8
   preference_extraction:
     enabled: true
   proactive_greeting:
@@ -136,9 +138,12 @@ face_recognition:
 
 speaker_recognition:
   enabled: true
-  query_match_threshold: 0.40
-  query_margin_threshold: 0.20
+  query_min_voiced_sec: 0.8
+  query_match_threshold: 0.60
+  query_margin_threshold: 0.08
   reference_update_threshold: 0.55
+  enroll_min_voiced_sec: 2.0
+  enroll_min_rms_level: 350.0
   max_clipped_fraction: 0.02
   explicit_prompt_after_silent_failures: 2
 
