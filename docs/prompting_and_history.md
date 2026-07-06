@@ -82,7 +82,8 @@ Every `response.create` carries fresh instructions from `_build_turn_instruction
 
 The runtime currently builds these blocks:
 
-- `[PEOPLE IN VIEW]`
+- `[PERSON SPEAKING TO YOU]`, only when `owner_id` is resolved
+- `[OTHER PEOPLE IN VIEW]`, only alongside a resolved owner and only as names/counts
 - `[CURRENT TIME]`
 - `[CURRENT OFFICE LOCATION]`
 - `[OFFICE CONTEXT]`
@@ -91,16 +92,22 @@ The runtime currently builds these blocks:
 - battery prompt block
 - `[SAVED LOCATIONS]`
 
-`[PEOPLE IN VIEW]` may include memory projections for recognized people:
+`[PERSON SPEAKING TO YOU]` may include memory projections for the resolved
+turn owner:
 
 - `About`: durable social memory such as preferences, boundaries, pets, facts,
   and capped notes.
 - `Potential Followups`: due, unexpired short-lived check-ins such as trips,
   visits, recoveries, or deadlines.
 
-Those lines are compiled from `MemoryStore` by `MemoryContextCompiler`. The
-memory extractor writes future-facing summaries so the realtime model can use
-them without seeing the original conversation.
+If `owner_id` is not resolved, no person-specific prompt context is emitted,
+even if a recognized person is visible. This avoids addressing a visible
+bystander as the speaker when someone else talks off-camera or speaker
+recognition is inconclusive.
+
+Those lines come from `TailwagMemoryProvider.person_context(...)`. Tailwag
+writes future-facing summaries so the realtime model can use them without seeing
+the original conversation.
 
 Two important design choices are hiding here.
 
@@ -108,13 +115,15 @@ Two important design choices are hiding here.
 
 When a turn is created, the runtime captures a `FrozenTurnContext` snapshot:
 
-- cached recognized people
-- face presence snapshot
+- cached recognized people and face presence snapshot, used only after an owner
+  is resolved for prompt context
 - `primary_face_person_id`, when the speech-start scene has exactly one usable recognized face
 - `audio_speaker_id`, when voice matching resolves a known speaker
 - `owner_id`, the final person id used by memory and person-context lookup
 
-That means owner/person context and social scene stay tied to the moment the turn was created, even if face recognition changes a moment later.
+That means owner/person context stays tied to the resolved turn owner. Visible
+people who are not the owner are only listed as lightweight names under
+`[OTHER PEOPLE IN VIEW]`.
 
 ### Robot state is partly regenerated at response time
 
@@ -300,10 +309,10 @@ Examples:
 - one function call
 - one function-call output
 
-Argos no longer applies a fixed item-count tail limit. History is instead scoped
-to the current resolved owner: consecutive turns from the same `owner_id` keep
-their Realtime conversation context, and a resolved owner handoff clears older
-conversation items before the new owner's response.
+Conversation history is scoped to the current resolved owner. Consecutive turns
+from the same `owner_id` keep their Realtime conversation context, and a
+resolved owner handoff clears older conversation items before the new owner's
+response.
 
 ## How Conversation History Is Tracked
 
@@ -344,7 +353,7 @@ These transcripts are used for:
 
 - observability
 - debugging
-- preference extraction / MemoryStore writes
+- Tailwag realtime episode ingestion
 
 They are not inserted as separate extra history items.
 

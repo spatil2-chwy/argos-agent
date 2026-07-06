@@ -521,7 +521,6 @@ def _run_recognize(args: argparse.Namespace) -> int:
                 raw_vad_frames=raw_vad_frames,
                 trimmed_vad_frames=trimmed_vad_frames,
                 capture_vad_positive_blocks=int(capture.get("vad_positive_blocks", 0) or 0),
-                query_safe=bool((attempt_diagnostics.get("query_gate") or {}).get("accepted")),
                 top_score=float(decision_inputs.get("top_score", 0.0) or 0.0),
                 reference_count=int(decision_inputs.get("reference_count", 0) or 0),
             )
@@ -548,7 +547,6 @@ def _run_recognize(args: argparse.Namespace) -> int:
                         "runner_up_score": resolution.get("runner_up_score"),
                         "margin": resolution.get("margin"),
                         "scored_matches": payload.get("scored_matches", []),
-                        "query_gate": payload.get("query_gate"),
                         "diagnostics": payload.get("diagnostics"),
                     }
                 },

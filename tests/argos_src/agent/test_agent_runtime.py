@@ -1,6 +1,7 @@
 import logging
 from collections import deque
 import importlib
+from pathlib import Path
 import queue
 from types import SimpleNamespace
 import threading
@@ -11,6 +12,7 @@ import types
 from argos_src.agent.runtime_context import (
     format_people_context,
 )
+from argos_src.observability.observability import get_request_context
 from argos_src.speaker_recognition.models import (
     SpeakerRecognitionPolicy,
     SpeakerResolutionResult,
@@ -117,6 +119,270 @@ class _FakeTool:
 
     def invoke(self, arguments):
         return {"success": True, "arguments": arguments}
+
+
+def _parse_factory_profile(payload):
+    from argos_src.profile_config import _parse_profile as _raw_parse_profile
+
+    merged = {"manifest": "puffle"}
+    merged.update(payload)
+    return _raw_parse_profile(
+        merged,
+        profile_path=Path(f"/tmp/{merged['name']}.yaml"),
+        framework_config={},
+    )
+
+
+def _load_factory_for_memory_tests(monkeypatch, *, created):
+    monkeypatch.delitem(sys.modules, "argos_src.agent.factory", raising=False)
+
+    class _FakeRealtimeRobotAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.owner_turn_controller = kwargs.get("owner_turn_controller")
+
+        def is_recording_active(self):
+            return False
+
+        def update_face_presence_snapshot(self, snapshot):
+            return None
+
+        def shutdown(self):
+            return None
+
+    class _FakeEngagementStateMachine:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def attach_coalescer(self, coalescer):
+            self.coalescer = coalescer
+
+        def attach_battery_low_submitter(self, submitter):
+            self.battery_low_submitter = submitter
+
+        def attach_recording_state_provider(self, provider):
+            self.recording_state_provider = provider
+
+        def shutdown(self):
+            return None
+
+    class _FakeEventCoalescer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def submit(self, *args, **kwargs):
+            return None
+
+    class _FakeTailwagMemoryProvider:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.retention_class = kwargs["retention_class"]
+            created["memory_providers"].append(self)
+
+        def close(self):
+            return None
+
+    class _FakeTailwagSlackMemoryService:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            created["slack_services"].append(self)
+
+        def start_background(self):
+            self.started = True
+
+        def shutdown(self):
+            return None
+
+    class _FakeIdentityStore:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created["identity_stores"].append(self)
+
+    class _FakeFaceRecognitionService:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.start_calls = []
+            created["face_services"].append(self)
+
+        def start_loop(self, **kwargs):
+            self.start_calls.append(kwargs)
+
+    class _FakeFaceEnrollmentPolicy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _FakeFaceRecognitionStabilitySettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _FakeNavigationPolicy:
+        def __init__(
+            self,
+            *,
+            source,
+            interruptible=True,
+            passive_listen_allowed=True,
+        ):
+            self.source = source
+            self.interruptible = interruptible
+            self.passive_listen_allowed = passive_listen_allowed
+
+    class _FakeNavigationState:
+        def __init__(self, store):
+            self.store = store
+
+        def get_patrol(self):
+            return {}
+
+        def get_active_goal(self):
+            return None
+
+    class _FakeFaceEventBridge:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            created["face_event_bridges"].append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            return None
+
+    class _FakePatrolLoopBridge:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def on_nav_event(self, event):
+            return None
+
+    realtime_stub = types.ModuleType("argos_src.agent.agent_runtime")
+    realtime_stub.RealtimeRobotAgent = _FakeRealtimeRobotAgent
+    monkeypatch.setitem(sys.modules, "argos_src.agent.agent_runtime", realtime_stub)
+
+    prompt_loader_mod = types.ModuleType("argos_src.resource_paths")
+    prompt_loader_mod.load_system_prompt = lambda *_args, **_kwargs: "prompt"
+    monkeypatch.setitem(sys.modules, "argos_src.resource_paths", prompt_loader_mod)
+
+    battery_mod = types.ModuleType("argos_src.runtime.battery_state")
+    battery_mod.BatteryStateCache = object
+    battery_mod.LOW_BATTERY_NAVIGATION_MSG = "Battery is low. Cannot navigate."
+    monkeypatch.setitem(sys.modules, "argos_src.runtime.battery_state", battery_mod)
+
+    nav_mod = types.ModuleType("argos_src.nav_support.locations")
+    nav_mod.LocationStore = lambda **kwargs: SimpleNamespace(kwargs=kwargs)
+    nav_mod.CHARGE_DOCK_LOCATION_NAME = "charge_dock"
+    nav_mod.NavigationPolicy = _FakeNavigationPolicy
+    nav_mod.INTERRUPTIBLE_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="general_navigation"
+    )
+    nav_mod.FOCUSED_NAVIGATION_POLICY = _FakeNavigationPolicy(
+        source="human_task",
+        interruptible=False,
+        passive_listen_allowed=False,
+    )
+    nav_mod.NavigationState = _FakeNavigationState
+    monkeypatch.setitem(sys.modules, "argos_src.nav_support.locations", nav_mod)
+
+    tools_mod = types.ModuleType("argos_src.tools")
+    tools_mod.__path__ = []
+    tools_mod.MEMORY_TOOL_NAMES = (
+        "search_memory_semantic",
+    )
+    tools_mod.NAVIGATION_TOOL_NAMES = ()
+    def _fake_build_builtin_tools(**kwargs):
+        created.setdefault("build_builtin_tools_kwargs", []).append(kwargs)
+        return []
+
+    def _fake_resolve_builtin_tool_name(name, **_kwargs):
+        if name == "memory.search_semantic":
+            return "search_memory_semantic"
+        return name
+
+    tools_mod.build_builtin_tools = _fake_build_builtin_tools
+    tools_mod.build_knowledge_tools = lambda *_args, **_kwargs: []
+    tools_mod.resolve_builtin_tool_name = _fake_resolve_builtin_tool_name
+    tools_mod.resolve_builtin_tool_names = lambda names, **kwargs: tuple(
+        _fake_resolve_builtin_tool_name(name, **kwargs) for name in names
+    )
+    monkeypatch.setitem(sys.modules, "argos_src.tools", tools_mod)
+    unitree_tools_mod = types.ModuleType("argos_src.tools.unitree_go2")
+    unitree_tools_mod.__path__ = []
+    navigation_tools_mod = types.ModuleType("argos_src.tools.unitree_go2.navigation")
+    navigation_tools_mod.__path__ = []
+    navigation_toolset_mod = types.ModuleType(
+        "argos_src.tools.unitree_go2.navigation.toolset"
+    )
+    navigation_toolset_mod.process_navigation_event = lambda **_kwargs: None
+    monkeypatch.setitem(sys.modules, "argos_src.tools.unitree_go2", unitree_tools_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.tools.unitree_go2.navigation",
+        navigation_tools_mod,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.tools.unitree_go2.navigation.toolset",
+        navigation_toolset_mod,
+    )
+
+    bridges_mod = types.ModuleType("argos_src.agent.bridges")
+    bridges_mod.FaceEventBridge = _FakeFaceEventBridge
+    bridges_mod.PatrolLoopBridge = _FakePatrolLoopBridge
+    monkeypatch.setitem(sys.modules, "argos_src.agent.bridges", bridges_mod)
+
+    startup_mod = types.ModuleType("argos_src.agent.startup")
+    startup_mod.derive_initial_robot_posture = lambda **_kwargs: "standing"
+    startup_mod.prepare_robot_for_agent_session = lambda *_args, **_kwargs: []
+    monkeypatch.setitem(sys.modules, "argos_src.agent.startup", startup_mod)
+
+    memory_provider_mod = types.ModuleType("argos_src.memory_provider")
+    memory_provider_mod.TailwagMemoryProvider = _FakeTailwagMemoryProvider
+    memory_provider_mod.TailwagSlackMemoryService = _FakeTailwagSlackMemoryService
+    monkeypatch.setitem(sys.modules, "argos_src.memory_provider", memory_provider_mod)
+
+    identity_mod = types.ModuleType("argos_src.identity")
+    identity_mod.IdentityStore = _FakeIdentityStore
+    monkeypatch.setitem(sys.modules, "argos_src.identity", identity_mod)
+
+    attention_mod = types.ModuleType("argos_src.face_recognition.attention_gate")
+    attention_mod.AttentionGateSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    attention_mod.AttentionSmoothingSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.face_recognition.attention_gate",
+        attention_mod,
+    )
+
+    depth_mod = types.ModuleType("argos_src.face_recognition.depth_gate")
+    depth_mod.DepthGateSettings = lambda **kwargs: SimpleNamespace(**kwargs)
+    monkeypatch.setitem(sys.modules, "argos_src.face_recognition.depth_gate", depth_mod)
+
+    face_service_mod = types.ModuleType(
+        "argos_src.face_recognition.face_recognition_service"
+    )
+    face_service_mod.FaceEnrollmentPolicy = _FakeFaceEnrollmentPolicy
+    face_service_mod.FaceRecognitionStabilitySettings = (
+        _FakeFaceRecognitionStabilitySettings
+    )
+    face_service_mod.FaceRecognitionService = _FakeFaceRecognitionService
+    monkeypatch.setitem(
+        sys.modules,
+        "argos_src.face_recognition.face_recognition_service",
+        face_service_mod,
+    )
+
+    factory_mod = importlib.import_module("argos_src.agent.factory")
+    monkeypatch.setattr(
+        factory_mod,
+        "create_provider_client",
+        lambda **_kwargs: SimpleNamespace(shutdown=lambda: None),
+    )
+    monkeypatch.setattr(factory_mod, "RealtimeRobotAgent", _FakeRealtimeRobotAgent)
+    monkeypatch.setattr(factory_mod, "EngagementStateMachine", _FakeEngagementStateMachine)
+    monkeypatch.setattr(factory_mod, "EventCoalescer", _FakeEventCoalescer)
+    return factory_mod
 
 
 class _FakeGestureRuntime:
@@ -227,7 +493,7 @@ class _FakeSpeakerService:
         else:
             result = VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_clipped",
                 person_id=str(person_id or "").strip(),
                 attempt_kind=attempt_kind,
             )
@@ -512,6 +778,37 @@ def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     assert followups == [turn.req_id]
     assert owner_turn.cancellations == []
 
+def test_tool_invocation_context_includes_owner_id():
+    agent = _make_agent()
+    seen = {}
+
+    class _ContextTool:
+        name = "context_tool"
+
+        def invoke(self, _arguments):
+            seen.update(get_request_context())
+            return {"success": True}
+
+    agent._tool_registry = {"context_tool": _ContextTool()}
+    turn = _make_turn("rt-owner-tool", owner_id="person-owner", owner_source="audio")
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-owner"}
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._send_response_create = lambda _turn: None
+
+    agent._execute_tool_call(
+        realtime_mod.PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-owner",
+            tool_name="context_tool",
+            arguments_json="{}",
+        )
+    )
+
+    assert seen["owner_id"] == "person-owner"
+    assert seen["owner_source"] == "audio"
+
+
 def test_recording_hooks_update_gesture_runtime():
     agent = _make_agent()
 
@@ -736,7 +1033,7 @@ def test_owner_turn_is_requested_when_audio_turn_commits():
     assert owner_turn.requests[0]["owner_source"] == "face"
 
 
-def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
+def test_audio_turn_uses_raw_speaker_audio_without_trim_pass():
     agent = _make_agent()
     agent.speaker_service = _FakeSpeakerService()
     agent._vad = object()
@@ -750,8 +1047,8 @@ def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
         speech_end_unix_s=2.0,
     )
 
-    assert len(agent.speaker_service.trim_calls) == 1
-    assert agent.speaker_service.trim_calls[0]["vad"] is None
+    assert agent.speaker_service.trim_calls == []
+    assert agent.speaker_service.resolve_calls[0]["audio_pcm16"] == b"\x01\x02"
 
 
 def test_output_audio_does_not_request_duplicate_owner_turn():
@@ -1589,6 +1886,58 @@ def test_stale_cooldown_admission_does_not_override_idle_display():
     assert display_modes == []
 
 
+def test_closed_admission_clears_passive_alert_display():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent.realtime_profile.wake_window_sec = 5.0
+    agent.realtime_profile.admission = SimpleNamespace(
+        block_during_speaking=True,
+        block_during_engaged=False,
+        open_on_face_presence=False,
+        open_on_attention_presence=True,
+        open_on_interaction_states=("alert",),
+        open_on_wake_window=False,
+    )
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._wake_window_until = 0.0
+    agent._recording_active = False
+    agent._recording_started_at = 0.0
+    agent._last_voice_at = 0.0
+    agent._face_gate = SimpleNamespace(
+        is_face_present=lambda: False,
+        is_attention_present=lambda: False,
+    )
+    agent._vad = lambda *_args, **_kwargs: (False, {})
+    agent._wake_word = lambda *_args, **_kwargs: (False, {})
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "alert"
+
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert agent._display_queue.get_nowait() == ("mode", "idle")
+    assert agent._display_mode == "idle"
+
+
+def test_closed_admission_does_not_clear_thinking_display():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "thinking"
+
+    agent._clear_passive_alert_display_if_needed()
+
+    assert agent._display_queue.empty()
+    assert agent._display_mode == "thinking"
+
+
 def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():
     agent = _make_agent()
     seen = []
@@ -1799,6 +2148,180 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
     assert bob.preferred_language == "language-person-2"
 
 
+def test_capture_turn_context_continues_without_memory_when_tailwag_fails():
+    agent = _make_agent()
+    agent._current_office_location = "BOS3"
+    log_messages = []
+    agent.logger = SimpleNamespace(
+        exception=lambda message, *args: log_messages.append(message % args),
+    )
+
+    class _FailingMemoryCompiler:
+        def person_context(self, *_args, **_kwargs):
+            raise RuntimeError("tailwag unavailable")
+
+        def site_blocks(self, *_args, **_kwargs):
+            raise RuntimeError("tailwag unavailable")
+
+    agent.memory_context_compiler = _FailingMemoryCompiler()
+    agent.face_service = _FakeFaceService(
+        persons=[
+            SimpleNamespace(
+                person_id="person-1",
+                name="Alice",
+                interaction_count=2,
+                confidence=0.93,
+                bbox_area=20,
+                timestamp=100.0,
+                directory_profile_lines=("title: Engineer",),
+                memory_profile_lines=("local fallback memory",),
+                potential_followups=("local fallback followup",),
+                preferred_language="",
+                visible=True,
+            ),
+        ],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+
+    context = agent._capture_turn_context(
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        owner_source="face",
+        speaker_visible=True,
+    )
+
+    assert context.memory_context_blocks == ()
+    assert len(context.persons) == 1
+    assert context.persons[0].memory_profile_lines == ("local fallback memory",)
+    assert context.persons[0].potential_followups == ("local fallback followup",)
+    assert "Failed to compile site memory context" in log_messages
+    assert "Failed to compile memory context for person-1" in log_messages
+
+
+def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-factory-wiring",
+            "memory": {
+                "enabled": True,
+                "retention_class": "priority",
+                "place_room_id": "lab",
+                "extract_live_turn_memory": False,
+            },
+            "slack_memory": {
+                "enabled": True,
+                "start_with_agent": True,
+                "channels": [{"name": "argos-test", "channel_id": "C123"}],
+            },
+            "face_recognition": {
+                "enabled": True,
+                "preference_extraction": {"enabled": True},
+            },
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert len(created["memory_providers"]) == 1
+    provider = created["memory_providers"][0]
+    assert provider.kwargs == {
+        "site_code": "",
+        "place_room_id": "lab",
+        "retention_class": "priority",
+        "extract_live_turn_memory": False,
+    }
+    assert agent.kwargs["memory_context_compiler"] is provider
+    assert agent.kwargs["preference_extractor"] is provider
+    assert agent.kwargs["preference_extraction_enabled"] is True
+    assert len(created["face_services"]) == 1
+    assert created["face_services"][0].kwargs["memory_store"] is provider
+    assert len(created["slack_services"]) == 1
+    assert created["slack_services"][0].kwargs["episode_recorder"] is provider
+    assert created["slack_services"][0].started is True
+    assert agent.kwargs["slack_memory_service"] is created["slack_services"][0]
+
+
+def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-factory-memory-disabled",
+            "memory": {"enabled": False},
+            "face_recognition": {
+                "enabled": True,
+                "preference_extraction": {"enabled": True},
+            },
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert created["memory_providers"] == []
+    assert created["slack_services"] == []
+    assert agent.kwargs["memory_context_compiler"] is None
+    assert agent.kwargs["preference_extractor"] is None
+    assert agent.kwargs["preference_extraction_enabled"] is True
+    assert len(created["face_services"]) == 1
+    assert created["face_services"][0].kwargs["memory_store"] is None
+
+
+def test_factory_memory_query_tools_create_tailwag_provider_without_face_runtime(monkeypatch):
+    created = {
+        "memory_providers": [],
+        "slack_services": [],
+        "sqlite_memory_stores": [],
+        "identity_stores": [],
+        "face_services": [],
+        "face_event_bridges": [],
+    }
+    profile = _parse_factory_profile(
+        {
+            "name": "tailwag-memory-tools-only",
+            "memory": {"enabled": True},
+            "tools": {
+                "enabled_tool_ids": [
+                    "memory.search_semantic",
+                ],
+            },
+            "face_recognition": {"enabled": False},
+            "speaker_recognition": {"enabled": False},
+            "battery": {"enabled": False},
+            "display": {"enabled": False},
+        }
+    )
+    factory_mod = _load_factory_for_memory_tests(monkeypatch, created=created)
+
+    agent = factory_mod.create_agent(scenario_profile=profile)
+
+    assert len(created["memory_providers"]) == 1
+    provider = created["memory_providers"][0]
+    assert created["identity_stores"] == []
+    assert agent.kwargs["memory_context_compiler"] is provider
+    build_kwargs = created["build_builtin_tools_kwargs"][0]
+    assert build_kwargs["memory_provider"] is provider
+
+
 def test_audio_turn_pending_internal_text_uses_system_role_message():
     agent = _make_agent()
     followups = []
@@ -1859,8 +2382,12 @@ def test_people_context_reports_audio_face_mismatch():
         speaker_visible=True,
     )
 
-    assert "- Bob (met once before) [talking to you]" in rendered
-    assert "Current speaker voice matches Bob." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
+    assert "Speaker resolution: voice match." in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "[talking to you]" not in rendered
     assert "primary visible person" not in rendered
 
 
@@ -1902,7 +2429,8 @@ def test_people_context_includes_directory_profile_lines():
         "Directory: title: AI Technologist II (Analyst); manager: Dan Burns; "
         "tenure: 0 year(s), 3 month(s), 5 day(s)"
     ) in rendered
-    assert "- Alice (met 2 times) [talking to you]" in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Alice (met 2 times)" in rendered
     assert "About: preferred name: sash" in rendered
 
 
@@ -1946,11 +2474,13 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
         speaker_visible=True,
     )
 
-    assert "- Alice (met 2 times)" in rendered
-    assert "Directory: title: Robotics Engineer" in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "Directory: title: Robotics Engineer" not in rendered
     assert "About: pet: Luna is her dog." not in rendered
     assert "Potential Followups: Ask about the Cape Cod trip." not in rendered
-    assert "- Bob (met once before) [talking to you]" in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
     assert "Directory: title: Product Manager" in rendered
     assert "About: preferred name: Bobby" in rendered
 
@@ -1984,8 +2514,9 @@ def test_people_context_reports_audio_face_agreement():
         speaker_visible=True,
     )
 
-    assert "- Alice (met 2 times) [talking to you]" in rendered
-    assert "Current speaker voice matches Alice." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Alice (met 2 times)" in rendered
+    assert "Speaker resolution: voice match." in rendered
     assert "primary visible person" not in rendered
 
 
@@ -2026,7 +2557,11 @@ def test_people_context_reports_offscreen_audio_speaker():
         speaker_visible=False,
     )
 
-    assert "Current speaker voice matches Bob, but Bob is not visible right now." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
+    assert "Speaker resolution: voice match; not visible right now." in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
     assert "Attribute this turn to Bob, not Alice." not in rendered
 
 
@@ -2058,7 +2593,21 @@ def test_people_context_reports_unresolved_speaker():
         speaker_visible=False,
     )
 
-    assert "Current speaker is not safely identified." in rendered
+    assert rendered == ""
+
+
+def test_people_context_falls_back_to_owner_id_when_owner_person_missing():
+    rendered = format_people_context(
+        [],
+        audio_speaker_id="person-7",
+        owner_id="person-7",
+        owner_source="audio",
+        speaker_visible=False,
+    )
+
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- person-7 (first time; not visible)" in rendered
+    assert "Speaker resolution: voice match; not visible right now." in rendered
 
 
 def test_people_context_emits_preferred_language_directive():
@@ -2111,13 +2660,13 @@ def test_voice_reference_capture_arms_one_prompt_after_two_quality_failures():
         enrollment_results=[
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_empty",
                 person_id="person-1",
                 attempt_kind="silent",
             ),
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_quiet",
+                reason="reject_clipped",
                 person_id="person-1",
                 attempt_kind="silent",
             ),
@@ -2158,6 +2707,25 @@ def test_build_turn_instructions_uses_people_context_without_extra_speaker_block
     turn = _make_turn(
         "rt-guidance-enabled",
         context_snapshot=realtime_mod.FrozenTurnContext(
+            persons=[
+                SimpleNamespace(
+                    person_id="person-1",
+                    name="Alice",
+                    interaction_count=2,
+                    memory_profile_lines=(),
+                    potential_followups=(),
+                    preferred_language="",
+                ),
+                SimpleNamespace(
+                    person_id="person-2",
+                    name="Bob",
+                    interaction_count=1,
+                    memory_profile_lines=(),
+                    potential_followups=(),
+                    preferred_language="",
+                    visible=False,
+                ),
+            ],
             primary_face_person_id="person-1",
             audio_speaker_id="person-2",
             owner_id="person-2",
@@ -2174,8 +2742,47 @@ def test_build_turn_instructions_uses_people_context_without_extra_speaker_block
 
     rendered = agent._build_turn_instructions(turn)
 
-    assert "[PEOPLE IN VIEW]" in rendered
-    assert "Current speaker is not safely identified." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before; not visible)" in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "Current speaker is not safely identified." not in rendered
+
+
+def test_build_turn_instructions_omits_person_context_without_owner_id():
+    agent = _make_agent()
+    turn = _make_turn(
+        "rt-owner-unknown",
+        owner_id=None,
+        primary_face_person_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            persons=[
+                SimpleNamespace(
+                    person_id="person-1",
+                    name="Alice",
+                    interaction_count=2,
+                    memory_profile_lines=("likes robotics",),
+                    potential_followups=("Ask about the perception demo.",),
+                    preferred_language="",
+                )
+            ],
+            primary_face_person_id=None,
+            owner_id=None,
+            owner_source="unknown",
+            face_snapshot={
+                "recognized_count": 1,
+                "unknown_count": 0,
+                "recognized_names": ["Alice"],
+            },
+        ),
+    )
+
+    rendered = agent._build_turn_instructions(turn)
+
+    assert "[PERSON SPEAKING TO YOU]" not in rendered
+    assert "[OTHER PEOPLE IN VIEW]" not in rendered
+    assert "Alice" not in rendered
+    assert "likes robotics" not in rendered
 
 
 def test_post_enrollment_voice_reference_save_clears_pending_state_and_supports_memory():

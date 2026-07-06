@@ -235,8 +235,9 @@ robot client.
 
 Run the targeted regression tests before live robot checks. For any smoke test
 that can move the robot, confirm clear space, battery state, a working stop path,
-and operator approval. For destructive local identity/memory cleanup, use the
-guarded reset guidance in `identity_store.md`.
+and operator approval. For destructive local identity/biometric cleanup, use the
+guarded reset guidance in `identity_store.md`; Tailwag memory is external and
+must be reset with Tailwag tooling.
 
 After bring-up, these are the highest-value manual checks:
 
@@ -245,7 +246,7 @@ After bring-up, these are the highest-value manual checks:
 3. Internal-event turn: trigger a non-motion provider event, or a nav/battery event only with operator approval.
 4. Tool call: ask for something that should call a known non-navigation tool, like visual inspection; use motion/trick tools only with operator approval.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.
-6. Preference extraction: have a short recognized-speaker conversation, then inspect memory later with `python3 -m argos_src.memory.manage_memory --person "Your Name"`.
+6. Memory ingestion: have a short recognized-speaker conversation, then inspect the resulting episode/person memory with Tailwag tooling.
 
 ## Targeted Regression Tests
 
@@ -285,7 +286,7 @@ See [observability.md](/home/spatil2/argos-agent/docs/observability.md) for deta
 
 Two important runtime notes:
 
-- Argos no longer mirrors playback or engagement state onto ROS topics just to consume them back internally.
+- Playback and engagement state stay inside the Argos runtime.
 - turn-scoped dynamic instructions are attached on `response.create`; they are not inserted into conversation history.
 
 ## Troubleshooting
@@ -303,7 +304,7 @@ If the robot hears you but never replies:
 - confirm the websocket session starts successfully
 - confirm the tool call path is not failing repeatedly
 - confirm the logs show `Realtime response created` and then either `playback_completed` or a clear cancellation reason
-- if the next question seems to trigger the previous answer, look for a stuck turn that never reached `response.done` or never started playback
+- if the next question seems to trigger an earlier answer, look for a stuck turn that never reached `response.done` or never started playback
 - if replies get stale after a speaker handoff, confirm owner-scoped history deletion is happening
 
 If face-triggered interaction is not happening:
@@ -344,8 +345,7 @@ python3 -m argos_src.knowledge.build_faiss chewy_docs
 
 This builds `generated/index.faiss`, `generated/index.pkl`, and
 `generated/vdb_kwargs.json` from files under `documentation/` and `urdfs/`.
-Existing knowledge bases built with the previous external builder do not need
-to be rebuilt if those generated files are already present.
+Knowledge bases with existing generated files do not need to be rebuilt.
 
 Use it from a Go2 profile:
 

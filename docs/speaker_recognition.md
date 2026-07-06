@@ -30,7 +30,7 @@ microphone audio
     -> resample to 16 kHz mono
     -> local VAD + wake/admission
     -> commit one audio turn
-    -> keep a speaker-specific 16 kHz turn clip
+    -> use raw 16 kHz turn audio for speaker use
     -> ECAPA embedding
     -> compare against saved voice references
     -> combine with face visibility
@@ -43,7 +43,7 @@ Voice enrollment is also turn-owned:
 successful face enrollment
     -> arm pending voice enrollment
     -> next clean spoken turn from that person
-    -> quality gate
+    -> empty/clipping guard
     -> ECAPA embedding
     -> save one reusable voice reference
 ```
@@ -56,11 +56,11 @@ successful face enrollment
 | `argos_src/agent/agent_runtime.py` | Owns pending voice-enrollment state, audio ownership logs, and post-turn voice enrollment. |
 | `argos_src/agent/agent_tools.py` | Arms pending voice enrollment after `enroll_visible_person` succeeds. |
 | `argos_src/speaker_recognition/service.py` | Main orchestration layer for query embedding lookup and voice reference storage. |
-| `argos_src/speaker_recognition/policy.py` | Audio preprocessing, clip stats, quality gates, and owner-resolution rules. |
+| `argos_src/speaker_recognition/policy.py` | Clip stats, minimal safety gates, and owner-resolution rules. |
 | `argos_src/speaker_recognition/backend.py` | SpeechBrain ECAPA backend wrapper. |
 | `argos_src/identity/embeddings/speaker_store.py` | Persistent ChromaDB storage for one voice reference embedding per `person_id`. |
 | `argos_src/identity/store.py` | Shared identity store used after speaker ownership resolves. |
-| `argos_src/memory/store.py` | Source-aware social/context memory store keyed by `person_id` or site. |
+| `argos_src/memory_provider/` | Tailwag-backed social/context memory provider keyed by Argos `person_id`. |
 | `argos_src/speaker_recognition/manage_voice.py` | CLI for listing and showing saved voice references. |
 
 ## Query Flow
@@ -74,40 +74,45 @@ When local end-of-speech fires, `_commit_audio_turn()`:
 
 - builds the `QueuedTurn`
 - freezes the strict `primary_face_person_id` and visible face ids from speech start
-- prepares a speaker-specific 16 kHz clip for speaker recognition
+- uses raw locally buffered `16 kHz` PCM for speaker recognition
 - blocks on `SpeakerRecognitionService` to resolve the turn owner before creating
   the response
 
 ### 2. Speaker preprocessing
 
-The current speaker preprocessing is intentionally simple:
+The current production speaker path intentionally does not preprocess the
+speaker clip beyond using locally buffered `16 kHz` mono PCM:
 
 - keep the original turn audio for the realtime API
-- build a speaker-specific clip from the locally buffered `16 kHz` PCM
-- currently pass the full committed clip to speaker recognition
-
-`SpeakerRecognitionService.trim_turn_audio()` can trim with a supplied VAD, but
-the live commit path passes `vad=None` because the capture VAD is not reused from
-the commit thread. In that path, duration and RMS gates apply to the full
-speaker clip, not to a separately packed voiced-only clip.
+- use the same raw locally buffered `16 kHz` PCM for ECAPA speaker embedding
+- do not VAD-trim, denoise, normalize, or duration-gate before embedding
 
 This is not a full diarization pipeline and does not do:
 
+- VAD-based voiced-region packing
 - source separation
 - aggressive denoising
 - chunk averaging at query time
 - multi-speaker segmentation
 
-### 3. Query quality gate
+This default came from `argos-perception-eval` cross validation on collected
+robot audio: raw ECAPA embeddings with four-clip person centroids produced
+44/45 correct rankings. A conservative `top_score >= 0.5` and `margin >= 0.3`
+rule had no false accepts but rejected many correct clips, so the runtime uses
+`top_score >= 0.4` and `margin >= 0.2` as the starting policy.
 
-For query ownership, Argos only enforces a minimum speaker-clip duration:
+### 3. Query scoring
 
-- `query_min_voiced_sec`
+For query ownership, Argos embeds any captured speaker turn with audio. The
+default profile sets:
 
-The default profile uses `0.8s`.
+- `query_match_threshold: 0.40`
+- `query_margin_threshold: 0.20`
 
-Short queries like "hi" or "hello" are therefore still allowed when they clear
-that duration floor.
+`resolve_owner_id()` requires the top audio match to clear both the score
+threshold and the margin threshold. If audio is ambiguous but the face scene has
+a strict owner candidate, ownership falls back to face rather than accepting the
+ambiguous audio match.
 
 ### 4. Owner resolution
 
@@ -154,19 +159,16 @@ The turn must have:
 - turn audio available
 - a pending voice enrollment target with no saved reference yet
 
-### 3. Enrollment quality gates
+### 3. Enrollment safety gates
 
-The enrollment path is stricter than the query path.
+The current enrollment gates are:
 
-The current default gates are:
-
-- minimum voiced duration: `2.0s`
-- maximum voiced duration: uncapped by default
-- minimum RMS level: `350.0`
+- reject empty audio
 - maximum clipped fraction: `0.02`
+- reject updates whose embedding is inconsistent with the existing reference
 
-If the clip passes, Argos saves exactly one normalized voice reference embedding
-for that person.
+If the clip passes, Argos saves or updates one normalized voice reference
+centroid for that person.
 
 ## Storage Model
 
@@ -192,14 +194,14 @@ Important detail:
 The current path is intentionally conservative and small:
 
 - required `16 kHz` mono speaker clip
-- full committed speaker clip in the live runtime
+- raw captured turn audio for speaker embedding
 - no transcript dependency
-- no hard max duration by default
+- no duration or RMS gate by default
 
 What is not in the current code:
 
 - speaker embedding smoothing across several query turns
-- extra local normalization beyond the RMS/clipping checks
+- extra local normalization
 - full diarization or source separation
 
 ## Operational Notes

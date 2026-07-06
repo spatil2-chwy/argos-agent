@@ -283,19 +283,10 @@ def _diagnose_one_frame(
                 "failed_checks": quality.get("failed_checks", []),
                 "brightness": round(float(metrics.get("brightness", 0.0) or 0.0), 2),
                 "contrast": round(float(metrics.get("contrast", 0.0) or 0.0), 2),
-                "sharpness": round(float(metrics.get("sharpness", 0.0) or 0.0), 2),
-                "eye_tilt": round(float(metrics.get("eye_tilt", 0.0) or 0.0), 3),
-                "nose_center_offset": round(
-                    float(metrics.get("nose_center_offset", 0.0) or 0.0),
-                    3,
-                ),
                 "bbox_area": int(metrics.get("bbox_area", 0) or 0),
                 "policy": {
                     "min_brightness": quality["policy"]["min_brightness"],
                     "min_contrast": quality["policy"]["min_contrast"],
-                    "min_sharpness": quality["policy"]["min_sharpness"],
-                    "max_eye_tilt": quality["policy"]["max_eye_tilt"],
-                    "max_nose_center_offset": quality["policy"]["max_nose_center_offset"],
                     "min_face_area": quality["policy"]["min_face_area"],
                 },
             }

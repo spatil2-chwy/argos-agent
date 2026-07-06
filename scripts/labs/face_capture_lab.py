@@ -21,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from argos_src.face_recognition.attention_gate import draw_attention_overlay
 from argos_src.profile_config import load_scenario_profile
 from scripts.labs.face_lab_common import (
     add_enrollment_policy_args,
@@ -151,9 +152,6 @@ def _enrollment_predictions(
                     "bbox_area": metrics.get("bbox_area", 0),
                     "brightness": metrics.get("brightness", 0.0),
                     "contrast": metrics.get("contrast", 0.0),
-                    "sharpness": metrics.get("sharpness", 0.0),
-                    "eye_tilt": metrics.get("eye_tilt", 0.0),
-                    "nose_center_offset": metrics.get("nose_center_offset", 0.0),
                 },
                 "policy": quality.get("policy", {}),
             }
@@ -191,13 +189,16 @@ def _attention_predictions(
             track_id=track_id,
             now=now,
         )
-        if observation.attentive:
+        attentive = bool(observation.attentive)
+        confidence = float(observation.confidence)
+        face["attention"] = observation
+        if attentive:
             attentive_count += 1
         predictions.append(
             {
                 "face_index": index,
-                "attentive": bool(observation.attentive),
-                "confidence": round(float(observation.confidence), 4),
+                "attentive": attentive,
+                "confidence": round(confidence, 4),
                 "reason": observation.reason,
                 "yaw_deg": observation.yaw_deg,
                 "pitch_deg": observation.pitch_deg,
@@ -380,6 +381,11 @@ def _capture_one(
             tuple(image.shape),
             faces,
             now=time.time(),
+        )
+        overlay_path = writer.artifacts_dir / f"{sample_id}_attention.png"
+        base_sample["artifacts"]["attention_overlay_path"] = _save_image(
+            overlay_path,
+            draw_attention_overlay(np.asarray(image), faces),
         )
     return base_sample
 

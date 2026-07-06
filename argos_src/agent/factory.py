@@ -27,6 +27,7 @@ from argos_src.provider_api.client import ProviderClient
 from argos_src.provider_api.factory import create_provider_client
 from argos_src.nav_support.locations import LocationStore, NavigationState
 from argos_src.tools import (
+    MEMORY_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     build_builtin_tools,
     build_knowledge_tools,
@@ -270,6 +271,7 @@ def create_agent(
     needs_navigation_state = runtime_flags["needs_navigation_state"]
     needs_face_runtime = runtime_flags["needs_face_runtime"]
     self_charge_available = runtime_flags["self_charge_available"]
+    memory_tools_enabled = any(name in MEMORY_TOOL_NAMES for name in resolved_tool_names)
     display_runtime = _create_display_runtime(scenario_profile=scenario_profile)
 
     face_service = None
@@ -278,7 +280,7 @@ def create_agent(
     preference_extractor = None
     slack_memory_service = None
     identity_store = None
-    memory_store = None
+    memory_provider = None
     memory_context_compiler = None
     if (
         needs_face_runtime
@@ -287,34 +289,48 @@ def create_agent(
         or scenario_profile.slack_memory.enabled
     ):
         from argos_src.identity import IdentityStore
-        from argos_src.memory import MemoryContextCompiler, MemoryStore
 
         identity_store = IdentityStore(db_path=scenario_profile.identity_store.db_path)
-        memory_store = MemoryStore(db_path=scenario_profile.memory_store.db_path)
-        memory_context_compiler = MemoryContextCompiler(
-            memory_store,
-            identity_store=identity_store,
+
+    if scenario_profile.memory.enabled and (
+        needs_face_runtime
+        or scenario_profile.face_recognition.preference_extraction.enabled
+        or scenario_profile.slack_memory.enabled
+        or memory_tools_enabled
+    ):
+        from argos_src.memory_provider import TailwagMemoryProvider
+
+        memory_provider = TailwagMemoryProvider(
+            site_code=scenario_profile.employee_directory.site_code,
+            place_room_id=scenario_profile.memory.place_room_id,
+            retention_class=scenario_profile.memory.retention_class,
+            extract_live_turn_memory=scenario_profile.memory.extract_live_turn_memory,
         )
+        memory_context_compiler = memory_provider
 
     if needs_face_runtime:
         from argos_src.face_recognition.attention_gate import (
             AttentionGateSettings,
-            AttentionSmoothingSettings,
         )
         from argos_src.face_recognition.depth_gate import DepthGateSettings
         from argos_src.face_recognition.face_recognition_service import (
             FaceEnrollmentPolicy,
+            FaceRecognitionStabilitySettings,
             FaceRecognitionService,
         )
         attention_gate = scenario_profile.face_recognition.attention_gate
         enrollment_policy = scenario_profile.face_recognition.enrollment_policy
+        recognition_stability = scenario_profile.face_recognition.recognition_stability
 
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
             recognition_threshold=scenario_profile.face_recognition.recognition_threshold,
+            recognition_margin_threshold=(
+                scenario_profile.face_recognition.recognition_margin_threshold
+            ),
             robot_client=robot_client,
             identity_store=identity_store,
-            memory_store=memory_store,
+            memory_store=memory_provider,
             site_code=scenario_profile.employee_directory.site_code,
             camera_resource_id=scenario_profile.resources.face_camera,
             camera_yaw_offset_rad=(
@@ -339,40 +355,28 @@ def create_agent(
             attention_gate_settings=AttentionGateSettings(
                 enabled=attention_gate.enabled,
                 min_face_area=attention_gate.min_face_area,
-                min_face_area_ratio=attention_gate.min_face_area_ratio,
                 max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
                 max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
                 max_abs_roll_deg=attention_gate.max_abs_roll_deg,
-                distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
-                distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
-                distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
-                near_face_area_ratio=attention_gate.near_face_area_ratio,
-                distant_face_area_ratio=attention_gate.distant_face_area_ratio,
-                near_depth_m=attention_gate.near_depth_m,
-                distant_depth_m=attention_gate.distant_depth_m,
-                max_center_offset_ratio=attention_gate.max_center_offset_ratio,
-                min_confidence=attention_gate.min_confidence,
-                smoothing=AttentionSmoothingSettings(
-                    window_sec=attention_gate.smoothing_window_sec,
-                    min_observations=attention_gate.min_attentive_observations,
-                    hold_sec=attention_gate.hold_sec,
-                ),
+                min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
             ),
             enrollment_policy=FaceEnrollmentPolicy(
                 min_face_area=enrollment_policy.min_face_area,
-                min_sharpness=enrollment_policy.min_sharpness,
                 min_brightness=enrollment_policy.min_brightness,
                 max_brightness=enrollment_policy.max_brightness,
                 min_contrast=enrollment_policy.min_contrast,
-                max_eye_tilt=enrollment_policy.max_eye_tilt,
-                max_nose_center_offset=enrollment_policy.max_nose_center_offset,
                 min_embedding_similarity=enrollment_policy.min_embedding_similarity,
             ),
+            recognition_stability_settings=FaceRecognitionStabilitySettings(
+                window_frames=recognition_stability.window_frames,
+                min_hits=recognition_stability.min_hits,
+            ),
         )
-        if scenario_profile.face_recognition.preference_extraction.enabled:
-            from argos_src.memory.live_chat import PreferenceExtractor
-
-            preference_extractor = PreferenceExtractor(memory_store=memory_store)
+        if (
+            scenario_profile.face_recognition.preference_extraction.enabled
+            and memory_provider is not None
+        ):
+            preference_extractor = memory_provider
         if scenario_profile.face_recognition.enabled:
             face_service.start_loop(
                 camera_resource_id=scenario_profile.resources.face_camera,
@@ -398,21 +402,16 @@ def create_agent(
 
         employee_directory_service = EmployeeDirectoryService(
             site_code=scenario_profile.employee_directory.site_code,
+            email_domain=scenario_profile.employee_directory.email_domain,
         )
         employee_directory_service.start_background()
 
-    if scenario_profile.slack_memory.enabled:
-        if memory_store is None:
-            from argos_src.memory import MemoryStore
+    if scenario_profile.slack_memory.enabled and memory_provider is not None:
+        from argos_src.memory_provider import TailwagSlackMemoryService
 
-            memory_store = MemoryStore(db_path=scenario_profile.memory_store.db_path)
-        from argos_src.memory.slack import SlackMemoryService
-
-        slack_memory_service = SlackMemoryService(
+        slack_memory_service = TailwagSlackMemoryService(
             profile=scenario_profile.slack_memory,
-            memory_store=memory_store,
-            identity_store=identity_store,
-            default_site_code=scenario_profile.employee_directory.site_code,
+            episode_recorder=memory_provider,
         )
         if scenario_profile.slack_memory.start_with_agent:
             slack_memory_service.start_background()
@@ -455,6 +454,7 @@ def create_agent(
         battery_cache=battery_cache,
         default_camera_resource=scenario_profile.resources.scene_camera,
         display_runtime=display_runtime,
+        memory_provider=memory_provider,
     )
     tools.extend(build_knowledge_tools(scenario_profile.knowledge_bases))
 
@@ -545,6 +545,12 @@ def create_agent(
     else:
         engagement._recording_state_provider = recording_state_provider
 
+    if scenario_profile.face_recognition.enabled and face_service is not None:
+        subscribe_presence = getattr(face_service, "subscribe_presence", None)
+        if callable(subscribe_presence):
+            unsubscribe_presence = subscribe_presence(agent.update_face_presence_snapshot)
+            atexit.register(unsubscribe_presence)
+
     coalescer = EventCoalescer(
         agent=agent,
         engagement=engagement,
@@ -587,7 +593,7 @@ def create_agent(
             coalescer=coalescer,
             engagement=engagement,
             nav_state=nav_state,
-            presence_callback=agent.update_face_presence_snapshot,
+            presence_callback=None,
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,
             require_attention=scenario_profile.face_recognition.proactive_greeting.require_attention,

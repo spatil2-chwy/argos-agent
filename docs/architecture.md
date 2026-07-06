@@ -8,7 +8,7 @@ This is the high-level map of the current Argos stack. The deeper component docs
 - `attention_gate.md`
 - `speaker_recognition.md`
 - `face_recognition.md`
-- `memory_store.md`
+- `memory_provider.md`
 - `slack_memory.md`
 - `observability.md`
 
@@ -52,7 +52,8 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `resources/`
   Prompt files, wake-word ONNX models, and navigation-location JSON.
 - `var/`
-  Ignored local runtime state for identity, memory, face, and speaker stores.
+  Ignored local runtime state for identity, face, speaker, and other local
+  runtime stores. Social/context memory lives in Tailwag.
 - `scripts/labs/`
   Operator/lab tools that exercise runtime services without starting the agent.
 
@@ -68,17 +69,15 @@ camera + optional depth
     -> FaceEventBridge publish / proactive FACE_EVENT
     -> RealtimeRobotAgent turn snapshot + prompt context
     -> preference segment buffering
-    -> PreferenceExtractor
-    -> MemoryStore
+    -> TailwagMemoryProvider
+    -> Tailwag episode + person context
 ```
 
-`PreferenceExtractor` is the semantic memory writer. It asks the LLM to compile
-future prompt context from speaker-owned conversation segments and choose the
-right memory `kind`. Prompt views are derived from that kind: durable person
-kinds become `About`, while `followup` becomes `Potential Followups`. The local
-writer keeps the database safe with structural checks, but it does not use
-phrase-matching rules to decide whether a memory is semantically good. See
-`memory_store.md` for the extraction contract.
+Tailwag is the semantic memory writer and person-context source. Argos sends the
+full active conversation episode to Tailwag from speaker-owned realtime turn
+text. Prompt views still surface as `About` and `Potential Followups`, but the
+storage and extraction contract lives outside Argos. See `memory_provider.md`
+for the Tailwag-backed provider contract.
 
 Important distinctions:
 
@@ -227,3 +226,5 @@ as subtitles.
 - Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.
 - Use `identity_store.md` for shared person records and face/speaker embedding-store management.
+- Use `memory_provider.md` for Tailwag-backed person context, episodes, encounters, semantic search, and reset boundaries.
+- Use `slack_memory.md` for Tailwag-backed Slack polling, cursor state, and identity convergence.

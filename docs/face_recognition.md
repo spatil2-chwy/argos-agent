@@ -109,10 +109,10 @@ result = self.face_service.enroll_visible_person(
 )
 ```
 
-That means the LLM no longer has to pass title, manager, cost center, job family,
-tenure, or similar fields back into the tool. It should pass the verified username
-when `resolve_employee_identity` returned one. The rest is loaded locally from
-`EmployeeDirectoryService.get_verified_profile()`.
+That means the LLM does not receive or pass manager, cost center, job family, or
+similar internal org fields through the tool surface. It should pass the verified
+username when `resolve_employee_identity` returned one. The rest is loaded locally
+from `EmployeeDirectoryService.get_verified_profile()`.
 
 ## Enrollment Preprocessing
 
@@ -169,33 +169,28 @@ an Accept response commits the candidate to the face store. Reject, timeout, or
 display-unavailable responses return a failed tool result and do not save
 anything.
 
-## Enrollment Quality Policy
+## Enrollment-Only Quality Policy
 
-The enrollment quality gates live in `FaceEnrollmentPolicy` in
-`face_recognition_service.py`:
+These checks are still active for face enrollment. They are not part of the
+continuous recognition or attention gate path. The enrollment quality gates live
+in `FaceEnrollmentPolicy` in `face_recognition_service.py`:
 
 ```python
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 5000
-    min_sharpness: float = 12.0
+    min_face_area: int = 1300
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    max_eye_tilt: float = 0.25
-    max_nose_center_offset: float = 0.10
     min_embedding_similarity: float = 0.70
 ```
 
-`_assess_enrollment_face_quality()` can reject a frame for:
+`_assess_enrollment_face_quality()` can reject an enrollment frame for:
 
 | Reason | Meaning | User guidance |
 |---|---|---|
-| `face_too_small` | Face bbox area is below `5000` px. | Come closer. |
+| `face_too_small` | Face bbox area is below `1300` px. | Come closer. |
 | `face_clipped` | Face touches image boundary. | Center whole face in view. |
-| `missing_landmarks` | Required eye, nose, or mouth landmarks are missing. | Face the camera directly. |
-| `side_face` | Eye tilt or nose offset suggests a profile/angled face. | Face the camera directly. |
-| `too_blurry` | Gradient-based sharpness below `12.0`. | Hold still. |
 | `too_dark` | Mean crop brightness below `35.0`. | Move to better light. |
 | `too_bright` | Mean crop brightness above `220.0`. | Move away from bright light. |
 | `low_contrast` | Crop contrast below `15.5`. | Move to better light. |
@@ -276,9 +271,21 @@ and embedding extraction as enrollment:
 
 ```python
 detected_faces = self.detect_faces(image)
+detected_faces = [face for face in detected_faces if bbox_area >= min_face_area]
 gated_faces, rejected_count = filter_detections_by_depth(...)
 embedding = self.extract_face_embedding(image, detection)
 ```
+
+The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_face_area`
+(`1300` px in the static interaction profile). This keeps tiny distant faces from
+becoming recognized-person context while still allowing fisheye captures where
+valid nearby faces are smaller than RealSense crops.
+
+Recognition accepts the top database match only when similarity is at least
+`recognition_threshold` (`0.6` in the static interaction profile) and the
+top-vs-runner-up similarity margin is at least `recognition_margin_threshold`
+(`0.20`). This keeps low-confidence and ambiguous matches out of the live
+person context.
 
 What recognition does not do:
 
@@ -313,6 +320,7 @@ Enrollment wants exactly one visible person:
 
 - one face is accepted
 - duplicate/ghost detections overlapping the primary can be ignored
+- extra detections below `FaceEnrollmentPolicy.min_face_area` can be ignored
 - tiny, weak extra detections can be ignored
 - significant extra faces return `status="retry_single_face"` and
   `failure_reason="multiple_faces"`
@@ -357,7 +365,13 @@ At audio commit, the queued turn carries:
 turn started." If the scene is ambiguous, it is `None`.
 
 `owner_id` means "the resolved owner of this spoken turn." This is the id used
-for live-chat preference extraction and `MemoryStore` ownership.
+for Tailwag realtime episode participants and person-context lookup.
+
+Turn prompt person context is also tied to `owner_id`. When `owner_id` is not
+resolved, the runtime does not include visible recognized people as
+person-specific prompt context. When `owner_id` is resolved, the prompt may show
+that person under `[PERSON SPEAKING TO YOU]` and list other visible people only
+as lightweight names under `[OTHER PEOPLE IN VIEW]`.
 
 The canonical face-derived name in turn state is `primary_face_person_id`.
 
@@ -372,6 +386,7 @@ face_recognition:
   enabled: true
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
+  recognition_margin_threshold: 0.20
   depth_gate:
     enabled: false
     sync_slop_sec: 0.12
@@ -384,23 +399,11 @@ face_recognition:
     max_valid_depth_m: 10.0
   attention_gate:
     enabled: true
-    min_face_area: 700
-    min_face_area_ratio: 0.00035
-    max_abs_yaw_deg: 25.0
-    max_abs_pitch_deg: 22.0
-    max_abs_roll_deg: 35.0
-    distant_max_abs_yaw_deg: 18.0
-    distant_max_abs_pitch_deg: 32.0
-    distant_max_abs_roll_deg: 28.0
-    near_face_area_ratio: 0.035
-    distant_face_area_ratio: 0.010
-    near_depth_m: 0.8
-    distant_depth_m: 2.0
-    max_center_offset_ratio: 0.70
-    min_confidence: 0.55
-    smoothing_window_sec: 1.0
-    min_attentive_observations: 2
-    hold_sec: 0.8
+    min_face_area: 1300
+    max_abs_yaw_deg: 20.0
+    max_abs_pitch_deg: 18.0
+    max_abs_roll_deg: 90.0
+    min_abs_pitch_deg: 0.0
   proactive_greeting:
     require_attention: true
 ```
@@ -432,23 +435,11 @@ Attention gate settings:
 | Setting | Meaning | Keep it? |
 |---|---|---|
 | `enabled: true` | Runs a lightweight head-pose gate after usable face detection. | Yes for attention-gated admission. |
-| `min_face_area: 700` | Absolute minimum detected face bbox area before head-pose scoring. | Lower for mounted wide-view cameras; keep enrollment stricter. |
-| `min_face_area_ratio: 0.00035` | Resolution-scaled face area floor, combined with `min_face_area`. | Tune with camera resolution. |
-| `max_abs_yaw_deg: 25.0` | Near-face left/right head angle limit. | Tune for close interaction. |
-| `max_abs_pitch_deg: 22.0` | Near-face up/down head angle limit. | Tune with camera mounting height. |
-| `max_abs_roll_deg: 35.0` | Near-face head tilt limit. | Usually keep. |
-| `distant_max_abs_yaw_deg: 18.0` | Far/small-face left/right head angle limit. | Tighten if far side conversations falsely open admission. |
-| `distant_max_abs_pitch_deg: 32.0` | Far/small-face up/down head angle limit. | Mounted cameras often need this higher because users look down toward the robot. |
-| `distant_max_abs_roll_deg: 28.0` | Far/small-face head tilt limit. | Tune if tilted distant heads falsely count as attention. |
-| `near_face_area_ratio: 0.035` | Face area ratio treated as near when depth is unavailable. | Tune from live bbox logs. |
-| `distant_face_area_ratio: 0.010` | Face area ratio treated as distant when depth is unavailable. | Tune from live bbox logs. |
-| `near_depth_m: 0.8` | Depth treated as near when `depth_m` exists on the face. | Keep unless the camera is mounted unusually close. |
-| `distant_depth_m: 2.0` | Depth treated as distant when `depth_m` exists on the face. | Match the natural standing interaction distance. |
-| `max_center_offset_ratio: 0.70` | Rejects faces far from the optical center for attention. | Mounted wide cameras should be looser than webcams. |
-| `min_confidence: 0.55` | Confidence floor reported at the configured pose/center acceptance boundary. | Usually keep. |
-| `smoothing_window_sec: 1.0` | Rolling window used to reduce flicker. | Usually keep. |
-| `min_attentive_observations: 2` | Number of positive observations needed in the window. | Lower only if latency is too high. |
-| `hold_sec: 0.8` | Keeps attention briefly after a positive window. | Tune for conversational continuity. |
+| `min_face_area: 1300` | Absolute minimum detected face bbox area before head-pose scoring. | Lower only if valid distant faces are rejected. |
+| `max_abs_yaw_deg: 20.0` | Left/right head angle limit. | Tighten if side conversations falsely open admission. |
+| `max_abs_pitch_deg: 18.0` | Up/down head angle limit. | Tune with camera mounting height. |
+| `max_abs_roll_deg: 90.0` | Head tilt limit. | Wide by default so roll rarely blocks attention. |
+| `min_abs_pitch_deg: 0.0` | Minimum up/down head angle. | Keep low unless the camera geometry needs a pitch band. |
 
 The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
 replace FaceNet and does not add a second face detector. Pose limits are
@@ -458,7 +449,7 @@ camera treat a person standing around two meters back differently from a close
 webcam-like face crop. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
-presence snapshot keeps the old face fields and adds:
+presence snapshot includes:
 
 - `attention_status`
 - `attention_count`
@@ -517,9 +508,7 @@ are:
 The checks I would keep strict are:
 
 - `multiple_faces`
-- `side_face`, especially `max_nose_center_offset`
 - `face_clipped`
-- `missing_landmarks`
 - `embedding_inconsistent`
 
 Those are the ones most likely to save the wrong identity or produce a weak

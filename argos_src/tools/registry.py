@@ -7,8 +7,10 @@ from typing import Iterable
 from argos_src.nav_support.locations import LocationStore, NavigationState
 from argos_src.tools.base import BaseTool
 from argos_src.tools.common.knowledge.whoami_query import build_knowledge_tool
+from argos_src.tools.common.memory import get_memory_query_tools
 from argos_src.tools.spot import get_spot_tools
 from argos_src.tools.tool_ids import (
+    MEMORY_TOOL_NAMES,
     NAVIGATION_TOOL_NAMES,
     ROBOT_FAMILY_SPOT,
     resolve_builtin_tool_names,
@@ -38,6 +40,7 @@ def build_builtin_tools(
     battery_cache,
     default_camera_resource: str,
     display_runtime=None,
+    memory_provider=None,
 ) -> list[BaseTool]:
     """Build selected built-in tools for the selected robot family."""
     requested = resolve_builtin_tool_names(
@@ -46,13 +49,24 @@ def build_builtin_tools(
     )
     requested_set = set(requested)
 
-    if robot_family == ROBOT_FAMILY_SPOT:
-        return get_spot_tools(
-            robot_client=robot_client,
-            runtime_tool_names=requested,
-        )
-
     tools: list[BaseTool] = []
+
+    if robot_family == ROBOT_FAMILY_SPOT:
+        tools.extend(
+            get_spot_tools(
+                robot_client=robot_client,
+                runtime_tool_names=requested,
+            )
+        )
+        memory_names = [name for name in MEMORY_TOOL_NAMES if name in requested_set]
+        if memory_names and memory_provider is not None:
+            tools.extend(
+                get_memory_query_tools(
+                    memory_provider,
+                    runtime_tool_names=memory_names,
+                )
+            )
+        return tools
 
     action_names = [name for name in GO2_ACTION_TOOL_NAMES if name in requested_set]
     tools.extend(get_go2_action_tools(robot_client, runtime_tool_names=action_names))
@@ -81,6 +95,15 @@ def build_builtin_tools(
     ):
         tools.append(
             get_resolve_employee_identity_tool(employee_directory_service)
+        )
+
+    memory_names = [name for name in MEMORY_TOOL_NAMES if name in requested_set]
+    if memory_names and memory_provider is not None:
+        tools.extend(
+            get_memory_query_tools(
+                memory_provider,
+                runtime_tool_names=memory_names,
+            )
         )
 
     nav_requested = [name for name in NAVIGATION_TOOL_NAMES if name in requested_set]

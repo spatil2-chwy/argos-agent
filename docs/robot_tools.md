@@ -6,7 +6,9 @@ This document describes the model-visible robot tool contract. Read it with:
 - `argos_src/tools/registry.py`
 - `argos_src/tools/unitree_go2/`
 - `config/profiles/static_interaction.yaml`
+- `config/profiles/cody_interaction.yaml`
 - `config/manifests/puffle.yaml`
+- `config/manifests/cody.yaml`
 - `docs/realtime_turn_flow.md`
 
 The Realtime model sees function schemas. Local Python resolves public tool IDs
@@ -39,8 +41,11 @@ resource capabilities before the agent is built.
 ## Default Enabled Tools
 
 `static_interaction` currently enables posture/action, short motion, visual
-capture, face enrollment, and employee identity resolution. Navigation tools are
-available in code but are not enabled in that profile unless added to
+capture, face enrollment, and employee identity resolution.
+
+`cody_interaction` also enables `memory.search_semantic`, which exposes a
+read-only Tailwag semantic-memory query tool. Navigation tools are available in
+code but are not enabled in those interaction profiles unless added to
 `tools.enabled_tool_ids`.
 
 | Public tool ID | Runtime tool | Capability | Main side effect |
@@ -53,6 +58,7 @@ available in code but are not enabled in that profile unless added to
 | `vision.capture_scene` | `capture_scene` | `camera.rgb` | Captures a provider camera image for the model. |
 | `identity.enroll_visible_person` | `enroll_visible_person` | `camera.rgb` | Runs face enrollment; saves only after quality gates and display acceptance when configured. |
 | `identity.resolve_employee_identity` | `resolve_employee_identity` | none | Local employee-directory lookup. |
+| `memory.search_semantic` | `search_memory_semantic` | none | Searches Tailwag episodes and durable memory items for the current recognized owner. |
 | `embodiment.unitree_go2.hello` | `go2_hello` | `embodiment.action` | Go2 gesture/action. |
 | `embodiment.unitree_go2.stretch` | `go2_stretch` | `embodiment.action` | Go2 gesture/action. |
 | `embodiment.unitree_go2.content` | `go2_content` | `embodiment.action` | Go2 gesture/action. |
@@ -107,6 +113,18 @@ resource provides the required capabilities.
 `get_current_location(save=true)` persists map resources. Treat it as an
 operator-controlled action because overwriting names such as `charge_dock`
 changes future navigation and docking behavior.
+
+## Optional Tailwag Memory Tool
+
+`memory.search_semantic` is model-visible only when the active profile enables
+it and `memory.enabled` creates a Tailwag provider. The runtime tool searches
+episodes and extracted memory items scoped to the current resolved `owner_id`.
+If no current owner is recognized, the tool returns an error instead of running
+a broad unscoped search.
+
+The memory tool is read-only from Argos' point of view. Episode ingestion,
+memory extraction, active follow-up handling, archival, and repair belong to
+Tailwag. See `memory_provider.md` and `slack_memory.md` for the memory contract.
 
 ## Motion And Local Bounds
 

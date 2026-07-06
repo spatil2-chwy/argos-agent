@@ -161,6 +161,7 @@ cython_debug/
 
 logs/
 var/
+data_collection/
 .vscode/
 
 !examples/imgs/*.md
@@ -182,3 +183,5 @@ scripts/labs/face_preview/
 !.codex/**
 data_collection/
 *.snowflake_env
+.tailwag
+.DS_Store

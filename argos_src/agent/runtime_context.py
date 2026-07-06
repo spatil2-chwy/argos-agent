@@ -22,132 +22,126 @@ def format_people_context(
     owner_source: str = "unknown",
     speaker_visible: bool = False,
 ) -> str:
-    """Build the [PEOPLE IN VIEW] block for turn-scoped instructions."""
+    """Build owner-scoped person context for turn instructions."""
     del primary_face_person_id
-    lines = ["[PEOPLE IN VIEW]"]
-    resolved_owner_id = owner_id
-    for person in persons:
-        is_owner = bool(resolved_owner_id and person.person_id == resolved_owner_id)
-        is_visible = bool(getattr(person, "visible", True))
-        if person.interaction_count == 0:
-            count_str = "first time"
-        elif person.interaction_count == 1:
-            count_str = "met once before"
-        else:
-            count_str = f"met {person.interaction_count} times"
-        speaker_tag = " [talking to you]" if is_owner else ""
-        if is_visible:
-            lines.append(f"- {person.name} ({count_str}){speaker_tag}")
-        else:
-            lines.append(
-                f"- Recognized speaker identity: {person.name} ({count_str}; not visible){speaker_tag}"
-            )
-        directory_profile_lines = tuple(
-            str(item).strip()
-            for item in (getattr(person, "directory_profile_lines", ()) or ())
-            if str(item).strip()
+    resolved_owner_id = str(owner_id or "").strip()
+    if not resolved_owner_id:
+        return ""
+
+    owner_person = next(
+        (
+            person
+            for person in persons
+            if str(getattr(person, "person_id", "") or "").strip() == resolved_owner_id
+        ),
+        None,
+    )
+    lines = ["[PERSON SPEAKING TO YOU]"]
+    owner_name = (
+        str(getattr(owner_person, "name", "") or "").strip()
+        if owner_person is not None
+        else ""
+    ) or resolved_owner_id
+    interaction_count = (
+        int(getattr(owner_person, "interaction_count", 0) or 0)
+        if owner_person is not None
+        else 0
+    )
+    if interaction_count == 0:
+        count_str = "first time"
+    elif interaction_count == 1:
+        count_str = "met once before"
+    else:
+        count_str = f"met {interaction_count} times"
+    owner_visible = (
+        bool(getattr(owner_person, "visible", True))
+        if owner_person is not None
+        else False
+    )
+    if owner_visible:
+        lines.append(f"- {owner_name} ({count_str})")
+    else:
+        lines.append(f"- {owner_name} ({count_str}; not visible)")
+
+    directory_items = (
+        getattr(owner_person, "directory_profile_lines", ())
+        if owner_person is not None
+        else ()
+    )
+    directory_profile_lines = tuple(
+        str(item).strip() for item in (directory_items or ()) if str(item).strip()
+    )
+    if directory_profile_lines:
+        lines.append(f"  Directory: {'; '.join(directory_profile_lines)}")
+
+    memory_items = (
+        getattr(owner_person, "memory_profile_lines", ())
+        if owner_person is not None
+        else ()
+    )
+    memory_profile_lines = tuple(
+        str(item).strip() for item in (memory_items or ()) if str(item).strip()
+    )
+    if memory_profile_lines:
+        lines.append(f"  About: {'; '.join(memory_profile_lines)}")
+    else:
+        lines.append(
+            "  About: No durable social memory stored yet. Use this conversation "
+            "to learn one useful social detail."
         )
-        if directory_profile_lines:
-            lines.append(f"  Directory: {'; '.join(directory_profile_lines)}")
-        if not is_owner:
-            continue
-        memory_profile_lines = tuple(
-            str(item).strip()
-            for item in (getattr(person, "memory_profile_lines", ()) or ())
-            if str(item).strip()
-        )
-        if memory_profile_lines:
-            lines.append(f"  About: {'; '.join(memory_profile_lines)}")
-        else:
-            lines.append(
-                "  About: No durable social memory stored yet. Use this conversation to learn one useful social detail."
-            )
-        followups = tuple(getattr(person, "potential_followups", ()) or ())
-        if followups:
-            rendered = " ".join(
-                str(item).strip() for item in followups if str(item).strip()
-            )
-            if rendered:
-                lines.append(f"  Potential Followups: {rendered}")
+    followups = tuple(
+        getattr(owner_person, "potential_followups", ())
+        if owner_person is not None
+        else ()
+    )
+    if followups:
+        rendered = " ".join(str(item).strip() for item in followups if str(item).strip())
+        if rendered:
+            lines.append(f"  Potential Followups: {rendered}")
 
     snapshot = face_snapshot or {}
-    recognized_count = int(snapshot.get("recognized_count", 0) or 0)
     unknown_count = int(snapshot.get("unknown_count", 0) or 0)
-    nearest_recognized = str(snapshot.get("nearest_recognized_name", "") or "").strip()
     snapshot_recognized_names = [
         str(name or "").strip()
         for name in (snapshot.get("recognized_names") or ())
         if str(name or "").strip()
     ]
-    recognized_names = snapshot_recognized_names or [
-        str(getattr(person, "name", "") or "").strip()
-        for person in persons
-        if bool(getattr(person, "visible", True))
-        and str(getattr(person, "name", "") or "").strip()
-    ]
-    audio_speaker_name = next(
-        (person.name for person in persons if person.person_id == audio_speaker_id),
-        "",
-    ).strip()
-    owner_name = next(
-        (person.name for person in persons if person.person_id == resolved_owner_id),
-        "",
-    ).strip()
+    visible_other_names: list[str] = []
+    for name in snapshot_recognized_names:
+        if name and name != owner_name and name not in visible_other_names:
+            visible_other_names.append(name)
+    for person in persons:
+        person_id = str(getattr(person, "person_id", "") or "").strip()
+        name = str(getattr(person, "name", "") or "").strip()
+        if person_id == resolved_owner_id or not name:
+            continue
+        if not bool(getattr(person, "visible", True)):
+            continue
+        if name not in visible_other_names:
+            visible_other_names.append(name)
 
-    if not persons and unknown_count > 0:
-        lines.append("- No recognized people in view yet.")
-
-    if recognized_count > 0 and unknown_count > 0:
-        if recognized_names:
-            lines.append(
-                "- Social scene: recognized people in view: "
-                + ", ".join(recognized_names)
-                + ". There is also at least one unrecognized person nearby."
-            )
-        elif nearest_recognized:
-            lines.append(
-                f"- Social scene: there is at least one unrecognized person nearby. The nearest recognized person is {nearest_recognized}."
-            )
+    if audio_speaker_id and str(audio_speaker_id or "").strip() == resolved_owner_id:
+        if speaker_visible:
+            lines.append("  Speaker resolution: voice match.")
         else:
-            lines.append(
-                "- Social scene: there is at least one recognized person in view and at least one unrecognized person nearby."
-            )
-    elif unknown_count > 0:
-        lines.append("- Social scene: there is at least one unrecognized person in view.")
-    elif recognized_names:
-        lines.append(
-            "- Social scene: recognized people in view: " + ", ".join(recognized_names) + "."
-        )
-    elif nearest_recognized:
-        lines.append(f"- Social scene: the nearest recognized person in view is {nearest_recognized}.")
+            lines.append("  Speaker resolution: voice match; not visible right now.")
+    elif owner_source == "face":
+        lines.append("  Speaker resolution: visible face owner.")
 
-    if audio_speaker_name and not speaker_visible:
-        lines.append(
-            f"- Current speaker voice matches {audio_speaker_name}, but {audio_speaker_name} is not visible right now."
-        )
-    elif audio_speaker_name:
-        lines.append(f"- Current speaker voice matches {audio_speaker_name}.")
-    elif owner_source == "face" and owner_name:
-        lines.append(
-            f"- Current speaker appears to be {owner_name} from the visible face captured for this turn."
-        )
-    elif recognized_count > 0 or unknown_count > 0:
-        lines.append("- Current speaker is not safely identified.")
+    if visible_other_names or unknown_count > 0:
+        lines.append("")
+        lines.append("[OTHER PEOPLE IN VIEW]")
+    for name in visible_other_names:
+        lines.append(f"- {name}")
+    if unknown_count > 0:
+        label = "unrecognized person" if unknown_count == 1 else "unrecognized people"
+        lines.append(f"- {unknown_count} {label}")
 
-    prioritized_language = ""
-    if resolved_owner_id:
-        prioritized_language = next(
-            (
-                str(getattr(person, "preferred_language", "") or "").strip()
-                for person in persons
-                if person.person_id == resolved_owner_id
-            ),
-            "",
-        )
-    if not prioritized_language and len(persons) == 1:
-        prioritized_language = str(
-            getattr(persons[0], "preferred_language", "") or ""
-        ).strip()
+    prioritized_language = (
+        str(getattr(owner_person, "preferred_language", "") or "").strip()
+        if owner_person is not None
+        else ""
+    )
     if prioritized_language:
         lines.append(
             f"- Prioritize talking in this language to this user: {prioritized_language}."

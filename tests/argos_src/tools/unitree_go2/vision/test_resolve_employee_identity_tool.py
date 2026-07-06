@@ -6,7 +6,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from argos_src.employee_directory.service import EmployeeDirectoryService
+from argos_src.employee_directory.service import (
+    EmployeeDirectoryService,
+    employee_email_from_username,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -101,6 +104,19 @@ def _build_service(rows: list[tuple[Any, ...]]) -> EmployeeDirectoryService:
     return service
 
 
+def test_employee_email_from_username_normalizes_directory_email():
+    assert (
+        employee_email_from_username(" spatil2 ", " Chewy.COM ")
+        == "spatil2@chewy.com"
+    )
+    assert (
+        employee_email_from_username(" Sakshee.Patil@Chewy.COM ", "ignored.com")
+        == "sakshee.patil@chewy.com"
+    )
+    assert employee_email_from_username("", "chewy.com") == ""
+    assert employee_email_from_username("spatil2", "") == ""
+
+
 def test_resolve_employee_identity_tool_returns_directory_unavailable_payload():
     module = _load_tool_module()
     tool = module.get_resolve_employee_identity_tool(_UnavailableDirectory())
@@ -116,10 +132,10 @@ def test_resolve_employee_identity_tool_caps_candidates_at_three():
     module = _load_tool_module()
     service = _build_service(
         [
-            ("Alex Kim", "Alex", "Kim", "Manager", "5 years"),
-            ("Alex Kim", "Alex", "Kim", "Director", "8 years"),
-            ("Alex Kim", "Alex", "Kim", "Engineer", "2 years"),
-            ("Alex Kim", "Alex", "Kim", "Analyst", "1 year"),
+            ("Alex Kim", "Manager", "5 years"),
+            ("Alex Kim", "Director", "8 years"),
+            ("Alex Kim", "Engineer", "2 years"),
+            ("Alex Kim", "Analyst", "1 year"),
         ]
     )
     tool = module.get_resolve_employee_identity_tool(service)
@@ -130,6 +146,84 @@ def test_resolve_employee_identity_tool_caps_candidates_at_three():
     assert payload["status"] == "multiple_matches"
     assert payload["candidate_count"] == 3
     assert len(payload["data"]["candidates"]) == 3
+
+
+def test_resolve_employee_identity_tool_redacts_internal_directory_fields():
+    module = _load_tool_module()
+    service = _build_service(
+        [
+            (
+                "Sakshee Patil",
+                "AI Technologist II",
+                "2 years",
+                "spatil2",
+                "Artificial Intelligence",
+                "Information Technology",
+                "Analyst",
+                "C05",
+                "Dan Burns",
+                "AI and Data Innovation",
+                "Jeff Greenfield",
+                "AI & Data",
+            ),
+        ]
+    )
+    tool = module.get_resolve_employee_identity_tool(service)
+
+    payload = json.loads(tool._run("Sakshee", "Patil", "Sakshee Patil"))
+
+    assert payload["success"] is True
+    assert payload["status"] == "single_match"
+    assert payload["data"]["candidates"] == [
+        {
+            "official_name": "Sakshee Patil",
+            "employee_name": "Sakshee Patil",
+            "username": "spatil2",
+            "business_title": "AI Technologist II",
+            "tenure": "2 years",
+            "match_score": 100.0,
+        }
+    ]
+
+    verified_profile = service.get_verified_profile(
+        username="spatil2",
+        official_name="Sakshee Patil",
+    )
+    assert verified_profile is not None
+    assert verified_profile["job_family"] == "Artificial Intelligence"
+    assert verified_profile["manager_name"] == "Dan Burns"
+    assert verified_profile["cost_center"] == "AI and Data Innovation"
+
+
+def test_resolve_employee_identity_matches_employee_name_only():
+    module = _load_tool_module()
+    service = _build_service(
+        [
+            (
+                "Sakshee Patil",
+                "AI Technologist II",
+                "2 years",
+                "spatil2",
+            ),
+        ]
+    )
+    tool = module.get_resolve_employee_identity_tool(service)
+
+    payload = json.loads(tool._run("Sakshi", "Patel", ""))
+
+    assert payload["success"] is True
+    assert payload["status"] == "needs_clarification"
+    assert payload["candidate_count"] == 1
+    assert payload["data"]["candidates"] == [
+        {
+            "official_name": "Sakshee Patil",
+            "employee_name": "Sakshee Patil",
+            "username": "spatil2",
+            "business_title": "AI Technologist II",
+            "tenure": "2 years",
+            "match_score": 91.6,
+        }
+    ]
 
 
 def test_resolve_employee_identity_tool_passes_separate_name_fields():

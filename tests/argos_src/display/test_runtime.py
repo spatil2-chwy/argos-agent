@@ -43,6 +43,33 @@ def test_display_runtime_review_posts_preview_and_waits_for_response():
     assert client.requests[1]["args"]["requestId"] == "capture-1"
 
 
+def test_display_runtime_image_message_preview_posts_and_clears():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    assert runtime.show_image_message_preview(
+        image_url="data:image/png;base64,abc",
+        title="Multiple Faces Detected",
+        message="Please make sure you are the only person in view.",
+        hold_sec=0,
+    )
+
+    commands = [
+        request["args"]
+        for request in client.requests
+        if request["operation"] == OP_DISPLAY_COMMAND
+    ]
+    assert commands == [
+        {
+            "type": "image_message_preview",
+            "imageUrl": "data:image/png;base64,abc",
+            "title": "Multiple Faces Detected",
+            "message": "Please make sure you are the only person in view.",
+        },
+        {"type": "clear"},
+    ]
+
+
 def test_display_runtime_deduplicates_faces_and_subtitles():
     client = _Client()
     runtime = DisplayRuntime(client=client, resource_id="interaction_display")

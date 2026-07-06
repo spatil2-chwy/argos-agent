@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from argos_src.memory.constants import DEFAULT_MEMORY_DB_PATH
 from argos_src.profile_config import (
     DEFAULT_FACE_DB_PATH,
     ProfileValidationError,
@@ -133,22 +132,53 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.robot.bridge.resource_id == "base"
     assert "motion.move_robot" in profile.tools.enabled_tool_ids
     assert profile.face_recognition.attention_gate.enabled is True
-    assert profile.face_recognition.attention_gate.min_face_area == 700
-    assert profile.face_recognition.attention_gate.distant_max_abs_yaw_deg == pytest.approx(
-        18.0
-    )
-    assert profile.face_recognition.attention_gate.max_center_offset_ratio == pytest.approx(
-        0.70
-    )
-    assert profile.face_recognition.enrollment_policy.min_face_area == 5000
-    assert profile.face_recognition.enrollment_policy.min_sharpness == pytest.approx(12.0)
+    assert profile.face_recognition.attention_gate.min_face_area == 1300
+    assert profile.face_recognition.attention_gate.max_abs_yaw_deg == pytest.approx(20.0)
+    assert profile.face_recognition.attention_gate.max_abs_pitch_deg == pytest.approx(18.0)
+    assert profile.face_recognition.attention_gate.max_abs_roll_deg == pytest.approx(90.0)
+    assert profile.face_recognition.attention_gate.min_abs_pitch_deg == pytest.approx(0.0)
+    assert profile.face_recognition.enrollment_policy.min_face_area == 1300
     assert profile.face_recognition.enrollment_policy.min_brightness == pytest.approx(35.0)
     assert profile.face_recognition.enrollment_policy.min_contrast == pytest.approx(15.5)
+    assert profile.face_recognition.recognition_threshold == pytest.approx(0.6)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.20)
+    assert profile.face_recognition.recognition_stability.window_frames == 5
+    assert profile.face_recognition.recognition_stability.min_hits == 2
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
     assert profile.realtime.admission.block_during_engaged is True
     assert profile.realtime.admission.open_on_interaction_states == ("alert",)
+    assert profile.memory.enabled is True
+    assert profile.memory.retention_class == "standard"
+    assert profile.memory.place_room_id == "realtime"
+    assert profile.memory.extract_live_turn_memory is True
+    assert profile.slack_memory.enabled is True
+    assert profile.slack_memory.include_email is True
+    assert profile.slack_memory.extract_memory is True
+    assert profile.slack_memory.channels[0].channel_id == "C0896C8CE83"
+
+
+def test_navigation_profile_extends_static_interaction_capabilities():
+    profile = load_scenario_profile("navigation")
+
+    assert profile.name == "navigation"
+    assert profile.manifest_id == "navigation"
+    assert profile.realtime.prompt_file == "navigation_prompt.md"
+    assert profile.navigation.locations_file == "lab.json"
+
+    assert "motion.move_robot" in profile.tools.enabled_tool_ids
+    assert "vision.capture_scene" in profile.tools.enabled_tool_ids
+    assert "identity.enroll_visible_person" in profile.tools.enabled_tool_ids
+    assert "identity.resolve_employee_identity" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_to_location" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_relative" in profile.tools.enabled_tool_ids
+    assert "dock.charging" in profile.tools.enabled_tool_ids
+
+    assert profile.employee_directory.enabled is True
+    assert profile.face_recognition.enabled is True
+    assert profile.speaker_recognition.enabled is True
+    assert profile.realtime.admission.open_on_attention_presence is True
 
 
 def test_display_can_be_disabled_even_when_manifest_has_display_resource():
@@ -345,6 +375,7 @@ def test_employee_directory_defaults_to_disabled():
 
     assert profile.employee_directory.enabled is False
     assert profile.employee_directory.site_code == ""
+    assert profile.employee_directory.email_domain == ""
 
 
 def test_employee_directory_requires_site_code_when_enabled():
@@ -410,6 +441,7 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
             "employee_directory": {
                 "enabled": True,
                 "site_code": "BOS3",
+                "email_domain": "Chewy.COM",
             },
         },
         profile_path=Path("/tmp/employee-directory-enabled-tool.yaml"),
@@ -420,6 +452,7 @@ def test_employee_directory_tool_is_kept_when_directory_enabled():
         "identity.resolve_employee_identity",
     )
     assert profile.employee_directory.site_code == "BOS3"
+    assert profile.employee_directory.email_domain == "Chewy.COM"
 
 
 def test_face_db_path_resolves_from_repo_root_not_cwd():
@@ -489,22 +522,10 @@ def test_face_attention_gate_profile_is_configurable():
                 "attention_gate": {
                     "enabled": True,
                     "min_face_area": 900,
-                    "min_face_area_ratio": 0.0005,
                     "max_abs_yaw_deg": 21.0,
                     "max_abs_pitch_deg": 17.0,
                     "max_abs_roll_deg": 31.0,
-                    "distant_max_abs_yaw_deg": 14.0,
-                    "distant_max_abs_pitch_deg": 29.0,
-                    "distant_max_abs_roll_deg": 24.0,
-                    "near_face_area_ratio": 0.03,
-                    "distant_face_area_ratio": 0.008,
-                    "near_depth_m": 0.7,
-                    "distant_depth_m": 2.3,
-                    "max_center_offset_ratio": 0.4,
-                    "min_confidence": 0.5,
-                    "smoothing_window_sec": 0.8,
-                    "min_attentive_observations": 3,
-                    "hold_sec": 0.6,
+                    "min_abs_pitch_deg": 2.0,
                 },
                 "proactive_greeting": {
                     "require_attention": True,
@@ -524,25 +545,33 @@ def test_face_attention_gate_profile_is_configurable():
     attention = profile.face_recognition.attention_gate
     assert attention.enabled is True
     assert attention.min_face_area == 900
-    assert attention.min_face_area_ratio == pytest.approx(0.0005)
     assert attention.max_abs_yaw_deg == pytest.approx(21.0)
     assert attention.max_abs_pitch_deg == pytest.approx(17.0)
     assert attention.max_abs_roll_deg == pytest.approx(31.0)
-    assert attention.distant_max_abs_yaw_deg == pytest.approx(14.0)
-    assert attention.distant_max_abs_pitch_deg == pytest.approx(29.0)
-    assert attention.distant_max_abs_roll_deg == pytest.approx(24.0)
-    assert attention.near_face_area_ratio == pytest.approx(0.03)
-    assert attention.distant_face_area_ratio == pytest.approx(0.008)
-    assert attention.near_depth_m == pytest.approx(0.7)
-    assert attention.distant_depth_m == pytest.approx(2.3)
-    assert attention.max_center_offset_ratio == pytest.approx(0.4)
-    assert attention.min_confidence == pytest.approx(0.5)
-    assert attention.smoothing_window_sec == pytest.approx(0.8)
-    assert attention.min_attentive_observations == 3
-    assert attention.hold_sec == pytest.approx(0.6)
+    assert attention.min_abs_pitch_deg == pytest.approx(2.0)
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
+
+
+def test_face_recognition_stability_profile_is_configurable():
+    profile = _parse_profile(
+        {
+            "name": "face-stability",
+            "face_recognition": {
+                "recognition_stability": {
+                    "window_frames": 7,
+                    "min_hits": 3,
+                },
+            },
+        },
+        profile_path=Path("/tmp/face-stability.yaml"),
+        framework_config={},
+    )
+
+    stability = profile.face_recognition.recognition_stability
+    assert stability.window_frames == 7
+    assert stability.min_hits == 3
 
 
 def test_face_live_image_profile_is_configurable():
@@ -567,14 +596,12 @@ def test_face_enrollment_policy_profile_is_configurable():
             "face_recognition": {
                 "enrollment_policy": {
                     "min_face_area": 6200,
-                    "min_sharpness": 14.0,
                     "min_brightness": 34.0,
                     "max_brightness": 215.0,
                     "min_contrast": 16.0,
-                    "max_eye_tilt": 0.22,
-                    "max_nose_center_offset": 0.09,
                     "min_embedding_similarity": 0.74,
                 },
+                "recognition_margin_threshold": 0.18,
             },
         },
         profile_path=Path("/tmp/enrollment-policy.yaml"),
@@ -583,13 +610,11 @@ def test_face_enrollment_policy_profile_is_configurable():
 
     policy = profile.face_recognition.enrollment_policy
     assert policy.min_face_area == 6200
-    assert policy.min_sharpness == pytest.approx(14.0)
     assert policy.min_brightness == pytest.approx(34.0)
     assert policy.max_brightness == pytest.approx(215.0)
     assert policy.min_contrast == pytest.approx(16.0)
-    assert policy.max_eye_tilt == pytest.approx(0.22)
-    assert policy.max_nose_center_offset == pytest.approx(0.09)
     assert policy.min_embedding_similarity == pytest.approx(0.74)
+    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.18)
 
 
 def test_face_recognition_rejects_provider_internal_camera_keys():
@@ -634,19 +659,25 @@ def test_face_recognition_rejects_provider_internal_camera_keys():
         )
 
 
-def test_memory_store_path_defaults_and_resolves_from_repo_root():
+def test_memory_profile_parses_tailwag_runtime_switches():
     profile = _parse_profile(
         {
-            "name": "memory-db-path",
-            "memory_store": {
-                "db_path": "var/memory/memory.sqlite3",
+            "name": "tailwag-memory",
+            "memory": {
+                "enabled": True,
+                "retention_class": "priority",
+                "place_room_id": "robotics-lab",
+                "extract_live_turn_memory": False,
             },
         },
-        profile_path=Path("/tmp/memory-db-path.yaml"),
+        profile_path=Path("/tmp/tailwag-memory.yaml"),
         framework_config={},
     )
 
-    assert profile.memory_store.db_path == str(DEFAULT_MEMORY_DB_PATH)
+    assert profile.memory.enabled is True
+    assert profile.memory.retention_class == "priority"
+    assert profile.memory.place_room_id == "robotics-lab"
+    assert profile.memory.extract_live_turn_memory is False
 
 
 def test_runtime_state_defaults_live_outside_source_package():
@@ -660,9 +691,10 @@ def test_runtime_state_defaults_live_outside_source_package():
     assert profile.identity_store.db_path == str(
         repo_root / "var" / "identity" / "identity.sqlite3"
     )
-    assert profile.memory_store.db_path == str(
-        repo_root / "var" / "memory" / "memory.sqlite3"
-    )
+    assert profile.memory.enabled is True
+    assert profile.memory.retention_class == "standard"
+    assert profile.memory.place_room_id == "realtime"
+    assert profile.memory.extract_live_turn_memory is True
     assert profile.face_recognition.db_path == str(repo_root / "var" / "face_recognition")
     assert profile.speaker_recognition.policy.db_path == str(
         repo_root / "var" / "speaker_recognition"
@@ -674,7 +706,12 @@ def test_explicit_runtime_state_paths_are_preserved():
         {
             "name": "explicit-runtime-state",
             "identity_store": {"db_path": "/tmp/argos/identity.sqlite3"},
-            "memory_store": {"db_path": "/tmp/argos/memory.sqlite3"},
+            "memory": {
+                "enabled": False,
+                "retention_class": "short_lived",
+                "place_room_id": "atrium",
+                "extract_live_turn_memory": False,
+            },
             "face_recognition": {"db_path": "/tmp/argos/faces"},
         },
         profile_path=Path("/tmp/explicit-runtime-state.yaml"),
@@ -682,7 +719,10 @@ def test_explicit_runtime_state_paths_are_preserved():
     )
 
     assert profile.identity_store.db_path == "/tmp/argos/identity.sqlite3"
-    assert profile.memory_store.db_path == "/tmp/argos/memory.sqlite3"
+    assert profile.memory.enabled is False
+    assert profile.memory.retention_class == "short_lived"
+    assert profile.memory.place_room_id == "atrium"
+    assert profile.memory.extract_live_turn_memory is False
     assert profile.face_recognition.db_path == "/tmp/argos/faces"
 
 
@@ -695,16 +735,19 @@ def test_slack_memory_profile_parses_channel_wiring():
                 "start_with_agent": False,
                 "bot_token_env": "CHEWY_SLACK_BOT_TOKEN",
                 "poll_interval_sec": 900.0,
-                "lookback_minutes": 45,
+                "state_path": ".tailwag/test-slack-state.json",
+                "backfill_hours": 2.5,
+                "force_backfill": True,
+                "active_thread_hours": 12.0,
+                "history_limit": 50,
+                "reply_limit": 25,
+                "extract_memory": False,
+                "include_email": True,
                 "channels": [
                     {
                         "name": "argos-test",
                         "channel_id": "C123",
-                        "site_code": "BOS3",
-                        "person_memory_enabled": True,
-                        "site_memory_enabled": False,
-                        "include_threads": True,
-                        "max_messages_per_window": 50,
+                        "backfill_hours": 1.5,
                     }
                 ],
             },
@@ -717,14 +760,38 @@ def test_slack_memory_profile_parses_channel_wiring():
     assert profile.slack_memory.start_with_agent is False
     assert profile.slack_memory.bot_token_env == "CHEWY_SLACK_BOT_TOKEN"
     assert profile.slack_memory.poll_interval_sec == 900.0
-    assert profile.slack_memory.lookback_minutes == 45
+    assert profile.slack_memory.state_path.endswith(".tailwag/test-slack-state.json")
+    assert profile.slack_memory.backfill_hours == pytest.approx(2.5)
+    assert profile.slack_memory.force_backfill is True
+    assert profile.slack_memory.active_thread_hours == pytest.approx(12.0)
+    assert profile.slack_memory.history_limit == 50
+    assert profile.slack_memory.reply_limit == 25
+    assert profile.slack_memory.extract_memory is False
+    assert profile.slack_memory.include_email is True
     assert len(profile.slack_memory.channels) == 1
     channel = profile.slack_memory.channels[0]
     assert channel.name == "argos-test"
     assert channel.channel_id == "C123"
-    assert channel.site_code == "BOS3"
-    assert channel.site_memory_enabled is False
-    assert channel.include_threads is True
+    assert channel.backfill_hours == pytest.approx(1.5)
+
+
+def test_slack_memory_requires_memory_enabled():
+    with pytest.raises(
+        ProfileValidationError,
+        match="slack_memory.enabled requires memory.enabled",
+    ):
+        _parse_profile(
+            {
+                "name": "slack-without-tailwag",
+                "memory": {"enabled": False},
+                "slack_memory": {
+                    "enabled": True,
+                    "channels": [{"name": "argos-test", "channel_id": "C123"}],
+                },
+            },
+            profile_path=Path("/tmp/slack-without-tailwag.yaml"),
+            framework_config={},
+        )
 
 
 def test_slack_memory_channel_requires_name():
@@ -738,6 +805,21 @@ def test_slack_memory_channel_requires_name():
                 },
             },
             profile_path=Path("/tmp/bad-slack-memory.yaml"),
+            framework_config={},
+        )
+
+
+def test_enabled_slack_memory_channel_requires_channel_id():
+    with pytest.raises(ProfileValidationError, match="channel_id is required"):
+        _parse_profile(
+            {
+                "name": "bad-slack-memory-channel-id",
+                "slack_memory": {
+                    "enabled": True,
+                    "channels": [{"name": "argos-test"}],
+                },
+            },
+            profile_path=Path("/tmp/bad-slack-memory-channel-id.yaml"),
             framework_config={},
         )
 
@@ -766,7 +848,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
                 "query_match_threshold": 0.81,
                 "query_margin_threshold": 0.11,
                 "reference_update_threshold": 0.57,
-                "enroll_min_rms_level": 420.0,
                 "max_clipped_fraction": 0.05,
             },
         },
@@ -778,7 +859,6 @@ def test_speaker_recognition_threshold_knobs_are_configurable():
     assert policy.query_match_threshold == pytest.approx(0.81)
     assert policy.query_margin_threshold == pytest.approx(0.11)
     assert policy.reference_update_threshold == pytest.approx(0.57)
-    assert policy.enroll_min_rms_level == pytest.approx(420.0)
     assert policy.max_clipped_fraction == pytest.approx(0.05)
 
 
@@ -794,5 +874,23 @@ def test_speaker_recognition_rejects_removed_word_count_knobs():
                 },
             },
             profile_path=Path("/tmp/speaker-old-knobs.yaml"),
+            framework_config={},
+        )
+
+
+def test_speaker_recognition_rejects_removed_disabled_gate_knobs():
+    with pytest.raises(ProfileValidationError, match="speaker_recognition"):
+        _parse_profile(
+            {
+                "name": "speaker-disabled-gates",
+                "speaker_recognition": {
+                    "enabled": True,
+                    "query_min_voiced_sec": 0.0,
+                    "enroll_min_voiced_sec": 0.0,
+                    "enroll_max_voiced_sec": 0.0,
+                    "enroll_min_rms_level": 0.0,
+                },
+            },
+            profile_path=Path("/tmp/speaker-disabled-gates.yaml"),
             framework_config={},
         )
