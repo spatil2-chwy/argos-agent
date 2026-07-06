@@ -3,7 +3,6 @@ import numpy as np
 from argos_src.speaker_recognition.models import SpeakerRecognitionPolicy
 from argos_src.speaker_recognition.policy import (
     enrollment_rejection_reason,
-    is_query_clip_safe,
     resolve_owner_id,
     trim_voice_activity,
 )
@@ -76,13 +75,30 @@ def test_resolve_owner_id_reports_audio_face_agreement_when_accepted_ids_match()
         primary_face_person_id="alice",
         audio_speaker_id="alice",
         top_score=0.61,
-        runner_up_score=0.80,
+        runner_up_score=0.21,
         visible_face_person_ids=("alice",),
     )
 
     assert result.owner_id == "alice"
     assert result.owner_source == "audio_face_agree"
     assert result.speaker_visible is True
+
+
+def test_resolve_owner_id_requires_margin_even_when_face_corroborates_audio():
+    policy = SpeakerRecognitionPolicy(query_match_threshold=0.40, query_margin_threshold=0.20)
+
+    result = resolve_owner_id(
+        policy=policy,
+        primary_face_person_id="alice",
+        audio_speaker_id="alice",
+        top_score=0.61,
+        runner_up_score=0.55,
+        visible_face_person_ids=("alice",),
+    )
+
+    assert result.owner_id == "alice"
+    assert result.owner_source == "face"
+    assert result.audio_speaker_id is None
 
 
 def test_resolve_owner_id_leaves_unresolved_without_face_or_accepted_audio():
@@ -116,37 +132,20 @@ def test_resolve_owner_id_leaves_unresolved_when_no_face_or_audio_owner():
     assert result.owner_source == "unknown"
 
 
-def test_enrollment_rejection_reason_rejects_short_audio():
-    policy = SpeakerRecognitionPolicy(enroll_min_voiced_sec=2.0)
-    waveform = _pcm16_with_amplitude(1200, duration_s=1.0)
+def test_enrollment_rejection_reason_rejects_empty_audio():
+    policy = SpeakerRecognitionPolicy()
+    waveform = np.asarray([], dtype=np.int16)
 
     reason = enrollment_rejection_reason(
         policy,
         audio_pcm16=waveform,
     )
 
-    assert reason == "reject_too_short"
-
-
-def test_enrollment_rejection_reason_rejects_quiet_audio():
-    policy = SpeakerRecognitionPolicy(
-        enroll_min_voiced_sec=2.0,
-        enroll_min_rms_level=350.0,
-    )
-    waveform = _pcm16_with_amplitude(100, duration_s=2.5)
-
-    reason = enrollment_rejection_reason(
-        policy,
-        audio_pcm16=waveform,
-    )
-
-    assert reason == "reject_too_quiet"
+    assert reason == "reject_empty"
 
 
 def test_enrollment_rejection_reason_accepts_clean_clip():
     policy = SpeakerRecognitionPolicy(
-        enroll_min_voiced_sec=2.0,
-        enroll_min_rms_level=350.0,
         max_clipped_fraction=0.02,
     )
     waveform = _pcm16_with_amplitude(1200, duration_s=2.5)
@@ -161,8 +160,6 @@ def test_enrollment_rejection_reason_accepts_clean_clip():
 
 def test_enrollment_rejection_reason_allows_clean_audio_without_transcript_dependency():
     policy = SpeakerRecognitionPolicy(
-        enroll_min_voiced_sec=2.0,
-        enroll_min_rms_level=350.0,
         max_clipped_fraction=0.02,
     )
     waveform = _pcm16_with_amplitude(1200, duration_s=2.5)
@@ -173,22 +170,10 @@ def test_enrollment_rejection_reason_allows_clean_audio_without_transcript_depen
     )
 
     assert reason == ""
-
-
-def test_query_clip_safety_depends_only_on_audio():
-    policy = SpeakerRecognitionPolicy(query_min_voiced_sec=0.8)
-    waveform = _pcm16_with_amplitude(1200, duration_s=1.2)
-
-    assert is_query_clip_safe(
-        policy,
-        audio_pcm16=waveform,
-    ) is True
 
 
 def test_enrollment_rejection_reason_does_not_need_transcript_to_accept_audio():
     policy = SpeakerRecognitionPolicy(
-        enroll_min_voiced_sec=2.0,
-        enroll_min_rms_level=350.0,
         max_clipped_fraction=0.02,
     )
     waveform = _pcm16_with_amplitude(1200, duration_s=2.5)
@@ -201,11 +186,8 @@ def test_enrollment_rejection_reason_does_not_need_transcript_to_accept_audio():
     assert reason == ""
 
 
-def test_enrollment_rejection_reason_allows_long_clean_clip_when_max_is_uncapped():
+def test_enrollment_rejection_reason_accepts_long_clean_clip():
     policy = SpeakerRecognitionPolicy(
-        enroll_min_voiced_sec=2.0,
-        enroll_max_voiced_sec=0.0,
-        enroll_min_rms_level=350.0,
         max_clipped_fraction=0.02,
     )
     waveform = _pcm16_with_amplitude(1200, duration_s=25.0)

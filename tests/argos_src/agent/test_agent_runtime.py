@@ -212,6 +212,10 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+    class _FakeFaceRecognitionStabilitySettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     class _FakeNavigationPolicy:
         def __init__(
             self,
@@ -359,6 +363,9 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         "argos_src.face_recognition.face_recognition_service"
     )
     face_service_mod.FaceEnrollmentPolicy = _FakeFaceEnrollmentPolicy
+    face_service_mod.FaceRecognitionStabilitySettings = (
+        _FakeFaceRecognitionStabilitySettings
+    )
     face_service_mod.FaceRecognitionService = _FakeFaceRecognitionService
     monkeypatch.setitem(
         sys.modules,
@@ -486,7 +493,7 @@ class _FakeSpeakerService:
         else:
             result = VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_clipped",
                 person_id=str(person_id or "").strip(),
                 attempt_kind=attempt_kind,
             )
@@ -771,7 +778,6 @@ def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     assert followups == [turn.req_id]
     assert owner_turn.cancellations == []
 
-
 def test_tool_invocation_context_includes_owner_id():
     agent = _make_agent()
     seen = {}
@@ -1027,7 +1033,7 @@ def test_owner_turn_is_requested_when_audio_turn_commits():
     assert owner_turn.requests[0]["owner_source"] == "face"
 
 
-def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
+def test_audio_turn_uses_raw_speaker_audio_without_trim_pass():
     agent = _make_agent()
     agent.speaker_service = _FakeSpeakerService()
     agent._vad = object()
@@ -1041,8 +1047,8 @@ def test_audio_turn_trimming_does_not_reuse_live_capture_vad():
         speech_end_unix_s=2.0,
     )
 
-    assert len(agent.speaker_service.trim_calls) == 1
-    assert agent.speaker_service.trim_calls[0]["vad"] is None
+    assert agent.speaker_service.trim_calls == []
+    assert agent.speaker_service.resolve_calls[0]["audio_pcm16"] == b"\x01\x02"
 
 
 def test_output_audio_does_not_request_duplicate_owner_turn():
@@ -1880,6 +1886,58 @@ def test_stale_cooldown_admission_does_not_override_idle_display():
     assert display_modes == []
 
 
+def test_closed_admission_clears_passive_alert_display():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent.realtime_profile.wake_window_sec = 5.0
+    agent.realtime_profile.admission = SimpleNamespace(
+        block_during_speaking=True,
+        block_during_engaged=False,
+        open_on_face_presence=False,
+        open_on_attention_presence=True,
+        open_on_interaction_states=("alert",),
+        open_on_wake_window=False,
+    )
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._wake_window_until = 0.0
+    agent._recording_active = False
+    agent._recording_started_at = 0.0
+    agent._last_voice_at = 0.0
+    agent._face_gate = SimpleNamespace(
+        is_face_present=lambda: False,
+        is_attention_present=lambda: False,
+    )
+    agent._vad = lambda *_args, **_kwargs: (False, {})
+    agent._wake_word = lambda *_args, **_kwargs: (False, {})
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "alert"
+
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert agent._display_queue.get_nowait() == ("mode", "idle")
+    assert agent._display_mode == "idle"
+
+
+def test_closed_admission_does_not_clear_thinking_display():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = "thinking"
+
+    agent._clear_passive_alert_display_if_needed()
+
+    assert agent._display_queue.empty()
+    assert agent._display_mode == "thinking"
+
+
 def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():
     agent = _make_agent()
     seen = []
@@ -2324,8 +2382,12 @@ def test_people_context_reports_audio_face_mismatch():
         speaker_visible=True,
     )
 
-    assert "- Bob (met once before) [talking to you]" in rendered
-    assert "Current speaker voice matches Bob." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
+    assert "Speaker resolution: voice match." in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "[talking to you]" not in rendered
     assert "primary visible person" not in rendered
 
 
@@ -2367,7 +2429,8 @@ def test_people_context_includes_directory_profile_lines():
         "Directory: title: AI Technologist II (Analyst); manager: Dan Burns; "
         "tenure: 0 year(s), 3 month(s), 5 day(s)"
     ) in rendered
-    assert "- Alice (met 2 times) [talking to you]" in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Alice (met 2 times)" in rendered
     assert "About: preferred name: sash" in rendered
 
 
@@ -2411,11 +2474,13 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
         speaker_visible=True,
     )
 
-    assert "- Alice (met 2 times)" in rendered
-    assert "Directory: title: Robotics Engineer" in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "Directory: title: Robotics Engineer" not in rendered
     assert "About: pet: Luna is her dog." not in rendered
     assert "Potential Followups: Ask about the Cape Cod trip." not in rendered
-    assert "- Bob (met once before) [talking to you]" in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
     assert "Directory: title: Product Manager" in rendered
     assert "About: preferred name: Bobby" in rendered
 
@@ -2449,8 +2514,9 @@ def test_people_context_reports_audio_face_agreement():
         speaker_visible=True,
     )
 
-    assert "- Alice (met 2 times) [talking to you]" in rendered
-    assert "Current speaker voice matches Alice." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Alice (met 2 times)" in rendered
+    assert "Speaker resolution: voice match." in rendered
     assert "primary visible person" not in rendered
 
 
@@ -2491,7 +2557,11 @@ def test_people_context_reports_offscreen_audio_speaker():
         speaker_visible=False,
     )
 
-    assert "Current speaker voice matches Bob, but Bob is not visible right now." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before)" in rendered
+    assert "Speaker resolution: voice match; not visible right now." in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
     assert "Attribute this turn to Bob, not Alice." not in rendered
 
 
@@ -2523,7 +2593,21 @@ def test_people_context_reports_unresolved_speaker():
         speaker_visible=False,
     )
 
-    assert "Current speaker is not safely identified." in rendered
+    assert rendered == ""
+
+
+def test_people_context_falls_back_to_owner_id_when_owner_person_missing():
+    rendered = format_people_context(
+        [],
+        audio_speaker_id="person-7",
+        owner_id="person-7",
+        owner_source="audio",
+        speaker_visible=False,
+    )
+
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- person-7 (first time; not visible)" in rendered
+    assert "Speaker resolution: voice match; not visible right now." in rendered
 
 
 def test_people_context_emits_preferred_language_directive():
@@ -2576,13 +2660,13 @@ def test_voice_reference_capture_arms_one_prompt_after_two_quality_failures():
         enrollment_results=[
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_short",
+                reason="reject_empty",
                 person_id="person-1",
                 attempt_kind="silent",
             ),
             VoiceEnrollmentResult(
                 saved=False,
-                reason="reject_too_quiet",
+                reason="reject_clipped",
                 person_id="person-1",
                 attempt_kind="silent",
             ),
@@ -2623,6 +2707,25 @@ def test_build_turn_instructions_uses_people_context_without_extra_speaker_block
     turn = _make_turn(
         "rt-guidance-enabled",
         context_snapshot=realtime_mod.FrozenTurnContext(
+            persons=[
+                SimpleNamespace(
+                    person_id="person-1",
+                    name="Alice",
+                    interaction_count=2,
+                    memory_profile_lines=(),
+                    potential_followups=(),
+                    preferred_language="",
+                ),
+                SimpleNamespace(
+                    person_id="person-2",
+                    name="Bob",
+                    interaction_count=1,
+                    memory_profile_lines=(),
+                    potential_followups=(),
+                    preferred_language="",
+                    visible=False,
+                ),
+            ],
             primary_face_person_id="person-1",
             audio_speaker_id="person-2",
             owner_id="person-2",
@@ -2639,8 +2742,47 @@ def test_build_turn_instructions_uses_people_context_without_extra_speaker_block
 
     rendered = agent._build_turn_instructions(turn)
 
-    assert "[PEOPLE IN VIEW]" in rendered
-    assert "Current speaker is not safely identified." in rendered
+    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "- Bob (met once before; not visible)" in rendered
+    assert "[OTHER PEOPLE IN VIEW]" in rendered
+    assert "- Alice" in rendered
+    assert "Current speaker is not safely identified." not in rendered
+
+
+def test_build_turn_instructions_omits_person_context_without_owner_id():
+    agent = _make_agent()
+    turn = _make_turn(
+        "rt-owner-unknown",
+        owner_id=None,
+        primary_face_person_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(
+            persons=[
+                SimpleNamespace(
+                    person_id="person-1",
+                    name="Alice",
+                    interaction_count=2,
+                    memory_profile_lines=("likes robotics",),
+                    potential_followups=("Ask about the perception demo.",),
+                    preferred_language="",
+                )
+            ],
+            primary_face_person_id=None,
+            owner_id=None,
+            owner_source="unknown",
+            face_snapshot={
+                "recognized_count": 1,
+                "unknown_count": 0,
+                "recognized_names": ["Alice"],
+            },
+        ),
+    )
+
+    rendered = agent._build_turn_instructions(turn)
+
+    assert "[PERSON SPEAKING TO YOU]" not in rendered
+    assert "[OTHER PEOPLE IN VIEW]" not in rendered
+    assert "Alice" not in rendered
+    assert "likes robotics" not in rendered
 
 
 def test_post_enrollment_voice_reference_save_clears_pending_state_and_supports_memory():

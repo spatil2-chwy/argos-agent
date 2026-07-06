@@ -89,7 +89,9 @@ class FaceRecognitionStore:
         if results["ids"] and results["ids"][0]:
             for i, person_id in enumerate(results["ids"][0]):
                 distance = results["distances"][0][i]
-                similarity = 1.0 - (distance * distance / 2.0)
+                # Chroma's default L2 distance is squared L2. For normalized face
+                # embeddings, squared_l2 = 2 - 2*cosine_similarity.
+                similarity = 1.0 - (distance / 2.0)
                 if similarity < threshold:
                     continue
                 record = self.identity_store.get_person(person_id)

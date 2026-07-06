@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any, Optional
+from collections import deque
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
+import cv2
 import numpy as np
 import torch
 
@@ -52,17 +54,80 @@ LOOP_HEARTBEAT_LOG_SEC = 5.0
 
 @dataclass(frozen=True)
 class FaceEnrollmentPolicy:
-    min_face_area: int = 5000
-    min_sharpness: float = 12.0
+    min_face_area: int = 1300
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    max_eye_tilt: float = 0.25
-    max_nose_center_offset: float = 0.10
     min_embedding_similarity: float = 0.70
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()
+
+
+@dataclass(frozen=True)
+class FaceRecognitionStabilitySettings:
+    window_frames: int = 5
+    min_hits: int = 2
+
+    def __post_init__(self) -> None:
+        if int(self.window_frames) < 1:
+            raise ValueError("window_frames must be >= 1")
+        if int(self.min_hits) < 1:
+            raise ValueError("min_hits must be >= 1")
+        if int(self.min_hits) > int(self.window_frames):
+            raise ValueError("min_hits must be <= window_frames")
+
+
+class RecognitionStabilityWindow:
+    """Promote recognized identities only after repeated recent frame hits."""
+
+    def __init__(self, settings: FaceRecognitionStabilitySettings | None = None) -> None:
+        self.settings = settings or FaceRecognitionStabilitySettings()
+        self._samples: deque[set[str]] = deque(maxlen=int(self.settings.window_frames))
+        self._latest_persons: dict[str, PersonContext] = {}
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._latest_persons.clear()
+
+    def update(self, persons: list[PersonContext]) -> tuple[list[PersonContext], set[str]]:
+        current_ids: set[str] = set()
+        latest_by_id: dict[str, PersonContext] = {}
+        for person in persons:
+            person_id = str(getattr(person, "person_id", "") or "").strip()
+            if not person_id:
+                continue
+            current_ids.add(person_id)
+            previous = latest_by_id.get(person_id)
+            if previous is None or int(person.bbox_area) > int(previous.bbox_area):
+                latest_by_id[person_id] = person
+
+        self._samples.append(current_ids)
+        for person_id, person in latest_by_id.items():
+            self._latest_persons[person_id] = person
+
+        counts: dict[str, int] = {}
+        for sample in self._samples:
+            for person_id in sample:
+                counts[person_id] = counts.get(person_id, 0) + 1
+        stable_ids = {
+            person_id
+            for person_id, count in counts.items()
+            if count >= int(self.settings.min_hits)
+        }
+
+        live_window_ids = set(counts)
+        for person_id in list(self._latest_persons):
+            if person_id not in live_window_ids:
+                del self._latest_persons[person_id]
+
+        stable_persons = [
+            person
+            for person_id, person in self._latest_persons.items()
+            if person_id in stable_ids
+        ]
+        stable_persons.sort(key=lambda person: int(person.bbox_area), reverse=True)
+        return stable_persons, stable_ids
 
 
 def _format_optional_float(value: Any) -> str:
@@ -87,12 +152,8 @@ class FaceEnrollmentQualityMetrics:
     bbox_area: int = 0
     clipped: bool = False
     crop_valid: bool = False
-    has_required_landmarks: bool = False
-    eye_tilt: float = 0.0
-    nose_center_offset: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
-    sharpness: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -101,6 +162,7 @@ class FacePreparationResult:
     reason: str = ""
     detected_count: int = 0
     rejected_count: int = 0
+    rejection_details: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -127,6 +189,7 @@ class FaceRecognitionService:
         self,
         db_path: str = DEFAULT_FACE_DB_PATH,
         recognition_threshold: float = 0.6,
+        recognition_margin_threshold: float = 0.20,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
         attention_gate_settings: AttentionGateSettings | None = None,
@@ -141,17 +204,16 @@ class FaceRecognitionService:
         live_image_title: str = "Camera",
         live_image_ttl_ms: int = 1000,
         live_image_enabled: bool = True,
+        recognition_stability_settings: FaceRecognitionStabilitySettings | None = None,
     ):
         self.device = FaceEmbeddingPipeline.resolve_device()
-        logger.info(f"Face recognition running on: {self.device}")
-        if self.device.type == "cuda":
-            logger.info(f"  GPU: {torch.cuda.get_device_name(0)}")
         self._pipeline: Optional[FaceEmbeddingPipeline] = None
         self.mtcnn = None
         self.resnet = None
 
         self.robot_client = robot_client
         self._recognition_threshold = float(recognition_threshold)
+        self._recognition_margin_threshold = float(recognition_margin_threshold)
         self.db = FaceRecognitionStore(
             db_path=db_path,
             identity_db_path=identity_db_path,
@@ -170,6 +232,11 @@ class FaceRecognitionService:
         self._live_image_enabled = bool(live_image_enabled)
         self._enrollment_policy = enrollment_policy or DEFAULT_FACE_ENROLLMENT_POLICY
         self._presence_cache = FacePresenceCache(cache_expire_sec=CACHE_EXPIRE_SEC)
+        self._recognition_stability = RecognitionStabilityWindow(
+            recognition_stability_settings
+        )
+        self._presence_subscribers: list[Callable[[dict[str, Any]], None]] = []
+        self._presence_subscribers_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
@@ -180,8 +247,69 @@ class FaceRecognitionService:
         self._loop_metric_heartbeat_at: dict[str, float] = {}
         self._loop_latency = LatencyLogger("face_loop")
 
-        logger.info("Face Recognition Service initialized")
-        logger.info(f"Device: {self.device} | DB: {self.db.collection.count()} people enrolled")
+        gpu_name = (
+            f", gpu={torch.cuda.get_device_name(0)}"
+            if self.device.type == "cuda"
+            else ""
+        )
+        logger.info(
+            "Face Recognition Service initialized (device=%s%s, enrolled=%s)",
+            self.device,
+            gpu_name,
+            self.db.collection.count(),
+        )
+
+    def subscribe_presence(
+        self,
+        callback: Callable[[dict[str, Any]], None],
+        *,
+        replay_latest: bool = True,
+    ) -> Callable[[], None]:
+        """Subscribe to immediate face-presence updates from the recognition loop."""
+        if not callable(callback):
+            raise TypeError("callback must be callable")
+        if not hasattr(self, "_presence_subscribers_lock"):
+            self._presence_subscribers_lock = threading.Lock()
+        if not hasattr(self, "_presence_subscribers"):
+            self._presence_subscribers = []
+        with self._presence_subscribers_lock:
+            self._presence_subscribers.append(callback)
+        if replay_latest:
+            try:
+                callback(self.get_presence_snapshot())
+            except Exception:
+                logger.exception("Face presence subscriber failed during replay")
+
+        def unsubscribe() -> None:
+            with self._presence_subscribers_lock:
+                try:
+                    self._presence_subscribers.remove(callback)
+                except ValueError:
+                    pass
+
+        return unsubscribe
+
+    def _notify_presence_subscribers(self, snapshot: dict[str, Any]) -> None:
+        if not hasattr(self, "_presence_subscribers_lock"):
+            self._presence_subscribers_lock = threading.Lock()
+        if not hasattr(self, "_presence_subscribers"):
+            self._presence_subscribers = []
+        with self._presence_subscribers_lock:
+            subscribers = list(self._presence_subscribers)
+        for callback in subscribers:
+            try:
+                callback(dict(snapshot or {}))
+            except Exception:
+                logger.exception("Face presence subscriber failed")
+
+    def _clear_presence_if_expired(self, now: float) -> bool:
+        if not self._presence_cache.clear_if_expired(now):
+            return False
+        stability = getattr(self, "_recognition_stability", None)
+        if stability is not None:
+            stability.reset()
+        self._notify_presence_subscribers(self.get_presence_snapshot())
+        return True
 
     # ------------------------------------------------------------------
     # Image capture
@@ -333,10 +461,6 @@ class FaceRecognitionService:
         if rgbd is None:
             return None, None
 
-        logger.debug(
-            "Captured synced RGBD pair for face recognition (delta_ms=%.2f)",
-            rgbd.delta_ms,
-        )
         return rgbd.color_image, rgbd.depth_m
 
     def _prepare_faces_for_recognition(
@@ -345,12 +469,18 @@ class FaceRecognitionService:
         depth_m,
     ) -> list[dict[str, Any]]:
         """Run detection, optional depth gating, then embedding extraction."""
-        return self._prepare_faces_for_recognition_result(image, depth_m).faces
+        return self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        ).faces
 
     def _prepare_faces_for_recognition_result(
         self,
         image,
         depth_m,
+        *,
+        min_face_area: int | None = None,
     ) -> FacePreparationResult:
         """Run detection, optional depth gating, and embedding extraction with diagnostics."""
         detected_faces = self.detect_faces(image)
@@ -363,13 +493,43 @@ class FaceRecognitionService:
 
         detected_count = len(detected_faces)
         rejected_count = 0
+        rejection_details: list[str] = []
+        if min_face_area is not None and int(min_face_area) > 0:
+            min_area = int(min_face_area)
+            area_rejected_faces = [
+                face
+                for face in detected_faces
+                if self._bbox_area(face) < min_area
+            ]
+            kept_faces = [
+                face
+                for face in detected_faces
+                if self._bbox_area(face) >= min_area
+            ]
+            area_rejected_count = len(area_rejected_faces)
+            for index, face in enumerate(area_rejected_faces):
+                rejection_details.append(
+                    f"face{index}:face_too_small area={self._bbox_area(face)} "
+                    f"min_face_area={min_area}"
+                )
+            rejected_count += area_rejected_count
+            detected_faces = kept_faces
+            if area_rejected_count and not detected_faces:
+                return FacePreparationResult(
+                    faces=[],
+                    reason="face_too_small",
+                    detected_count=detected_count,
+                    rejected_count=rejected_count,
+                    rejection_details=rejection_details,
+                )
         if depth_m is not None and self._depth_gate_settings is not None:
-            gated_faces, rejected_count = filter_detections_by_depth(
+            gated_faces, depth_rejected_count = filter_detections_by_depth(
                 detected_faces,
                 depth_m,
                 self._depth_gate_settings,
             )
-            if rejected_count:
+            rejected_count += depth_rejected_count
+            if depth_rejected_count:
                 kept = len(gated_faces)
                 total = len(detected_faces)
                 if kept == 0:
@@ -378,21 +538,22 @@ class FaceRecognitionService:
                         "[FaceLoop] depth gate kept 0/%s face(s); likely no valid aligned depth samples or face beyond %.2fm",
                         total,
                         self._depth_gate_settings.max_face_depth_m,
+                        level=logging.DEBUG,
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "[FaceLoop] depth gate kept %s/%s face(s)",
                         kept,
                         total,
                     )
             detected_faces = gated_faces
             if rejected_count and not detected_faces:
-                logger.debug("[FaceLoop] depth gate rejected all detected faces")
                 return FacePreparationResult(
                     faces=[],
                     reason="depth_rejected",
                     detected_count=detected_count,
                     rejected_count=rejected_count,
+                    rejection_details=rejection_details,
                 )
 
         faces_with_embeddings: list[dict[str, Any]] = []
@@ -409,11 +570,23 @@ class FaceRecognitionService:
                 reason="no_embedding",
                 detected_count=detected_count,
                 rejected_count=rejected_count,
+                rejection_details=rejection_details,
             )
         return FacePreparationResult(
             faces=faces_with_embeddings,
             detected_count=detected_count,
             rejected_count=rejected_count,
+            rejection_details=rejection_details,
+        )
+
+    def _recognition_min_face_area(self) -> int:
+        policy = getattr(self, "_enrollment_policy", DEFAULT_FACE_ENROLLMENT_POLICY)
+        return int(
+            getattr(
+                policy,
+                "min_face_area",
+                DEFAULT_FACE_ENROLLMENT_POLICY.min_face_area,
+            )
         )
 
     @staticmethod
@@ -456,15 +629,42 @@ class FaceRecognitionService:
         """Return one enrollment face from the already-usable face list.
 
         Callers should pass only faces that survived any active depth gate.
-        Enrollment should block only when more than one usable face remains.
+        Enrollment should block only when more than one enrollment-sized face remains.
         """
         if not detected_faces:
             return None, False
-        if len(detected_faces) == 1:
-            return detected_faces[0], False
+        min_face_area = int(
+            getattr(
+                getattr(self, "_enrollment_policy", DEFAULT_FACE_ENROLLMENT_POLICY),
+                "min_face_area",
+                DEFAULT_FACE_ENROLLMENT_POLICY.min_face_area,
+            )
+        )
+        ordered_all = sorted(
+            detected_faces,
+            key=lambda candidate: (
+                -float(candidate.get("confidence", 0.0)),
+                -float(self._bbox_area(candidate)),
+            ),
+        )
+        enrollment_sized = [
+            candidate
+            for candidate in ordered_all
+            if self._bbox_area(candidate) >= min_face_area
+        ]
+        if not enrollment_sized:
+            return ordered_all[0], False
+        if len(enrollment_sized) == 1:
+            ignored = len(ordered_all) - 1
+            if ignored > 0:
+                logger.debug(
+                    "Enrollment ignored %s below-min-area face detection(s) and kept the strongest enrollment-sized candidate.",
+                    ignored,
+                )
+            return enrollment_sized[0], False
 
         ordered = sorted(
-            detected_faces,
+            enrollment_sized,
             key=lambda candidate: (
                 -float(candidate.get("confidence", 0.0)),
                 -float(self._bbox_area(candidate)),
@@ -488,9 +688,9 @@ class FaceRecognitionService:
             significant_others.append(other)
         if significant_others:
             return None, True
-        logger.info(
-            "Enrollment ignored %s extra face detection(s) and kept the strongest candidate.",
-            len(ordered) - 1,
+        logger.debug(
+            "Enrollment ignored %s extra face detection(s) and kept the strongest enrollment-sized candidate.",
+            len(ordered_all) - 1,
         )
         return primary, False
 
@@ -511,9 +711,6 @@ class FaceRecognitionService:
         guidance_by_reason = {
             "face_too_small": "Come a little closer so I can see your face clearly.",
             "face_clipped": "Please center your whole face in view.",
-            "missing_landmarks": "Please face me directly.",
-            "side_face": "Please face me directly.",
-            "too_blurry": "Hold still for a second so the image is clear.",
             "too_dark": "Please move to better light.",
             "too_bright": "Please move away from the bright light.",
             "low_contrast": "Please move to better light.",
@@ -567,44 +764,20 @@ class FaceRecognitionService:
         bbox_area = int(w * h)
         clipped = x <= 1 or y <= 1 or (x + w) >= (width - 1) or (y + h) >= (height - 1)
 
-        landmarks = face.get("landmarks") or {}
-        required = ("left_eye", "right_eye", "nose", "mouth_left", "mouth_right")
-        has_required_landmarks = all(name in landmarks for name in required)
-        eye_tilt = 0.0
-        nose_offset = 0.0
-        if has_required_landmarks:
-            left_eye = np.asarray(landmarks["left_eye"], dtype=np.float32)
-            right_eye = np.asarray(landmarks["right_eye"], dtype=np.float32)
-            nose = np.asarray(landmarks["nose"], dtype=np.float32)
-            eye_distance = float(np.linalg.norm(right_eye - left_eye))
-            if eye_distance > 1e-6:
-                eye_tilt = abs(float(left_eye[1] - right_eye[1])) / eye_distance
-                nose_offset = abs(float(nose[0] - ((left_eye[0] + right_eye[0]) / 2.0))) / eye_distance
-            else:
-                has_required_landmarks = False
-
         crop = image[y : y + h, x : x + w]
         crop_valid = bool(crop.size > 0)
         brightness = 0.0
         contrast = 0.0
-        sharpness = 0.0
         if crop_valid:
             gray = crop.astype(np.float32).mean(axis=2) if crop.ndim == 3 else crop.astype(np.float32)
             brightness = float(np.mean(gray))
             contrast = float(np.std(gray))
-            if gray.shape[0] >= 2 and gray.shape[1] >= 2:
-                dy, dx = np.gradient(gray)
-                sharpness = float(np.var(dx) + np.var(dy))
         return FaceEnrollmentQualityMetrics(
             bbox_area=bbox_area,
             clipped=clipped,
             crop_valid=crop_valid,
-            has_required_landmarks=has_required_landmarks,
-            eye_tilt=eye_tilt,
-            nose_center_offset=nose_offset,
             brightness=brightness,
             contrast=contrast,
-            sharpness=sharpness,
         )
 
     @staticmethod
@@ -655,26 +828,9 @@ class FaceRecognitionService:
         if metrics.clipped:
             reason, guidance = self._quality_response_for_reason("face_clipped")
             return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if not metrics.has_required_landmarks:
-            reason, guidance = self._quality_response_for_reason("missing_landmarks")
-            return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if (
-            metrics.eye_tilt > policy.max_eye_tilt
-            or metrics.nose_center_offset > policy.max_nose_center_offset
-        ):
-            reason, guidance = self._quality_response_for_reason("side_face")
-            return FaceEnrollmentQuality(
-                False,
-                reason,
-                guidance,
-                max(metrics.eye_tilt, metrics.nose_center_offset),
-            )
         if not metrics.crop_valid:
             reason, guidance = self._quality_response_for_reason("face_clipped")
             return FaceEnrollmentQuality(False, reason, guidance, 0.0)
-        if metrics.sharpness < policy.min_sharpness:
-            reason, guidance = self._quality_response_for_reason("too_blurry")
-            return FaceEnrollmentQuality(False, reason, guidance, metrics.sharpness)
         if metrics.brightness < policy.min_brightness:
             reason, guidance = self._quality_response_for_reason("too_dark")
             return FaceEnrollmentQuality(False, reason, guidance, metrics.brightness)
@@ -686,15 +842,88 @@ class FaceRecognitionService:
             return FaceEnrollmentQuality(False, reason, guidance, metrics.contrast)
         return FaceEnrollmentQuality(True)
 
-    def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
+    def _recognize_face_match_with_diagnostics(
+        self,
+        face: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        match_override = self.__dict__.get("_recognize_face_match")
+        if callable(match_override):
+            match = match_override(face)
+            if match is None:
+                return None, {"status": "rejected", "reason": "no_match"}
+            similarity = float(match.get("similarity", 0.0) or 0.0)
+            return match, {
+                "status": "accepted",
+                "reason": "matched",
+                "name": str(match.get("name", "") or ""),
+                "person_id": str(match.get("person_id", "") or ""),
+                "similarity": similarity,
+                "threshold": float(getattr(self, "_recognition_threshold", 0.0) or 0.0),
+                "runner_up_similarity": float(
+                    match.get("runner_up_similarity", 0.0) or 0.0
+                ),
+                "margin": float(match.get("similarity_margin", 0.0) or 0.0),
+                "margin_threshold": float(
+                    getattr(self, "_recognition_margin_threshold", 0.0) or 0.0
+                ),
+            }
+
         matches = self.db.recognize_face(
             face_embedding=face["embedding"],
-            threshold=self._recognition_threshold,
-            top_k=1,
+            threshold=-1.0,
+            top_k=2,
         )
         if not matches:
-            return None
-        return matches[0]
+            return None, {"status": "rejected", "reason": "no_db_match"}
+        top_match = matches[0]
+        top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
+        runner_up_similarity = (
+            float(matches[1].get("similarity", 0.0) or 0.0)
+            if len(matches) > 1
+            else 0.0
+        )
+        margin = top_similarity - runner_up_similarity
+        if top_similarity < self._recognition_threshold:
+            return None, {
+                "status": "rejected",
+                "reason": "below_threshold",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": float(self._recognition_threshold),
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": float(self._recognition_margin_threshold),
+            }
+        if margin < self._recognition_margin_threshold:
+            return None, {
+                "status": "rejected",
+                "reason": "margin_too_small",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": float(self._recognition_threshold),
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": float(self._recognition_margin_threshold),
+            }
+        top_match["runner_up_similarity"] = runner_up_similarity
+        top_match["similarity_margin"] = margin
+        return top_match, {
+            "status": "accepted",
+            "reason": "matched",
+            "name": str(top_match.get("name", "") or ""),
+            "person_id": str(top_match.get("person_id", "") or ""),
+            "similarity": top_similarity,
+            "threshold": float(self._recognition_threshold),
+            "runner_up_similarity": runner_up_similarity,
+            "margin": margin,
+            "margin_threshold": float(self._recognition_margin_threshold),
+        }
+
+    def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
+        match, _diagnostics = self._recognize_face_match_with_diagnostics(face)
+        return match
 
     def _build_scene_state(
         self,
@@ -725,7 +954,8 @@ class FaceRecognitionService:
                 ),
             )
             face_center = face_center_px(face)
-            match = self._recognize_face_match(face)
+            match, recognition = self._recognize_face_match_with_diagnostics(face)
+            face["recognition"] = recognition
             pid = match["person_id"] if match is not None else ""
             track_id = pid or self._unknown_attention_track_id(face, image_shape)
             attention = attention_gate.evaluate(
@@ -822,16 +1052,121 @@ class FaceRecognitionService:
                     attention_confidence=attention.confidence,
                 )
             )
+            face["recognized_person_id"] = pid
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
+
+    def _ensure_recognition_stability(self) -> RecognitionStabilityWindow:
+        stability = getattr(self, "_recognition_stability", None)
+        if stability is None:
+            stability = RecognitionStabilityWindow()
+            self._recognition_stability = stability
+        return stability
+
+    def _stable_scene_state(
+        self,
+        *,
+        detected_faces: list[dict[str, Any]],
+        raw_persons: list[PersonContext],
+        image_shape: tuple[int, ...],
+        now: float,
+    ) -> tuple[list[PersonContext], int, set[str], Any]:
+        stable_persons, stable_ids = self._ensure_recognition_stability().update(
+            raw_persons
+        )
+        stable_by_id = {
+            str(person.person_id or "").strip(): person
+            for person in stable_persons
+            if str(person.person_id or "").strip()
+        }
+        current_stable_ids: set[str] = set()
+        candidates: list[FaceSceneCandidate] = []
+        unknown_count = 0
+        seen_stable_candidates: set[str] = set()
+        single_face_stable_fallback = (
+            len(detected_faces) == 1
+            and len(stable_by_id) == 1
+            and not str(detected_faces[0].get("recognized_person_id") or "").strip()
+        )
+
+        for face in detected_faces:
+            pid = str(face.get("recognized_person_id") or "").strip()
+            attention = face.get("attention")
+            bbox_area = self._bbox_area(face)
+            center_distance = self._center_distance(face, image_shape)
+            stable_person = None
+            if pid and pid in stable_ids and pid in stable_by_id:
+                stable_person = stable_by_id[pid]
+            elif single_face_stable_fallback:
+                fallback_pid, fallback_person = next(iter(stable_by_id.items()))
+                if fallback_pid in stable_ids:
+                    pid = fallback_pid
+                    stable_person = fallback_person
+
+            if stable_person is not None:
+                person = replace(
+                    stable_person,
+                    bbox_area=bbox_area,
+                    timestamp=now,
+                    depth_m=face.get("depth_m"),
+                    center_distance=center_distance,
+                    attentive=bool(getattr(attention, "attentive", False)),
+                    attention_confidence=float(
+                        getattr(attention, "confidence", 0.0) or 0.0
+                    ),
+                    head_yaw_deg=getattr(attention, "yaw_deg", None),
+                    head_pitch_deg=getattr(attention, "pitch_deg", None),
+                    head_roll_deg=getattr(attention, "roll_deg", None),
+                )
+                stable_by_id[pid] = person
+                current_stable_ids.add(pid)
+                seen_stable_candidates.add(pid)
+                candidates.append(
+                    FaceSceneCandidate(
+                        kind="recognized",
+                        bbox_area=int(person.bbox_area),
+                        center_distance=float(person.center_distance),
+                        depth_m=person.depth_m,
+                        person_id=person.person_id,
+                        name=person.name,
+                        attentive=bool(person.attentive),
+                        attention_confidence=float(person.attention_confidence),
+                    )
+                )
+                continue
+
+            unknown_count += 1
+            candidates.append(
+                FaceSceneCandidate(
+                    kind="unknown",
+                    bbox_area=bbox_area,
+                    center_distance=center_distance,
+                    depth_m=face.get("depth_m"),
+                    attentive=bool(getattr(attention, "attentive", False)),
+                    attention_confidence=float(
+                        getattr(attention, "confidence", 0.0) or 0.0
+                    ),
+                )
+            )
+
+        current_stable_persons = [
+            stable_by_id[person_id]
+            for person_id in current_stable_ids
+            if person_id in stable_by_id
+        ]
+        current_stable_persons.sort(
+            key=lambda person: int(person.bbox_area),
+            reverse=True,
+        )
+        return current_stable_persons, unknown_count, current_stable_ids, analyze_face_scene(candidates)
 
     @staticmethod
     def _unknown_attention_track_id(
         face: dict[str, Any],
         image_shape: tuple[int, ...],
     ) -> str:
-        """Return a coarse stable key for smoothing unknown attentive faces."""
+        """Return a coarse stable key for unknown attention tracks."""
         center = face_center_px(face)
         if center is None:
             return "unknown"
@@ -909,7 +1244,11 @@ class FaceRecognitionService:
                 )
             return result
 
-        prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepared = self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        )
         detected_faces = prepared.faces
         result["faces_detected"] = len(detected_faces)
 
@@ -948,10 +1287,14 @@ class FaceRecognitionService:
                     "interaction_count": updated_meta.get("interaction_count", 0),
                 })
                 result["faces_recognized"] += 1
-                logger.info(f"Recognized: {match['name']} (similarity: {match['similarity']:.2f})")
+                logger.debug(
+                    "Recognized face name=%s similarity=%.2f",
+                    match["name"],
+                    match["similarity"],
+                )
             else:
                 result["unknown_faces"] += 1
-                logger.info("Detected unknown face")
+                logger.debug("Detected unknown face")
 
         result["success"] = True
         return result
@@ -997,6 +1340,7 @@ class FaceRecognitionService:
             username=username,
             employee_profile=employee_profile,
             camera_resource_id=camera_resource_id,
+            display_runtime=display_runtime,
         )
         if failure is not None:
             return failure
@@ -1078,6 +1422,7 @@ class FaceRecognitionService:
         username: str = "",
         employee_profile: dict[str, Any] | None = None,
         camera_resource_id: str | None = None,
+        display_runtime: Any | None = None,
     ) -> tuple[FaceEnrollmentCandidate | None, dict[str, Any] | None]:
         verified_profile = {
             key: str(value or "").strip()
@@ -1124,7 +1469,7 @@ class FaceRecognitionService:
             raw_detected_count = int(prepared.detected_count or 0)
             rejected_count = int(prepared.rejected_count or 0)
             if raw_detected_count > len(usable_faces):
-                logger.info(
+                logger.debug(
                     "Enrollment ignored %s face(s) outside the usable registration scene raw_detected=%s usable=%s rejected=%s",
                     raw_detected_count - len(usable_faces),
                     raw_detected_count,
@@ -1145,6 +1490,11 @@ class FaceRecognitionService:
                     len(usable_faces),
                     rejected_count,
                 )
+                self._show_multiple_faces_enrollment_preview(
+                    display_runtime,
+                    image=image,
+                    faces=usable_faces,
+                )
                 return (
                     None,
                     self._enrollment_response(
@@ -1163,7 +1513,7 @@ class FaceRecognitionService:
             quality = self._assess_enrollment_face_quality(image, face)
             if not quality.accepted:
                 last_quality = quality
-                logger.info(
+                logger.debug(
                     "Enrollment frame rejected reason=%s metric=%.3f guidance=%s",
                     quality.reason,
                     quality.metric,
@@ -1341,6 +1691,75 @@ class FaceRecognitionService:
             ),
         )
 
+    def _show_multiple_faces_enrollment_preview(
+        self,
+        display_runtime: Any | None,
+        *,
+        image: Any,
+        faces: list[dict[str, Any]],
+    ) -> None:
+        if display_runtime is None or not bool(
+            getattr(display_runtime, "is_configured", False)
+        ):
+            return
+        show_preview = getattr(display_runtime, "show_image_message_preview", None)
+        if not callable(show_preview):
+            return
+        image_url = self._enrollment_preview_data_url(
+            self._enrollment_diagnostic_image(image, faces)
+        )
+        if not image_url:
+            return
+        try:
+            show_preview(
+                image_url=image_url,
+                title="Multiple Faces Detected",
+                message=(
+                    "I can see more than one face. Please make sure you are the only "
+                    "person in view before enrollment."
+                ),
+                hold_sec=5.0,
+            )
+        except Exception as exc:
+            logger.warning("Multiple-face enrollment preview failed: %s", exc)
+
+    @staticmethod
+    def _enrollment_diagnostic_image(image: Any, faces: list[dict[str, Any]]) -> Any:
+        if image is None or not hasattr(image, "shape"):
+            return image
+        try:
+            annotated = image.copy()
+            height, width = annotated.shape[:2]
+            for idx, face in enumerate(faces, start=1):
+                bbox = face.get("bbox") or {}
+                x = max(0, min(int(bbox.get("x", 0) or 0), width - 1))
+                y = max(0, min(int(bbox.get("y", 0) or 0), height - 1))
+                w = max(0, int(bbox.get("w", 0) or 0))
+                h = max(0, int(bbox.get("h", 0) or 0))
+                x2 = max(0, min(x + w, width - 1))
+                y2 = max(0, min(y + h, height - 1))
+                if x2 <= x or y2 <= y:
+                    continue
+                color = (255, 221, 0)
+                cv2.rectangle(annotated, (x, y), (x2, y2), color, 2)
+                confidence = float(face.get("confidence", 0.0) or 0.0)
+                label = f"{idx}: {confidence:.2f}"
+                text_y = max(14, y - 6)
+                cv2.putText(
+                    annotated,
+                    label,
+                    (x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+            return annotated
+        except Exception:
+            logger.exception("Failed to prepare multiple-face enrollment preview")
+            return image.copy() if hasattr(image, "copy") else image
+
     @staticmethod
     def _enrollment_preview_data_url(image: Any) -> str:
         if image is None:
@@ -1460,6 +1879,7 @@ class FaceRecognitionService:
             social_scene=social_scene,
             now=now,
         )
+        self._notify_presence_subscribers(self.get_presence_snapshot())
 
     # ------------------------------------------------------------------
     # Background loop (continuous recognition, zero latency at response time)
@@ -1481,6 +1901,8 @@ class FaceRecognitionService:
         unknown_count: int | None = None,
         rejected_count: int | None = None,
         reason: str | None = None,
+        prepare_details: list[str] | None = None,
+        recognition_details: list[str] | None = None,
     ) -> None:
         latency = getattr(self, "_loop_latency", None)
         if latency is None:
@@ -1510,6 +1932,8 @@ class FaceRecognitionService:
             unknown=unknown_count,
             rejected=rejected_count,
             reason=reason,
+            prepare_details=prepare_details,
+            recognition_details=recognition_details,
         )
 
     def _loop_tick(
@@ -1525,22 +1949,8 @@ class FaceRecognitionService:
         image, depth_m = self._capture_for_recognition(camera_resource_id, timeout=1.5)
         capture_s = perf_now() - capture_started
         if image is None:
-            if self._depth_gate_settings is None:
-                self._log_loop_heartbeat(
-                    "no_color_frame",
-                    "[FaceLoop] no color frame available from camera resource %s within %.2fs",
-                    camera_resource_id,
-                    1.5,
-                )
-            else:
-                self._log_loop_heartbeat(
-                    "no_rgbd_pair",
-                    "[FaceLoop] no synced RGBD pair available from camera resource %s within %.2fs",
-                    camera_resource_id,
-                    min(1.5, self._depth_gate_settings.capture_timeout_sec),
-                )
-            if self._presence_cache.clear_if_expired(now):
-                logger.info("[FaceLoop] no image, cache expired and cleared")
+            if self._clear_presence_if_expired(now):
+                logger.debug("[FaceLoop] no image, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
                 camera_resource_id=camera_resource_id,
@@ -1556,31 +1966,19 @@ class FaceRecognitionService:
             captured_at=time.time(),
         )
         prepare_started = perf_now()
-        prepared = self._prepare_faces_for_recognition_result(image, depth_m)
+        prepared = self._prepare_faces_for_recognition_result(
+            image,
+            depth_m,
+            min_face_area=self._recognition_min_face_area(),
+        )
         prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
         if not detected_faces:
             publish_started = perf_now()
             self._publish_live_image_frame(image)
             publish_s = perf_now() - publish_started
-            if prepared.reason:
-                self._log_loop_heartbeat(
-                    f"prepare_{prepared.reason}",
-                    "[FaceLoop] summary reason=%s detected=%s rejected=%s "
-                    "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-                    "primary_face=%s primary_attention=%s",
-                    prepared.reason,
-                    prepared.detected_count,
-                    prepared.rejected_count,
-                    [],
-                    0,
-                    [],
-                    0,
-                    None,
-                    None,
-                )
-            if self._presence_cache.clear_if_expired(now):
-                logger.info("[FaceLoop] no faces, cache expired and cleared")
+            if self._clear_presence_if_expired(now):
+                logger.debug("[FaceLoop] no faces, cache expired and cleared")
             self._emit_loop_timing(
                 tick_started=tick_started,
                 camera_resource_id=camera_resource_id,
@@ -1594,14 +1992,21 @@ class FaceRecognitionService:
                 unknown_count=0,
                 rejected_count=prepared.rejected_count,
                 reason=prepared.reason,
+                prepare_details=prepared.rejection_details or None,
             )
             return
 
         self._presence_cache.mark_faces_seen(now)
         scene_started = perf_now()
-        persons, unknown_count, current_ids, analysis = self._build_scene_state(
+        raw_persons, raw_unknown_count, _, _ = self._build_scene_state(
             image=image,
             detected_faces=detected_faces,
+            image_shape=image.shape,
+            now=now,
+        )
+        persons, unknown_count, current_ids, analysis = self._stable_scene_state(
+            detected_faces=detected_faces,
+            raw_persons=raw_persons,
             image_shape=image.shape,
             now=now,
         )
@@ -1621,26 +2026,38 @@ class FaceRecognitionService:
             social_scene=analysis.social_scene,
             now=now,
         )
+        self._notify_presence_subscribers(self.get_presence_snapshot())
         attentive_names = [p.name for p in persons if bool(p.attentive)]
-        primary_attention = analysis.primary_attention_target
-        attention_details = self._format_attention_log_details(detected_faces)
-        logger.debug(
-            "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
-            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
-            "attention_details=%s",
-            len(detected_faces),
-            [p.name for p in persons],
-            unknown_count,
-            attentive_names,
-            analysis.attentive_unknown_count,
-            analysis.attention_target.person_id if analysis.attention_target else None,
-            (
-                primary_attention.person_id
-                if primary_attention and primary_attention.person_id
-                else (primary_attention.kind if primary_attention else None)
-            ),
-            attention_details,
+        recognized_details = self._format_recognition_log_details(persons)
+        recognition_rejection_details = self._format_recognition_attempt_log_details(
+            detected_faces
         )
+        primary_attention = analysis.primary_attention_target
+        primary_face = (
+            analysis.attention_target.person_id if analysis.attention_target else None
+        )
+        primary_attention_label = (
+            primary_attention.person_id
+            if primary_attention and primary_attention.person_id
+            else (primary_attention.kind if primary_attention else None)
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[FaceLoop] detected %s face(s), recognized=%s unknown=%s "
+                "raw_recognized=%s raw_unknown=%s attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s "
+                "recognition_rejections=%s attention_details=%s",
+                len(detected_faces),
+                recognized_details,
+                unknown_count,
+                len(raw_persons),
+                raw_unknown_count,
+                attentive_names,
+                analysis.attentive_unknown_count,
+                primary_face,
+                primary_attention_label,
+                recognition_rejection_details,
+                self._format_attention_log_details(detected_faces),
+            )
         self._emit_loop_timing(
             tick_started=tick_started,
             camera_resource_id=camera_resource_id,
@@ -1655,27 +2072,62 @@ class FaceRecognitionService:
             unknown_count=unknown_count,
             rejected_count=prepared.rejected_count,
             reason="ok",
+            prepare_details=prepared.rejection_details or None,
+            recognition_details=recognition_rejection_details or None,
         )
         self._log_loop_heartbeat(
             "attention_summary",
-            "[FaceLoop] summary reason=%s detected=%s rejected=%s "
-            "recognized=%s unknown=%s attentive=%s attentive_unknown=%s "
-            "primary_face=%s primary_attention=%s attention_details=%s",
-            "ok",
+            "[FaceLoop] summary detected=%s rejected=%s recognized=%s unknown=%s "
+            "attentive=%s attentive_unknown=%s primary_face=%s primary_attention=%s",
             len(detected_faces),
             prepared.rejected_count,
-            [p.name for p in persons],
+            len(persons),
             unknown_count,
-            attentive_names,
+            len(attentive_names),
             analysis.attentive_unknown_count,
-            analysis.attention_target.person_id if analysis.attention_target else None,
-            (
-                primary_attention.person_id
-                if primary_attention and primary_attention.person_id
-                else (primary_attention.kind if primary_attention else None)
-            ),
-            attention_details,
+            primary_face,
+            primary_attention_label,
         )
+
+    def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
+        threshold = float(getattr(self, "_recognition_threshold", 0.0) or 0.0)
+        details: list[str] = []
+        for person in persons:
+            label = str(person.name or person.person_id).replace(" ", "_")
+            details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
+        return details
+
+    @staticmethod
+    def _format_recognition_attempt_log_details(faces: list[dict[str, Any]]) -> list[str]:
+        details: list[str] = []
+        for index, face in enumerate(faces):
+            recognition = dict(face.get("recognition") or {})
+            reason = str(recognition.get("reason") or "not_evaluated")
+            if reason == "matched":
+                continue
+            label = str(
+                recognition.get("name")
+                or face.get("recognized_name")
+                or f"face{index}"
+            ).replace(" ", "_")
+            similarity = recognition.get("similarity")
+            threshold = recognition.get("threshold")
+            runner_up = recognition.get("runner_up_similarity")
+            margin = recognition.get("margin")
+            margin_threshold = recognition.get("margin_threshold")
+            parts = [f"{label}:{reason}"]
+            if similarity is not None:
+                parts.append(f"sim={float(similarity):.2f}")
+            if threshold is not None:
+                parts.append(f"threshold={float(threshold):.2f}")
+            if runner_up is not None:
+                parts.append(f"runner_up={float(runner_up):.2f}")
+            if margin is not None:
+                parts.append(f"margin={float(margin):.2f}")
+            if margin_threshold is not None:
+                parts.append(f"margin_threshold={float(margin_threshold):.2f}")
+            details.append(",".join(parts))
+        return details
 
     @staticmethod
     def _format_attention_log_details(faces: list[dict[str, Any]]) -> list[str]:
@@ -1776,7 +2228,7 @@ class FaceRecognitionService:
     def get_cached_persons(self) -> list[PersonContext]:
         """
         Thread-safe read of cache: persons in current frame or last seen within CACHE_EXPIRE_SEC.
-        Used for [PEOPLE IN VIEW] and for recognized-person personalization.
+        Used for owner-scoped prompt context and recognized-person personalization.
         """
         return self._presence_cache.get_cached_persons()
 

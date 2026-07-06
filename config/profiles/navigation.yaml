@@ -1,6 +1,6 @@
-name: static_interaction
+name: navigation
 
-manifest: puffle
+manifest: navigation
 
 resources:
   primary_robot: base
@@ -14,7 +14,7 @@ display:
   enabled: true
 
 navigation:
-  locations_file:
+  locations_file: lab.json
   startup_patrol_route: []
 
 tools:
@@ -33,11 +33,18 @@ tools:
     - vision.capture_scene
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
+    - navigation.navigate_to_location
+    - navigation.navigate_to_location_blocking
+    - navigation.navigate_relative
+    - navigation.follow_waypoints
+    - navigation.cancel
+    - navigation.stop_patrol
+    - navigation.get_current_location
+    - dock.charging
 
 employee_directory:
   enabled: true
   site_code: "BOS3"
-  email_domain: chewy.com
 
 knowledge_bases:
   - kind: whoami_query
@@ -54,28 +61,20 @@ knowledge_bases:
 identity_store:
   db_path: var/identity/identity.sqlite3
 
-memory:
-  enabled: true
-  retention_class: standard
-  place_room_id: realtime
-  extract_live_turn_memory: true
-
 slack_memory:
   enabled: true
-  start_with_agent: true
+  start_with_agent: false
   bot_token_env: SLACK_BOT_TOKEN
   poll_interval_sec: 1800.0
-  state_path: .tailwag/slack-state.json
-  backfill_hours: 2.0
-  force_backfill: false
-  active_thread_hours: 24.0
-  history_limit: 50
-  reply_limit: 200
-  extract_memory: true
-  include_email: true
+  lookback_minutes: 120
   channels:
     - name: robotics_internal_team
       channel_id: C0896C8CE83
+      site_code: BOS3
+      person_memory_enabled: true
+      site_memory_enabled: true
+      include_threads: true
+      max_messages_per_window: 50
 
 face_recognition:
   enabled: true
@@ -143,7 +142,7 @@ speaker_recognition:
   explicit_prompt_after_silent_failures: 2
 
 realtime:
-  prompt_file: personality_test_prompt.md
+  prompt_file: navigation_prompt.md
   model: gpt-realtime-1.5
   voice: cedar
   audio_output_speed: 1.0

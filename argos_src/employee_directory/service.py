@@ -17,8 +17,6 @@ logger = logging.getLogger(__name__)
 
 EMPLOYEE_COLUMNS = (
     "EMPLOYEE_NAME",
-    "FIRST_NAME",
-    "LAST_NAME",
     "BUSINESS_TITLE",
     "TIME_IN_JOB_PROFILE",
     "EMPLOYEE_USERNAME",
@@ -34,8 +32,6 @@ EMPLOYEE_COLUMNS = (
 EMPLOYEE_DIRECTORY_SQL = """
     SELECT
         cemp."EMPLOYEE_NAME",
-        cemp."FIRST_NAME",
-        cemp."LAST_NAME",
         cemp."BUSINESS_TITLE",
         cemp."TIME_IN_JOB_PROFILE",
         cemp."EMPLOYEE_USERNAME",
@@ -55,11 +51,9 @@ EMPLOYEE_DIRECTORY_SQL = """
 MAX_CANDIDATES = 3
 MIN_PLAUSIBLE_SCORE = 74.0
 CLARIFY_SCORE = 84.0
-STRONG_MATCH_SCORE = 90.0
+AUTO_CONFIRM_SCORE = 98.0
 CLEAR_GAP_SCORE = 5.0
 MULTIPLE_MATCH_GAP = 3.0
-SINGLE_MATCH_LAST_NAME_SCORE = 95.0
-MIN_COMPONENT_NAME_SCORE = 72.0
 
 
 def load_env_file() -> None:
@@ -225,8 +219,6 @@ class EmployeeRecord:
     tenure: str
     normalized_name: str
     token_sorted_name: str
-    first_name: str
-    last_name: str
     employee_email: str = ""
 
     @classmethod
@@ -242,26 +234,24 @@ class EmployeeRecord:
             return str(row[index] or "").strip()
 
         official_name = _value(0)
-        username = _value(5)
+        username = _value(3)
         normalized_name = _normalize_name(official_name)
         return cls(
             official_name=official_name,
             employee_name=official_name,
             username=username,
-            business_title=_value(3),
-            job_family=_value(6),
-            job_family_group=_value(7),
-            job_level=_value(8),
-            c_level=_value(9),
-            manager_name=_value(10),
-            cost_center=_value(11),
-            senior_leadership_team=_value(12),
-            business_function=_value(13),
-            tenure=_value(4),
+            business_title=_value(1),
+            job_family=_value(4),
+            job_family_group=_value(5),
+            job_level=_value(6),
+            c_level=_value(7),
+            manager_name=_value(8),
+            cost_center=_value(9),
+            senior_leadership_team=_value(10),
+            business_function=_value(11),
+            tenure=_value(2),
             normalized_name=normalized_name,
             token_sorted_name=_token_sort_key(official_name),
-            first_name=_normalize_name(_value(1)),
-            last_name=_normalize_name(_value(2)),
             employee_email=employee_email_from_username(username, email_domain),
         )
 
@@ -486,8 +476,6 @@ class EmployeeDirectoryService:
         scored = self._score_candidates(
             cleaned_name,
             records=records,
-            query_first_name=first_name,
-            query_last_name=last_name,
             normalized_name_index=normalized_name_index,
             token_sorted_name_index=token_sorted_name_index,
         )
@@ -504,8 +492,6 @@ class EmployeeDirectoryService:
         candidates = scored[:MAX_CANDIDATES]
         status = self._classify_candidates(
             candidates,
-            query_first_name=first_name,
-            query_last_name=last_name,
         )
         if status == "single_match":
             message = f"I found one strong employee match for that name at {self.site_code}."
@@ -547,8 +533,6 @@ class EmployeeDirectoryService:
         self,
         shared_name: str,
         *,
-        query_first_name: str,
-        query_last_name: str,
         records: list[EmployeeRecord],
         normalized_name_index: dict[str, list[EmployeeRecord]],
         token_sorted_name_index: dict[str, list[EmployeeRecord]],
@@ -580,8 +564,6 @@ class EmployeeDirectoryService:
             score = self._score_record(
                 normalized_input=normalized_input,
                 token_sorted_input=token_sorted_input,
-                first_name=query_first_name,
-                last_name=query_last_name,
                 record=record,
             )
             if score >= MIN_PLAUSIBLE_SCORE:
@@ -606,69 +588,19 @@ class EmployeeDirectoryService:
         *,
         normalized_input: str,
         token_sorted_input: str,
-        first_name: str,
-        last_name: str,
         record: EmployeeRecord,
     ) -> float:
         full_name_score = _score_ratio(normalized_input, record.normalized_name)
         token_score = _score_ratio(token_sorted_input, record.token_sorted_name)
-        first_name_score = _score_ratio(first_name, record.first_name)
-        last_name_score = _score_ratio(last_name, record.last_name)
-
-        if first_name and last_name:
-            if not record.first_name or not record.last_name:
-                return full_name_score if full_name_score >= STRONG_MATCH_SCORE else 0.0
-            if (
-                first_name_score < MIN_COMPONENT_NAME_SCORE
-                or last_name_score < MIN_COMPONENT_NAME_SCORE
-            ):
-                return 0.0
-
-        component_score = 0.0
-        if first_name_score and last_name_score:
-            component_score = min(first_name_score, last_name_score)
-        else:
-            component_score = max(first_name_score, last_name_score)
-
-        blended_score = full_name_score
-        if component_score:
-            blended_score = (0.75 * full_name_score) + (0.25 * component_score)
-
-        # A matching surname with a weak given name should not pass as plausible.
-        if (
-            first_name
-            and last_name
-            and record.first_name
-            and record.last_name
-            and min(first_name_score, last_name_score) < 70.0
-            and max(first_name_score, last_name_score) >= 90.0
-            and full_name_score < STRONG_MATCH_SCORE
-        ):
-            full_name_score = max(0.0, full_name_score - 10.0)
-            token_score = max(0.0, token_score - 10.0)
-            blended_score = max(0.0, blended_score - 10.0)
-
-        # Prevent a shared surname from overpowering a weak full-name match.
-        if (
-            last_name
-            and record.last_name
-            and last_name_score < 70.0
-            and full_name_score < CLARIFY_SCORE
-        ):
-            blended_score -= 6.0
 
         return max(
             full_name_score,
             0.85 * token_score + 0.15 * full_name_score,
-            blended_score,
         )
 
     @staticmethod
     def _classify_candidates(
         candidates: list[_ScoredCandidate],
-        *,
-        query_first_name: str,
-        query_last_name: str,
     ) -> str:
         top = candidates[0]
         runner_up = candidates[1] if len(candidates) > 1 else None
@@ -676,15 +608,8 @@ class EmployeeDirectoryService:
             candidate.record.normalized_name == top.record.normalized_name
             for candidate in candidates[1:]
         )
-        last_name_is_precise = True
-        if query_last_name and top.record.last_name:
-            last_name_is_precise = (
-                _score_ratio(query_last_name, top.record.last_name)
-                >= SINGLE_MATCH_LAST_NAME_SCORE
-            )
         if (
-            top.score >= STRONG_MATCH_SCORE
-            and last_name_is_precise
+            top.score >= AUTO_CONFIRM_SCORE
             and not duplicate_name
             and (
                 runner_up is None
@@ -723,7 +648,14 @@ class EmployeeDirectoryService:
 
     @staticmethod
     def _candidate_payload(candidate: _ScoredCandidate) -> dict[str, Any]:
-        payload = EmployeeDirectoryService._profile_payload(candidate.record)
+        record = candidate.record
+        payload = {
+            "official_name": record.official_name,
+            "employee_name": record.employee_name,
+            "username": record.username,
+            "business_title": record.business_title,
+            "tenure": record.tenure,
+        }
         payload["match_score"] = round(candidate.score, 1)
         return payload
 

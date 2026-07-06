@@ -311,19 +311,23 @@ def create_agent(
     if needs_face_runtime:
         from argos_src.face_recognition.attention_gate import (
             AttentionGateSettings,
-            AttentionSmoothingSettings,
         )
         from argos_src.face_recognition.depth_gate import DepthGateSettings
         from argos_src.face_recognition.face_recognition_service import (
             FaceEnrollmentPolicy,
+            FaceRecognitionStabilitySettings,
             FaceRecognitionService,
         )
         attention_gate = scenario_profile.face_recognition.attention_gate
         enrollment_policy = scenario_profile.face_recognition.enrollment_policy
+        recognition_stability = scenario_profile.face_recognition.recognition_stability
 
         face_service = FaceRecognitionService(
             db_path=scenario_profile.face_recognition.db_path,
             recognition_threshold=scenario_profile.face_recognition.recognition_threshold,
+            recognition_margin_threshold=(
+                scenario_profile.face_recognition.recognition_margin_threshold
+            ),
             robot_client=robot_client,
             identity_store=identity_store,
             memory_store=memory_provider,
@@ -351,34 +355,21 @@ def create_agent(
             attention_gate_settings=AttentionGateSettings(
                 enabled=attention_gate.enabled,
                 min_face_area=attention_gate.min_face_area,
-                min_face_area_ratio=attention_gate.min_face_area_ratio,
                 max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
                 max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
                 max_abs_roll_deg=attention_gate.max_abs_roll_deg,
-                distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
-                distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
-                distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
-                near_face_area_ratio=attention_gate.near_face_area_ratio,
-                distant_face_area_ratio=attention_gate.distant_face_area_ratio,
-                near_depth_m=attention_gate.near_depth_m,
-                distant_depth_m=attention_gate.distant_depth_m,
-                max_center_offset_ratio=attention_gate.max_center_offset_ratio,
-                min_confidence=attention_gate.min_confidence,
-                smoothing=AttentionSmoothingSettings(
-                    window_sec=attention_gate.smoothing_window_sec,
-                    min_observations=attention_gate.min_attentive_observations,
-                    hold_sec=attention_gate.hold_sec,
-                ),
+                min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
             ),
             enrollment_policy=FaceEnrollmentPolicy(
                 min_face_area=enrollment_policy.min_face_area,
-                min_sharpness=enrollment_policy.min_sharpness,
                 min_brightness=enrollment_policy.min_brightness,
                 max_brightness=enrollment_policy.max_brightness,
                 min_contrast=enrollment_policy.min_contrast,
-                max_eye_tilt=enrollment_policy.max_eye_tilt,
-                max_nose_center_offset=enrollment_policy.max_nose_center_offset,
                 min_embedding_similarity=enrollment_policy.min_embedding_similarity,
+            ),
+            recognition_stability_settings=FaceRecognitionStabilitySettings(
+                window_frames=recognition_stability.window_frames,
+                min_hits=recognition_stability.min_hits,
             ),
         )
         if (
@@ -554,6 +545,12 @@ def create_agent(
     else:
         engagement._recording_state_provider = recording_state_provider
 
+    if scenario_profile.face_recognition.enabled and face_service is not None:
+        subscribe_presence = getattr(face_service, "subscribe_presence", None)
+        if callable(subscribe_presence):
+            unsubscribe_presence = subscribe_presence(agent.update_face_presence_snapshot)
+            atexit.register(unsubscribe_presence)
+
     coalescer = EventCoalescer(
         agent=agent,
         engagement=engagement,
@@ -596,7 +593,7 @@ def create_agent(
             coalescer=coalescer,
             engagement=engagement,
             nav_state=nav_state,
-            presence_callback=agent.update_face_presence_snapshot,
+            presence_callback=None,
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,
             require_attention=scenario_profile.face_recognition.proactive_greeting.require_attention,

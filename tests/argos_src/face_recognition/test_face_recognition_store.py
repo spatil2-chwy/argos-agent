@@ -14,6 +14,15 @@ def _normalized_embedding() -> np.ndarray:
     return embedding / np.linalg.norm(embedding)
 
 
+def _embedding_pair_with_cosine(cosine: float) -> tuple[np.ndarray, np.ndarray]:
+    first = np.zeros(512, dtype=np.float32)
+    second = np.zeros(512, dtype=np.float32)
+    first[0] = 1.0
+    second[0] = float(cosine)
+    second[1] = float(np.sqrt(1.0 - (cosine * cosine)))
+    return first, second
+
+
 @pytest.mark.skipif(not HAS_CHROMADB, reason="chromadb is not installed")
 def test_face_recognition_store_adds_identity_and_face_embedding(tmp_path):
     from argos_src.face_recognition.store import FaceRecognitionStore
@@ -48,6 +57,21 @@ def test_face_recognition_store_recognize_face_uses_identity_name(tmp_path):
     assert matches
     assert matches[0]["person_id"] == person_id
     assert matches[0]["name"] == "Test Person"
+
+
+@pytest.mark.skipif(not HAS_CHROMADB, reason="chromadb is not installed")
+def test_face_recognition_store_similarity_matches_cosine_for_l2_chroma(tmp_path):
+    from argos_src.face_recognition.store import FaceRecognitionStore
+
+    db = FaceRecognitionStore(db_path=tmp_path / "faces_db")
+    reference, query = _embedding_pair_with_cosine(0.75)
+    db.add_person(name="Test Person", face_embedding=reference)
+
+    matches = db.recognize_face(query, threshold=0.6)
+
+    assert matches
+    assert matches[0]["name"] == "Test Person"
+    assert matches[0]["similarity"] == pytest.approx(0.75, abs=1e-5)
 
 
 @pytest.mark.skipif(not HAS_CHROMADB, reason="chromadb is not installed")

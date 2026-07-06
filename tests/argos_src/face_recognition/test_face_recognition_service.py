@@ -100,6 +100,200 @@ def _face(
     }
 
 
+def _person(
+    person_id: str = "person-1",
+    name: str = "Alex",
+    *,
+    attentive: bool = False,
+    bbox_area: int = 1600,
+) -> object:
+    from argos_src.face_recognition.models import PersonContext
+
+    return PersonContext(
+        person_id=person_id,
+        name=name,
+        interaction_count=1,
+        confidence=0.93,
+        bbox_area=bbox_area,
+        timestamp=100.0,
+        center_distance=0.0,
+        attentive=attentive,
+        attention_confidence=1.0 if attentive else 0.0,
+    )
+
+
+def test_recognition_stability_promotes_after_min_hits(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    person = _person()
+
+    first, first_ids = window.update([person])
+    second, second_ids = window.update([person])
+
+    assert first == []
+    assert first_ids == set()
+    assert [p.person_id for p in second] == ["person-1"]
+    assert second_ids == {"person-1"}
+
+
+def test_recognition_stability_keeps_multiple_people(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    alice = _person("person-1", "Alice", bbox_area=1200)
+    bob = _person("person-2", "Bob", bbox_area=1800)
+
+    window.update([alice, bob])
+    stable, stable_ids = window.update([alice, bob])
+
+    assert [p.person_id for p in stable] == ["person-2", "person-1"]
+    assert stable_ids == {"person-1", "person-2"}
+
+
+def test_recognition_stability_decays_when_hits_leave_window(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    window = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    person = _person()
+
+    window.update([person])
+    stable, _ = window.update([person])
+    assert [p.person_id for p in stable] == ["person-1"]
+
+    for _ in range(4):
+        stable, stable_ids = window.update([])
+
+    assert stable == []
+    assert stable_ids == set()
+
+
+def test_stable_scene_treats_one_hit_attentive_recognition_as_unknown(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    face = _face()
+    face["recognized_person_id"] = "person-1"
+    face["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.8,
+        reason="attentive",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face],
+        raw_persons=[_person(attentive=True)],
+        image_shape=(100, 100, 3),
+        now=100.0,
+    )
+
+    assert persons == []
+    assert unknown_count == 1
+    assert current_ids == set()
+    assert analysis.primary_attention_target is not None
+    assert analysis.primary_attention_target.kind == "unknown"
+    assert analysis.attentive_unknown_count == 1
+
+
+def test_stable_scene_single_face_miss_keeps_one_stable_identity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    stable_person = _person("person-1", "Alice", attentive=True)
+    service._recognition_stability.update([stable_person])
+    service._recognition_stability.update([stable_person])
+
+    face = _face()
+    face["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.9,
+        reason="attentive",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face],
+        raw_persons=[],
+        image_shape=(100, 100, 3),
+        now=101.0,
+    )
+
+    assert [person.person_id for person in persons] == ["person-1"]
+    assert unknown_count == 0
+    assert current_ids == {"person-1"}
+    assert analysis.attention_target is not None
+    assert analysis.attention_target.person_id == "person-1"
+
+
+def test_stable_scene_ambiguous_miss_does_not_create_extra_faces(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_stability = module.RecognitionStabilityWindow(
+        module.FaceRecognitionStabilitySettings(window_frames=5, min_hits=2)
+    )
+    stable_person = _person("person-1", "Alice", attentive=True)
+    service._recognition_stability.update([stable_person])
+    service._recognition_stability.update([stable_person])
+    face_one = _face(x=10)
+    face_two = _face(x=80)
+    face_one["attention"] = FaceAttentionObservation(
+        attentive=True,
+        confidence=0.9,
+        reason="attentive",
+    )
+    face_two["attention"] = FaceAttentionObservation(
+        attentive=False,
+        confidence=0.0,
+        reason="head_pose_outside_threshold",
+    )
+
+    persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._stable_scene_state(
+        service,
+        detected_faces=[face_one, face_two],
+        raw_persons=[],
+        image_shape=(140, 140, 3),
+        now=101.0,
+    )
+
+    assert persons == []
+    assert unknown_count == 2
+    assert current_ids == set()
+    assert analysis.attention_target is None
+    assert analysis.attentive_unknown_count == 1
+
+
+def test_face_presence_subscriber_receives_updates(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
+    seen = []
+
+    unsubscribe = module.FaceRecognitionService.subscribe_presence(
+        service,
+        lambda snapshot: seen.append(snapshot),
+        replay_latest=False,
+    )
+    module.FaceRecognitionService._notify_presence_subscribers(
+        service,
+        {"status": "unknown"},
+    )
+    unsubscribe()
+    module.FaceRecognitionService._notify_presence_subscribers(
+        service,
+        {"status": "recognized"},
+    )
+
+    assert seen == [{"status": "unknown"}]
+
+
 def test_publish_live_image_frame_sends_data_url_to_display(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
@@ -195,7 +389,7 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
                 "attention": FaceAttentionObservation(
                     attentive=False,
                     confidence=0.74,
-                    reason="smoothing",
+                    reason="head_pose_outside_threshold",
                     yaw_deg=8.25,
                     pitch_deg=-3.5,
                     roll_deg=1.0,
@@ -207,8 +401,148 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
     )
 
     assert details == [
-        "Sakshee_Patil:att=no,raw=yes,reason=smoothing,"
+        "Sakshee_Patil:att=no,raw=yes,reason=head_pose_outside_threshold,"
         "conf=0.74,raw_conf=0.74,yaw=8.2,pitch=-3.5,roll=1.0"
+    ]
+
+
+def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.65
+    details = module.FaceRecognitionService._format_recognition_log_details(
+        service,
+        [
+            module.PersonContext(
+                person_id="person-1",
+                name="Sakshee Patil",
+                interaction_count=1,
+                confidence=0.734,
+                bbox_area=1600,
+                timestamp=100.0,
+            )
+        ],
+    )
+
+    assert details == ["Sakshee_Patil:sim=0.73,threshold=0.65"]
+
+
+def test_recognize_face_match_accepts_clear_top_match(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    calls = []
+
+    def recognize_face(**kwargs):
+        calls.append(kwargs)
+        return [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.82},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.55},
+        ]
+
+    service.db = types.SimpleNamespace(recognize_face=recognize_face)
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match["person_id"] == "arushi"
+    assert match["runner_up_similarity"] == 0.55
+    assert abs(match["similarity_margin"] - 0.27) < 1e-6
+    assert calls[0]["threshold"] == -1.0
+    assert calls[0]["top_k"] == 2
+
+
+def test_recognize_face_match_rejects_low_similarity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
+        ]
+    )
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match is None
+
+
+def test_recognize_face_match_diagnostics_explain_low_similarity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
+        ]
+    )
+
+    match, diagnostics = (
+        module.FaceRecognitionService._recognize_face_match_with_diagnostics(
+            service,
+            {"embedding": [0.1, 0.2, 0.3]},
+        )
+    )
+
+    assert match is None
+    assert diagnostics["reason"] == "below_threshold"
+    assert diagnostics["name"] == "Arushi"
+    assert diagnostics["similarity"] == 0.59
+    assert diagnostics["threshold"] == 0.6
+
+
+def test_recognize_face_match_rejects_small_margin(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._recognition_threshold = 0.6
+    service._recognition_margin_threshold = 0.20
+    service.db = types.SimpleNamespace(
+        recognize_face=lambda **_kwargs: [
+            {"person_id": "arushi", "name": "Arushi", "similarity": 0.75},
+            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.62},
+        ]
+    )
+
+    match = module.FaceRecognitionService._recognize_face_match(
+        service,
+        {"embedding": [0.1, 0.2, 0.3]},
+    )
+
+    assert match is None
+
+
+def test_format_recognition_attempt_log_details(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+
+    details = module.FaceRecognitionService._format_recognition_attempt_log_details(
+        [
+            {
+                "recognition": {
+                    "reason": "below_threshold",
+                    "name": "Arushi",
+                    "similarity": 0.59,
+                    "threshold": 0.6,
+                    "runner_up_similarity": 0.10,
+                    "margin": 0.49,
+                    "margin_threshold": 0.20,
+                }
+            }
+        ]
+    )
+
+    assert details == [
+        "Arushi:below_threshold,sim=0.59,threshold=0.60,"
+        "runner_up=0.10,margin=0.49,margin_threshold=0.20"
     ]
 
 
@@ -664,9 +998,50 @@ def test_enrollment_face_selection_ignores_small_weak_extra_detection(monkeypatc
     assert face == primary
 
 
+def test_enrollment_face_selection_ignores_below_min_area_extra_detection(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
+    primary = {
+        "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
+        "confidence": 0.99,
+    }
+    small_extra = {
+        "bbox": {"x": 120, "y": 15, "w": 30, "h": 30},
+        "confidence": 0.999,
+    }
+
+    face, multiple_people_visible = module.FaceRecognitionService._select_enrollment_face(
+        service,
+        [primary, small_extra],
+    )
+
+    assert multiple_people_visible is False
+    assert face == primary
+
+
+def test_enrollment_face_selection_returns_small_face_for_quality_rejection(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
+    small = {
+        "bbox": {"x": 10, "y": 10, "w": 30, "h": 30},
+        "confidence": 0.99,
+    }
+
+    face, multiple_people_visible = module.FaceRecognitionService._select_enrollment_face(
+        service,
+        [small],
+    )
+
+    assert multiple_people_visible is False
+    assert face == small
+
+
 def test_enrollment_face_selection_rejects_two_distinct_strong_faces(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
+    service._enrollment_policy = module.FaceEnrollmentPolicy(min_face_area=1300)
     left = {
         "bbox": {"x": 10, "y": 10, "w": 80, "h": 80},
         "confidence": 0.99,
@@ -707,7 +1082,66 @@ def test_prepare_faces_for_recognition_reports_no_embedding(monkeypatch):
     assert result.reason == "no_embedding"
 
 
-def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
+def test_prepare_faces_for_recognition_filters_faces_below_min_area(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._depth_gate_settings = None
+    small = {
+        "bbox": {"x": 10, "y": 10, "w": 20, "h": 20},
+        "confidence": 0.99,
+    }
+    usable = {
+        "bbox": {"x": 50, "y": 10, "w": 50, "h": 50},
+        "confidence": 0.98,
+    }
+    service.detect_faces = lambda _image: [small, usable]
+    service.extract_face_embedding = lambda _image, _face: np.ones(512, dtype=np.float32)
+
+    result = module.FaceRecognitionService._prepare_faces_for_recognition_result(
+        service,
+        np.zeros((128, 128, 3), dtype=np.uint8),
+        None,
+        min_face_area=1300,
+    )
+
+    assert result.reason == ""
+    assert result.detected_count == 2
+    assert result.rejected_count == 1
+    assert result.rejection_details == [
+        "face0:face_too_small area=400 min_face_area=1300"
+    ]
+    assert len(result.faces) == 1
+    assert result.faces[0]["bbox"] == usable["bbox"]
+
+
+def test_prepare_faces_for_recognition_reports_all_faces_below_min_area(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    service._depth_gate_settings = None
+    service.detect_faces = lambda _image: [
+        {
+            "bbox": {"x": 10, "y": 10, "w": 20, "h": 20},
+            "confidence": 0.99,
+        }
+    ]
+
+    result = module.FaceRecognitionService._prepare_faces_for_recognition_result(
+        service,
+        np.zeros((128, 128, 3), dtype=np.uint8),
+        None,
+        min_face_area=1300,
+    )
+
+    assert result.faces == []
+    assert result.reason == "face_too_small"
+    assert result.detected_count == 1
+    assert result.rejected_count == 1
+    assert result.rejection_details == [
+        "face0:face_too_small area=400 min_face_area=1300"
+    ]
+
+
+def test_enrollment_face_quality_rejects_low_contrast_frame(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
 
@@ -718,14 +1152,14 @@ def test_enrollment_face_quality_rejects_blurry_frame(monkeypatch):
     )
 
     assert result.accepted is False
-    assert result.reason == "too_blurry"
+    assert result.reason == "low_contrast"
 
 
-def test_enrollment_face_quality_rejects_side_face(monkeypatch):
+def test_enrollment_face_quality_accepts_face_without_landmarks(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     face = _face(area=6400)
-    face["landmarks"]["nose"] = (face["bbox"]["x"] + face["bbox"]["w"] * 0.85, 40.0)
+    face.pop("landmarks")
 
     result = module.FaceRecognitionService._assess_enrollment_face_quality(
         service,
@@ -733,8 +1167,7 @@ def test_enrollment_face_quality_rejects_side_face(monkeypatch):
         face,
     )
 
-    assert result.accepted is False
-    assert result.reason == "side_face"
+    assert result.accepted is True
 
 
 def test_enrollment_face_quality_rejects_clipped_bbox(monkeypatch):
@@ -847,6 +1280,45 @@ def test_enroll_visible_person_reports_already_known_failure(monkeypatch):
     assert result["status"] == "retry_already_known"
     assert result["failure_reason"] == "already_known"
     assert result["recognized_name"] == "Sakshee Patil"
+
+
+def test_enroll_visible_person_shows_multiple_face_warning_preview(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+    image = _good_image(size=240)
+    previews = []
+
+    class _Display:
+        is_configured = True
+
+        def show_image_message_preview(self, **kwargs):
+            previews.append(kwargs)
+            return True
+
+    service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
+    service._prepare_faces_for_recognition_result = (
+        lambda *_args, **_kwargs: module.FacePreparationResult(
+            faces=[
+                _face(area=6400, x=20, y=20),
+                _face(area=6400, x=140, y=20),
+            ],
+            detected_count=2,
+        )
+    )
+
+    result = module.FaceRecognitionService.enroll_visible_person(
+        service,
+        official_name="Sakshee Patil",
+        display_runtime=_Display(),
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "retry_single_face"
+    assert result["failure_reason"] == "multiple_faces"
+    assert len(previews) == 1
+    assert previews[0]["title"] == "Multiple Faces Detected"
+    assert previews[0]["hold_sec"] == 5.0
+    assert previews[0]["image_url"].startswith("data:image/png;base64,")
 
 
 def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch):

@@ -129,7 +129,7 @@ def test_progressive_voice_reference_saves_first_good_clip_immediately(monkeypat
     module = _load_service_module(monkeypatch)
     db = _FakeSpeakerDb()
     service = module.SpeakerRecognitionService(
-        policy=SpeakerRecognitionPolicy(enroll_min_voiced_sec=2.0, enroll_min_rms_level=350.0),
+        policy=SpeakerRecognitionPolicy(),
         backend=_FakeBackend(embeddings=[np.asarray([1.0, 0.0, 0.0], dtype=np.float32)]),
         speaker_db=db,
     )
@@ -163,8 +163,6 @@ def test_progressive_voice_reference_averages_consistent_clip(monkeypatch):
     )
     service = module.SpeakerRecognitionService(
         policy=SpeakerRecognitionPolicy(
-            enroll_min_voiced_sec=2.0,
-            enroll_min_rms_level=350.0,
             reference_update_threshold=0.55,
         ),
         backend=_FakeBackend(embeddings=[np.asarray([0.8, 0.6, 0.0], dtype=np.float32)]),
@@ -197,8 +195,6 @@ def test_progressive_voice_reference_rejects_inconsistent_clip_without_update(mo
     )
     service = module.SpeakerRecognitionService(
         policy=SpeakerRecognitionPolicy(
-            enroll_min_voiced_sec=2.0,
-            enroll_min_rms_level=350.0,
             reference_update_threshold=0.55,
         ),
         backend=_FakeBackend(embeddings=[np.asarray([0.0, 1.0, 0.0], dtype=np.float32)]),

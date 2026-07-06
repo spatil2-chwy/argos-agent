@@ -79,7 +79,8 @@ runtime builds a recognized-person context from:
   and recent social/context memory
 
 In the dynamic prompt, identity metadata appears as `Directory` lines inside
-`[PEOPLE IN VIEW]`; social memory appears as `About` and `Potential Followups`.
+`[PERSON SPEAKING TO YOU]` only when the turn has a resolved `owner_id`;
+social memory appears as `About` and `Potential Followups` for that owner.
 For example, title, manager, org, and tenure come from IdentityStore/Snowflake,
 not Tailwag memory.
 

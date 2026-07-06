@@ -24,11 +24,11 @@ if str(_REPO_ROOT) not in sys.path:
 from argos_src.face_recognition.depth_gate import DepthGateSettings
 from argos_src.face_recognition.attention_gate import (
     AttentionGateSettings,
-    AttentionSmoothingSettings,
 )
 from argos_src.face_recognition.face_recognition_service import (
     DEFAULT_FACE_ENROLLMENT_POLICY,
     FaceEnrollmentPolicy,
+    FaceRecognitionStabilitySettings,
     FaceRecognitionService,
 )
 from argos_src.provider_api.factory import create_provider_client
@@ -80,6 +80,12 @@ def add_profile_args(parser: argparse.ArgumentParser) -> None:
         help="Override face_recognition.recognition_threshold.",
     )
     parser.add_argument(
+        "--recognition-margin-threshold",
+        type=float,
+        default=None,
+        help="Override face_recognition.recognition_margin_threshold.",
+    )
+    parser.add_argument(
         "--disable-depth",
         action="store_true",
         help="Capture color only and skip the depth gate.",
@@ -101,12 +107,9 @@ def add_profile_args(parser: argparse.ArgumentParser) -> None:
 
 def add_enrollment_policy_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--min-face-area", type=int, default=None)
-    parser.add_argument("--min-sharpness", type=float, default=None)
     parser.add_argument("--min-brightness", type=float, default=None)
     parser.add_argument("--max-brightness", type=float, default=None)
     parser.add_argument("--min-contrast", type=float, default=None)
-    parser.add_argument("--max-eye-tilt", type=float, default=None)
-    parser.add_argument("--max-nose-center-offset", type=float, default=None)
     parser.add_argument("--min-embedding-similarity", type=float, default=None)
 
 
@@ -115,23 +118,17 @@ def build_enrollment_policy(args: argparse.Namespace) -> FaceEnrollmentPolicy:
     profile_policy = profile.face_recognition.enrollment_policy
     policy = FaceEnrollmentPolicy(
         min_face_area=profile_policy.min_face_area,
-        min_sharpness=profile_policy.min_sharpness,
         min_brightness=profile_policy.min_brightness,
         max_brightness=profile_policy.max_brightness,
         min_contrast=profile_policy.min_contrast,
-        max_eye_tilt=profile_policy.max_eye_tilt,
-        max_nose_center_offset=profile_policy.max_nose_center_offset,
         min_embedding_similarity=profile_policy.min_embedding_similarity,
     )
     replacements: dict[str, Any] = {}
     for attr in (
         "min_face_area",
-        "min_sharpness",
         "min_brightness",
         "max_brightness",
         "min_contrast",
-        "max_eye_tilt",
-        "max_nose_center_offset",
         "min_embedding_similarity",
     ):
         value = getattr(args, attr, None)
@@ -155,6 +152,11 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
         float(args.recognition_threshold)
         if args.recognition_threshold is not None
         else float(face.recognition_threshold)
+    )
+    recognition_margin_threshold = (
+        float(args.recognition_margin_threshold)
+        if args.recognition_margin_threshold is not None
+        else float(face.recognition_margin_threshold)
     )
     provider_transport = (
         str(args.provider_transport or "").strip()
@@ -211,6 +213,7 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
         "identity_db_path": identity_db_path,
         "loop_interval_sec": loop_interval_sec,
         "recognition_threshold": recognition_threshold,
+        "recognition_margin_threshold": recognition_margin_threshold,
         "depth_settings": depth_settings,
         "provider_transport": provider_transport,
         "provider_id": profile.robot.bridge.provider_id,
@@ -223,24 +226,10 @@ def build_attention_gate_settings(profile: Any) -> AttentionGateSettings:
     return AttentionGateSettings(
         enabled=attention_gate.enabled,
         min_face_area=attention_gate.min_face_area,
-        min_face_area_ratio=attention_gate.min_face_area_ratio,
         max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
         max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
         max_abs_roll_deg=attention_gate.max_abs_roll_deg,
-        distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
-        distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
-        distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
-        near_face_area_ratio=attention_gate.near_face_area_ratio,
-        distant_face_area_ratio=attention_gate.distant_face_area_ratio,
-        near_depth_m=attention_gate.near_depth_m,
-        distant_depth_m=attention_gate.distant_depth_m,
-        max_center_offset_ratio=attention_gate.max_center_offset_ratio,
-        min_confidence=attention_gate.min_confidence,
-        smoothing=AttentionSmoothingSettings(
-            window_sec=attention_gate.smoothing_window_sec,
-            min_observations=attention_gate.min_attentive_observations,
-            hold_sec=attention_gate.hold_sec,
-        ),
+        min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
     )
 
 
@@ -263,11 +252,19 @@ def build_face_service(
         db_path=config["db_path"],
         identity_db_path=config["identity_db_path"],
         recognition_threshold=config["recognition_threshold"],
+        recognition_margin_threshold=config["recognition_margin_threshold"],
         robot_client=robot_client,
         camera_resource_id=config["camera_resource_id"],
+        camera_yaw_offset_rad=(
+            profile.face_recognition.owner_turn.camera_yaw_offset_rad
+        ),
         depth_gate_settings=config["depth_settings"],
         attention_gate_settings=build_attention_gate_settings(profile),
         enrollment_policy=enrollment_policy,
+        recognition_stability_settings=FaceRecognitionStabilitySettings(
+            window_frames=profile.face_recognition.recognition_stability.window_frames,
+            min_hits=profile.face_recognition.recognition_stability.min_hits,
+        ),
     )
     config["robot_client"] = robot_client
     return service, config
@@ -308,34 +305,10 @@ def _quality_checks(policy: FaceEnrollmentPolicy, metrics: Any) -> list[dict[str
             "threshold": False,
         },
         {
-            "name": "missing_landmarks",
-            "passed": metrics.has_required_landmarks,
-            "value": metrics.has_required_landmarks,
-            "threshold": True,
-        },
-        {
-            "name": "eye_tilt",
-            "passed": metrics.eye_tilt <= policy.max_eye_tilt,
-            "value": metrics.eye_tilt,
-            "threshold": policy.max_eye_tilt,
-        },
-        {
-            "name": "nose_center_offset",
-            "passed": metrics.nose_center_offset <= policy.max_nose_center_offset,
-            "value": metrics.nose_center_offset,
-            "threshold": policy.max_nose_center_offset,
-        },
-        {
             "name": "crop_valid",
             "passed": metrics.crop_valid,
             "value": metrics.crop_valid,
             "threshold": True,
-        },
-        {
-            "name": "sharpness",
-            "passed": metrics.sharpness >= policy.min_sharpness,
-            "value": metrics.sharpness,
-            "threshold": policy.min_sharpness,
         },
         {
             "name": "min_brightness",

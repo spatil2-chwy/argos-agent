@@ -825,6 +825,14 @@ class RealtimeRobotAgent(
             self._display_mode = rendered
         self._display_queue.put(("mode", rendered))
 
+    def _clear_passive_alert_display_if_needed(self) -> None:
+        if getattr(self, "display_runtime", None) is None:
+            return
+        with self._display_mode_lock:
+            should_clear = self._display_mode == "alert"
+        if should_clear:
+            self._set_display_mode_async("idle")
+
     def _show_display_subtitle_async(self, text: str, *, duration_ms: int = 5000) -> None:
         if getattr(self, "display_runtime", None) is None:
             return
@@ -1175,24 +1183,18 @@ class RealtimeRobotAgent(
         context = turn.context_snapshot
         persons = list(context.persons or [])
         face_snapshot = dict(context.face_snapshot or {}) if context.face_snapshot else None
-        if persons or (
-            face_snapshot
-            and (
-                int(face_snapshot.get("recognized_count", 0) or 0) > 0
-                or int(face_snapshot.get("unknown_count", 0) or 0) > 0
+        if str(context.owner_id or "").strip():
+            people_context = format_people_context(
+                persons,
+                primary_face_person_id=context.primary_face_person_id,
+                face_snapshot=face_snapshot,
+                audio_speaker_id=context.audio_speaker_id,
+                owner_id=context.owner_id,
+                owner_source=context.owner_source,
+                speaker_visible=context.speaker_visible,
             )
-        ):
-            blocks.append(
-                format_people_context(
-                    persons,
-                    primary_face_person_id=context.primary_face_person_id,
-                    face_snapshot=face_snapshot,
-                    audio_speaker_id=context.audio_speaker_id,
-                    owner_id=context.owner_id,
-                    owner_source=context.owner_source,
-                    speaker_visible=context.speaker_visible,
-                )
-            )
+            if people_context:
+                blocks.append(people_context)
         voice_prompt = self._consume_voice_enrollment_prompt_note(turn)
         if voice_prompt:
             blocks.append(voice_prompt)

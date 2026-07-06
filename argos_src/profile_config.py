@@ -112,33 +112,18 @@ class FaceDepthGateProfile:
 class FaceAttentionGateProfile:
     enabled: bool
     min_face_area: int
-    min_face_area_ratio: float
     max_abs_yaw_deg: float
     max_abs_pitch_deg: float
     max_abs_roll_deg: float
-    distant_max_abs_yaw_deg: float
-    distant_max_abs_pitch_deg: float
-    distant_max_abs_roll_deg: float
-    near_face_area_ratio: float
-    distant_face_area_ratio: float
-    near_depth_m: float
-    distant_depth_m: float
-    max_center_offset_ratio: float
-    min_confidence: float
-    smoothing_window_sec: float
-    min_attentive_observations: int
-    hold_sec: float
+    min_abs_pitch_deg: float
 
 
 @dataclass(frozen=True)
 class FaceEnrollmentPolicyProfile:
     min_face_area: int
-    min_sharpness: float
     min_brightness: float
     max_brightness: float
     min_contrast: float
-    max_eye_tilt: float
-    max_nose_center_offset: float
     min_embedding_similarity: float
 
 
@@ -148,11 +133,19 @@ class PreferenceExtractionProfile:
 
 
 @dataclass(frozen=True)
+class FaceRecognitionStabilityProfile:
+    window_frames: int
+    min_hits: int
+
+
+@dataclass(frozen=True)
 class FaceRecognitionProfile:
     enabled: bool
     db_path: str
     loop_interval_sec: float
     recognition_threshold: float
+    recognition_margin_threshold: float
+    recognition_stability: FaceRecognitionStabilityProfile
     live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
@@ -343,6 +336,11 @@ class ScenarioProfile:
             db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
             recognition_threshold=0.6,
+            recognition_margin_threshold=0.20,
+            recognition_stability=FaceRecognitionStabilityProfile(
+                window_frames=5,
+                min_hits=2,
+            ),
             live_image_enabled=True,
             depth_gate=FaceDepthGateProfile(
                 enabled=False,
@@ -357,32 +355,17 @@ class ScenarioProfile:
             ),
             attention_gate=FaceAttentionGateProfile(
                 enabled=True,
-                min_face_area=1600,
-                min_face_area_ratio=0.0,
-                max_abs_yaw_deg=25.0,
-                max_abs_pitch_deg=20.0,
-                max_abs_roll_deg=35.0,
-                distant_max_abs_yaw_deg=25.0,
-                distant_max_abs_pitch_deg=20.0,
-                distant_max_abs_roll_deg=35.0,
-                near_face_area_ratio=0.04,
-                distant_face_area_ratio=0.012,
-                near_depth_m=0.8,
-                distant_depth_m=2.0,
-                max_center_offset_ratio=0.45,
-                min_confidence=0.55,
-                smoothing_window_sec=1.0,
-                min_attentive_observations=2,
-                hold_sec=0.8,
+                min_face_area=1300,
+                max_abs_yaw_deg=20.0,
+                max_abs_pitch_deg=18.0,
+                max_abs_roll_deg=90.0,
+                min_abs_pitch_deg=0.0,
             ),
             enrollment_policy=FaceEnrollmentPolicyProfile(
-                min_face_area=5000,
-                min_sharpness=12.0,
+                min_face_area=1300,
                 min_brightness=35.0,
                 max_brightness=220.0,
                 min_contrast=15.5,
-                max_eye_tilt=0.25,
-                max_nose_center_offset=0.10,
                 min_embedding_similarity=0.70,
             ),
             owner_turn=FaceOwnerTurnProfile(
@@ -424,13 +407,9 @@ class ScenarioProfile:
             policy=SpeakerRecognitionPolicy(
                 backend="speechbrain_ecapa",
                 db_path=DEFAULT_SPEAKER_DB_PATH,
-                query_min_voiced_sec=0.8,
-                query_match_threshold=0.60,
-                query_margin_threshold=0.08,
+                query_match_threshold=0.40,
+                query_margin_threshold=0.20,
                 reference_update_threshold=0.55,
-                enroll_min_voiced_sec=2.0,
-                enroll_max_voiced_sec=0.0,
-                enroll_min_rms_level=350.0,
                 max_clipped_fraction=0.02,
                 explicit_prompt_after_silent_failures=2,
             ),
@@ -1147,7 +1126,6 @@ def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
 def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     from argos_src.face_recognition.attention_gate import (
         AttentionGateSettings,
-        AttentionSmoothingSettings,
     )
     from argos_src.face_recognition.depth_gate import DepthGateSettings
 
@@ -1157,6 +1135,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     enrollment_policy_data = _pop_section(data, "enrollment_policy")
     owner_turn_data = _pop_section(data, "owner_turn")
     preference_extraction_data = _pop_section(data, "preference_extraction")
+    recognition_stability_data = _pop_section(data, "recognition_stability")
 
     proactive = ProactiveGreetingProfile(
         recognized_enabled=_pop_bool(proactive_data, "recognized_enabled", default=True),
@@ -1221,106 +1200,36 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
     attention_gate = FaceAttentionGateProfile(
         enabled=_pop_bool(attention_gate_data, "enabled", default=True),
-        min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1600),
-        min_face_area_ratio=_pop_float(
-            attention_gate_data,
-            "min_face_area_ratio",
-            default=0.0,
-        ),
+        min_face_area=_pop_int(attention_gate_data, "min_face_area", default=1300),
         max_abs_yaw_deg=_pop_float(
             attention_gate_data,
             "max_abs_yaw_deg",
-            default=25.0,
+            default=20.0,
         ),
         max_abs_pitch_deg=_pop_float(
             attention_gate_data,
             "max_abs_pitch_deg",
-            default=20.0,
+            default=18.0,
         ),
         max_abs_roll_deg=_pop_float(
             attention_gate_data,
             "max_abs_roll_deg",
-            default=35.0,
+            default=90.0,
         ),
-        distant_max_abs_yaw_deg=_pop_float(
+        min_abs_pitch_deg=_pop_float(
             attention_gate_data,
-            "distant_max_abs_yaw_deg",
-            default=25.0,
+            "min_abs_pitch_deg",
+            default=0.0,
         ),
-        distant_max_abs_pitch_deg=_pop_float(
-            attention_gate_data,
-            "distant_max_abs_pitch_deg",
-            default=20.0,
-        ),
-        distant_max_abs_roll_deg=_pop_float(
-            attention_gate_data,
-            "distant_max_abs_roll_deg",
-            default=35.0,
-        ),
-        near_face_area_ratio=_pop_float(
-            attention_gate_data,
-            "near_face_area_ratio",
-            default=0.04,
-        ),
-        distant_face_area_ratio=_pop_float(
-            attention_gate_data,
-            "distant_face_area_ratio",
-            default=0.012,
-        ),
-        near_depth_m=_pop_float(
-            attention_gate_data,
-            "near_depth_m",
-            default=0.8,
-        ),
-        distant_depth_m=_pop_float(
-            attention_gate_data,
-            "distant_depth_m",
-            default=2.0,
-        ),
-        max_center_offset_ratio=_pop_float(
-            attention_gate_data,
-            "max_center_offset_ratio",
-            default=0.45,
-        ),
-        min_confidence=_pop_float(
-            attention_gate_data,
-            "min_confidence",
-            default=0.55,
-        ),
-        smoothing_window_sec=_pop_float(
-            attention_gate_data,
-            "smoothing_window_sec",
-            default=1.0,
-        ),
-        min_attentive_observations=_pop_int(
-            attention_gate_data,
-            "min_attentive_observations",
-            default=2,
-        ),
-        hold_sec=_pop_float(attention_gate_data, "hold_sec", default=0.8),
     )
     try:
         AttentionGateSettings(
             enabled=attention_gate.enabled,
             min_face_area=attention_gate.min_face_area,
-            min_face_area_ratio=attention_gate.min_face_area_ratio,
             max_abs_yaw_deg=attention_gate.max_abs_yaw_deg,
             max_abs_pitch_deg=attention_gate.max_abs_pitch_deg,
             max_abs_roll_deg=attention_gate.max_abs_roll_deg,
-            distant_max_abs_yaw_deg=attention_gate.distant_max_abs_yaw_deg,
-            distant_max_abs_pitch_deg=attention_gate.distant_max_abs_pitch_deg,
-            distant_max_abs_roll_deg=attention_gate.distant_max_abs_roll_deg,
-            near_face_area_ratio=attention_gate.near_face_area_ratio,
-            distant_face_area_ratio=attention_gate.distant_face_area_ratio,
-            near_depth_m=attention_gate.near_depth_m,
-            distant_depth_m=attention_gate.distant_depth_m,
-            max_center_offset_ratio=attention_gate.max_center_offset_ratio,
-            min_confidence=attention_gate.min_confidence,
-            smoothing=AttentionSmoothingSettings(
-                window_sec=attention_gate.smoothing_window_sec,
-                min_observations=attention_gate.min_attentive_observations,
-                hold_sec=attention_gate.hold_sec,
-            ),
+            min_abs_pitch_deg=attention_gate.min_abs_pitch_deg,
         )
     except ValueError as exc:
         raise ProfileValidationError(
@@ -1332,12 +1241,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         min_face_area=_pop_int(
             enrollment_policy_data,
             "min_face_area",
-            default=5000,
-        ),
-        min_sharpness=_pop_float(
-            enrollment_policy_data,
-            "min_sharpness",
-            default=12.0,
+            default=1300,
         ),
         min_brightness=_pop_float(
             enrollment_policy_data,
@@ -1354,16 +1258,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "min_contrast",
             default=15.5,
         ),
-        max_eye_tilt=_pop_float(
-            enrollment_policy_data,
-            "max_eye_tilt",
-            default=0.25,
-        ),
-        max_nose_center_offset=_pop_float(
-            enrollment_policy_data,
-            "max_nose_center_offset",
-            default=0.10,
-        ),
         min_embedding_similarity=_pop_float(
             enrollment_policy_data,
             "min_embedding_similarity",
@@ -1373,10 +1267,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     if enrollment_policy.min_face_area < 1:
         raise ProfileValidationError(
             "face_recognition.enrollment_policy.min_face_area must be >= 1"
-        )
-    if enrollment_policy.min_sharpness < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.min_sharpness must be >= 0"
         )
     if enrollment_policy.min_brightness < 0.0:
         raise ProfileValidationError(
@@ -1389,14 +1279,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     if enrollment_policy.min_contrast < 0.0:
         raise ProfileValidationError(
             "face_recognition.enrollment_policy.min_contrast must be >= 0"
-        )
-    if enrollment_policy.max_eye_tilt < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.max_eye_tilt must be >= 0"
-        )
-    if enrollment_policy.max_nose_center_offset < 0.0:
-        raise ProfileValidationError(
-            "face_recognition.enrollment_policy.max_nose_center_offset must be >= 0"
         )
     if not 0.0 <= enrollment_policy.min_embedding_similarity <= 1.0:
         raise ProfileValidationError(
@@ -1497,6 +1379,35 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         "face_recognition.preference_extraction",
     )
 
+    recognition_stability = FaceRecognitionStabilityProfile(
+        window_frames=_pop_int(
+            recognition_stability_data,
+            "window_frames",
+            default=5,
+        ),
+        min_hits=_pop_int(
+            recognition_stability_data,
+            "min_hits",
+            default=2,
+        ),
+    )
+    if recognition_stability.window_frames < 1:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.window_frames must be >= 1"
+        )
+    if recognition_stability.min_hits < 1:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.min_hits must be >= 1"
+        )
+    if recognition_stability.min_hits > recognition_stability.window_frames:
+        raise ProfileValidationError(
+            "face_recognition.recognition_stability.min_hits must be <= window_frames"
+        )
+    _reject_unknown(
+        recognition_stability_data,
+        "face_recognition.recognition_stability",
+    )
+
     profile = FaceRecognitionProfile(
         enabled=_pop_bool(data, "enabled", default=True),
         db_path=_pop_optional_str(
@@ -1511,6 +1422,12 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
             "recognition_threshold",
             default=0.6,
         ),
+        recognition_margin_threshold=_pop_float(
+            data,
+            "recognition_margin_threshold",
+            default=0.20,
+        ),
+        recognition_stability=recognition_stability,
         live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,
@@ -1520,6 +1437,14 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         proactive_greeting=proactive,
     )
     profile = replace(profile, db_path=str(resolve_repo_path(profile.db_path)))
+    if not 0.0 <= profile.recognition_threshold <= 1.0:
+        raise ProfileValidationError(
+            "face_recognition.recognition_threshold must be between 0 and 1"
+        )
+    if not 0.0 <= profile.recognition_margin_threshold <= 1.0:
+        raise ProfileValidationError(
+            "face_recognition.recognition_margin_threshold must be between 0 and 1"
+        )
     _reject_unknown(data, "face_recognition")
     return profile
 
@@ -1667,17 +1592,13 @@ def _parse_speaker_recognition(data: dict[str, Any]) -> SpeakerRecognitionProfil
         policy = SpeakerRecognitionPolicy(
             backend="speechbrain_ecapa",
             db_path=str(resolve_repo_path(DEFAULT_SPEAKER_DB_PATH)),
-            query_min_voiced_sec=_pop_float(data, "query_min_voiced_sec", default=0.8),
-            query_match_threshold=_pop_float(data, "query_match_threshold", default=0.60),
-            query_margin_threshold=_pop_float(data, "query_margin_threshold", default=0.08),
+            query_match_threshold=_pop_float(data, "query_match_threshold", default=0.40),
+            query_margin_threshold=_pop_float(data, "query_margin_threshold", default=0.20),
             reference_update_threshold=_pop_float(
                 data,
                 "reference_update_threshold",
                 default=0.55,
             ),
-            enroll_min_voiced_sec=_pop_float(data, "enroll_min_voiced_sec", default=2.0),
-            enroll_max_voiced_sec=_pop_float(data, "enroll_max_voiced_sec", default=0.0),
-            enroll_min_rms_level=_pop_float(data, "enroll_min_rms_level", default=350.0),
             max_clipped_fraction=_pop_float(data, "max_clipped_fraction", default=0.02),
             explicit_prompt_after_silent_failures=_pop_int(
                 data,
