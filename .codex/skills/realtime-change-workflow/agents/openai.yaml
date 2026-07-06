@@ -1,0 +1,4 @@
+interface:
+  display_name: "Realtime Change Workflow"
+  short_description: "Guide realtime turn and audio changes"
+  default_prompt: "Use this workflow for a realtime runtime change."

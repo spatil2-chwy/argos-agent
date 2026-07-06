@@ -179,7 +179,9 @@ argos_src/memory/db/
 scripts/labs/face_preview/
 
 *.codex
-
+!.codex/
+!.codex/**
+data_collection/
 *.snowflake_env
 .tailwag
 .DS_Store

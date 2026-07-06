@@ -47,8 +47,9 @@ Inspect social/context memory with Tailwag tooling.
 
 ## Fresh Local Reset
 
-For a clean local reset from the repo root, remove the identity DB and both
-embedding DB directories:
+The reset below is destructive: it deletes local identity rows, face embeddings,
+and speaker embeddings. Use it only for disposable local smoke-test state, after
+exporting or backing up anything you need to keep:
 
 ```bash
 rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition

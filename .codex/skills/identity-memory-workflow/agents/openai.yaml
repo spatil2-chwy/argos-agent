@@ -1,0 +1,4 @@
+interface:
+  display_name: "Identity Memory Workflow"
+  short_description: "Guide identity and memory changes"
+  default_prompt: "Use this workflow for identity, owner resolution, or memory changes."

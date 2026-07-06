@@ -1,0 +1,4 @@
+interface:
+  display_name: "Provider Profile Workflow"
+  short_description: "Guide provider and profile changes"
+  default_prompt: "Use this workflow for provider API, profile, or manifest changes."

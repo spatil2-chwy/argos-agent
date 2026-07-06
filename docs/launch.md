@@ -70,7 +70,7 @@ Terminal 1: external robot provider
 
 Start the provider process that owns ROS, SDK, camera, navigation, or other
 robot-specific dependencies. Argos only talks to that provider through the
-configured provider transport.
+manifest-selected provider/resource route.
 
 Terminal 2: Argos realtime runtime
 
@@ -78,9 +78,13 @@ Terminal 2: Argos realtime runtime
 cd ~/argos-agent
 source setup_shell.sh
 export OPENAI_API_KEY=...
-export ARGOS_PROVIDER_TRANSPORT=zenoh
 python3 run_profile.py --profile static_interaction
 ```
+
+The profile selects `manifest: puffle` and resource IDs such as `base`,
+`arducam_001`, and `screen_001`. When the manifest leaves Zenoh endpoints empty,
+set `ARGOS_ZENOH_CONNECT=tcp/ROBOT_OR_PROVIDER_HOST:7447` if discovery is not
+enough in your network.
 
 Optional display: for Puffle's screen, start the local browser display server at
 `http://localhost:4173` before enrollment review or visual state testing. Argos
@@ -229,18 +233,18 @@ robot client.
 
 ## Manual Smoke Tests
 
-To reset local Argos identity and biometric stores before smoke testing:
-
-```bash
-rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition
-```
+Run the targeted regression tests before live robot checks. For any smoke test
+that can move the robot, confirm clear space, battery state, a working stop path,
+and operator approval. For destructive local identity/biometric cleanup, use the
+guarded reset guidance in `identity_store.md`; Tailwag memory is external and
+must be reset with Tailwag tooling.
 
 After bring-up, these are the highest-value manual checks:
 
 1. Wake-word turn from idle: say the wake word and ask a short question.
 2. Face-presence turn: stand in view and speak without the wake word.
-3. Internal-event turn: trigger a nav or battery event and confirm the robot still responds naturally.
-4. Tool call: ask for something that should call a known tool, like a trick or visual inspection.
+3. Internal-event turn: trigger a non-motion provider event, or a nav/battery event only with operator approval.
+4. Tool call: ask for something that should call a known non-navigation tool, like visual inspection; use motion/trick tools only with operator approval.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.
 6. Memory ingestion: have a short recognized-speaker conversation, then inspect the resulting episode/person memory with Tailwag tooling.
 
@@ -256,8 +260,9 @@ python3 -B -m pytest \
   tests/argos_src/test_argos_profile_config.py
 ```
 
-If you want the employee-directory tests too, run them from an environment that
-has `rapidfuzz` installed through the repo setup.
+Employee-directory and RapidFuzz lab coverage lives in
+`tests/scripts/labs/test_rapidfuzz_employee_lab.py` and
+`tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`.
 
 ## Logs and Observability
 
@@ -304,9 +309,9 @@ If the robot hears you but never replies:
 
 If face-triggered interaction is not happening:
 
-- confirm the camera topic is correct in the profile
+- confirm `resources.face_camera` points at a manifest camera resource with `camera.rgb`
 - confirm the face loop is running
-- confirm `/go2/face_presence` is updating
+- confirm face-presence provider events are reaching Argos
 
 
 ## Knowledge Bases

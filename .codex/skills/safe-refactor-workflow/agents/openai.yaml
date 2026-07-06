@@ -1,0 +1,4 @@
+interface:
+  display_name: "Safe Refactor Workflow"
+  short_description: "Guide behavior-preserving refactors"
+  default_prompt: "Use this workflow for a behavior-preserving refactor."

@@ -282,6 +282,10 @@ A single human turn can contain:
 
 The runtime waits until `turn.pending_tool_calls == 0` before sending the follow-up response request.
 
+This assumes the model called a registered tool from the installed schemas.
+Unknown tool names are contract bugs: they can leave the turn waiting until the
+runtime watchdog cancels it.
+
 So one logical turn may look like:
 
 ```text

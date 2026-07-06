@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debug Bring-Up Workflow"
+  short_description: "Guide launch and runtime debugging"
+  default_prompt: "Use this workflow for launch, audio, provider, or realtime debugging."

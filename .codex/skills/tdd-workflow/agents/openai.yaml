@@ -1,0 +1,4 @@
+interface:
+  display_name: "TDD Workflow"
+  short_description: "Guide test-first implementation"
+  default_prompt: "Use this workflow for test-first development."

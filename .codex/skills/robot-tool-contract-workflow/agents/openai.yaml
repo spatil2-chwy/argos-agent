@@ -1,0 +1,4 @@
+interface:
+  display_name: "Robot Tool Contract Workflow"
+  short_description: "Guide robot tool contract changes"
+  default_prompt: "Use this workflow for robot-facing tool or motion contract changes."

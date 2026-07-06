@@ -70,6 +70,12 @@ create_connection("wss://api.openai.com/v1/realtime?model=...")
   -> runtime marks `_session_ready`
 ```
 
+`start()` sends `session.update` and then starts audio streams and worker loops.
+The mic callback checks `_session_ready` before it records or sends audio. The
+response worker is already running, so startup/internal events should not be
+queued before the session is ready unless the caller intentionally handles that
+startup race.
+
 `session.update` is where the runtime installs the long-lived session configuration:
 
 - static system prompt (`instructions`)
@@ -222,8 +228,8 @@ This is the main handoff from speech capture into interaction state.
 `_response_loop()` pulls the turn and `_run_turn()` does:
 
 1. Register the turn as active.
-2. If this were a text turn, create a user message item.
-3. If `pending_internal_text` exists, create a user message item for it.
+2. If this were a text turn, create a system message item.
+3. If `pending_internal_text` exists, create a system message item for it.
 4. Send `response.create`.
 5. Wait for both model completion and playback completion.
 
@@ -310,6 +316,7 @@ The coalescer is intentionally opinionated:
 
 - human text flushes immediately
 - internal events are debounced
+- internal-only flushes are deferred while recording is active, so they can be drained into the audio turn
 - repeated face events for the same person collapse to the newest one
 - nav waypoint chatter is dropped if a final goal result is already present
 - patrol-resume events are suppressed if a face event or human input is in the same batch
@@ -376,6 +383,17 @@ The watchdog in `EngagementStateMachine` handles:
 
 When `ALERT` times out, the coalescer is force-flushed. That keeps a proactive event from getting stuck forever without ever reaching the model.
 
+## Runtime Watchdogs
+
+The engagement watchdog handles user-visible interaction states. The agent also
+has turn watchdogs so one stuck response does not hold the runtime forever:
+
+- response creation / first-audio stalls terminate the turn with `response_timeout`
+- tool waits terminate the turn with `tool_timeout`
+- local playback stalls after model completion force playback completion
+
+These watchdogs are local recovery paths, not Realtime API features.
+
 ## Navigation and Patrol Interaction
 
 The engagement machine also decides whether navigation should be interrupted or suppressed.
@@ -383,6 +401,7 @@ The engagement machine also decides whether navigation should be interrupted or 
 - proactive face attention can publish a local `stop` voice command and cancel interruptible navigation
 - new human input from `IDLE` or `COOLDOWN` can also cancel interruptible navigation
 - patrol resumes only after the runtime returns to `IDLE`
+- a resolved-owner audio turn can request a short owner-turn motion toward the speaker; tool calls cancel that request
 
 So "engagement state" is not just UX state. It is also a local arbitration layer between conversation and navigation.
 
@@ -394,6 +413,9 @@ Common triggers:
 
 - wake word while the robot is already speaking
 - external `/voice_commands` message with `stop`
+
+The audio callback also has playback/echo guards so assistant audio does not
+become a new human turn. Wake-word barge-in is the intentional exception.
 
 `interrupt_current_response(...)` calls `_terminate_turn(...)` with:
 

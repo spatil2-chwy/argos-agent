@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Routing Workflow"
+  short_description: "Guide custom subagent routing"
+  default_prompt: "Use this workflow to choose and coordinate custom subagents."
