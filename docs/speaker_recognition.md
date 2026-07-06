@@ -30,7 +30,7 @@ microphone audio
     -> resample to 16 kHz mono
     -> local VAD + wake/admission
     -> commit one audio turn
-    -> pack voiced regions for speaker use
+    -> keep a speaker-specific 16 kHz turn clip
     -> ECAPA embedding
     -> compare against saved voice references
     -> combine with face visibility
@@ -74,7 +74,7 @@ When local end-of-speech fires, `_commit_audio_turn()`:
 
 - builds the `QueuedTurn`
 - freezes the strict `primary_face_person_id` and visible face ids from speech start
-- packs voiced audio for speaker recognition
+- prepares a speaker-specific 16 kHz clip for speaker recognition
 - blocks on `SpeakerRecognitionService` to resolve the turn owner before creating
   the response
 
@@ -84,7 +84,12 @@ The current speaker preprocessing is intentionally simple:
 
 - keep the original turn audio for the realtime API
 - build a speaker-specific clip from the locally buffered `16 kHz` PCM
-- use the existing local VAD to keep voiced regions and drop non-speech spans
+- currently pass the full committed clip to speaker recognition
+
+`SpeakerRecognitionService.trim_turn_audio()` can trim with a supplied VAD, but
+the live commit path passes `vad=None` because the capture VAD is not reused from
+the commit thread. In that path, duration and RMS gates apply to the full
+speaker clip, not to a separately packed voiced-only clip.
 
 This is not a full diarization pipeline and does not do:
 
@@ -95,7 +100,7 @@ This is not a full diarization pipeline and does not do:
 
 ### 3. Query quality gate
 
-For query ownership, Argos only enforces a minimum voiced duration:
+For query ownership, Argos only enforces a minimum speaker-clip duration:
 
 - `query_min_voiced_sec`
 
@@ -187,7 +192,7 @@ Important detail:
 The current path is intentionally conservative and small:
 
 - required `16 kHz` mono speaker clip
-- VAD-based voiced-region packing
+- full committed speaker clip in the live runtime
 - no transcript dependency
 - no hard max duration by default
 

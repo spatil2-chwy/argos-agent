@@ -12,7 +12,8 @@ python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
 python3 run_profile.py --profile static_interaction
 ```
 
-Canonical operator guide: `docs/launch.md`
+Canonical operator guide: `docs/launch.md`. Full documentation map:
+`docs/README.md`.
 
 ## Canonical Runtime Paths
 
@@ -51,13 +52,10 @@ Canonical operator guide: `docs/launch.md`
 
 ## Docs
 
-- Launch and testing: `docs/launch.md`
-- Architecture: `docs/architecture.md`
-- Voice/runtime notes: `docs/voice.md`
-- Puffle interaction display: `docs/interaction_display.md`
-- Face recognition: `docs/face_recognition.md`
-- Speaker recognition: `docs/speaker_recognition.md`
-- Identity store: `docs/identity_store.md`
-- Memory store: `docs/memory_store.md`
-- Employee directory: `docs/employee_directory.md`
-- Observability: `docs/observability.md`
+- Docs index: `docs/README.md`
+- Operator launch/runbook: `docs/launch.md`
+- Runtime architecture and turn flow: `docs/architecture.md`, `docs/realtime_turn_flow.md`
+- Prompting and history: `docs/prompting_and_history.md`
+- Robot tools/provider contract: `docs/robot_tools.md`
+- Identity and memory: `docs/face_recognition.md`, `docs/speaker_recognition.md`, `docs/identity_store.md`, `docs/memory_store.md`, `docs/slack_memory.md`
+- Display, observability, setup: `docs/interaction_display.md`, `docs/observability.md`, `docs/complete_setup.md`

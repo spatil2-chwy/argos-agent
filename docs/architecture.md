@@ -4,10 +4,12 @@ This is the high-level map of the current Argos stack. The deeper component docs
 
 - `realtime_turn_flow.md`
 - `prompting_and_history.md`
-- `voice.md`
+- `robot_tools.md`
+- `attention_gate.md`
 - `speaker_recognition.md`
 - `face_recognition.md`
 - `memory_store.md`
+- `slack_memory.md`
 - `observability.md`
 
 ## Core Idea
@@ -117,8 +119,8 @@ Realtime model
 1. `run_profile.py` loads `static_interaction`.
 2. `factory.py` builds the robot-side runtime pieces.
 3. If `display.enabled` is true and a display resource is selected, `interaction_display` is wired through `DisplayRuntime`.
-4. `RealtimeRobotAgent.start()` opens the websocket and sends `session.update`.
-5. After `session.updated`, mic capture and realtime turn handling become live.
+4. `RealtimeRobotAgent.start()` opens the websocket, starts worker threads, and sends `session.update`.
+5. After `session.updated`, `_session_ready` is set. Mic capture is gated on that flag; startup/internal event queues should still be treated as startup-sensitive because response workers are already running.
 
 ## Two Trigger Families
 
@@ -184,6 +186,8 @@ while protecting active unresolved items.
 ## Tool Calling Model
 
 The Realtime model calls the existing robot tools directly through function schemas.
+Use `robot_tools.md` for the public tool IDs, capability requirements, side
+effects, and safety notes.
 
 Flow:
 
@@ -211,13 +215,14 @@ That state machine does more than UI:
 
 Display updates are derived from runtime state, not model tool calls. The
 default Puffle display maps idle to `happy`, listening/recording/thinking to
-`think`, and assistant playback to `happy`; only assistant transcript deltas are
-shown as subtitles.
+`think`, and assistant playback to `excited`; assistant transcript deltas stream
+as subtitles.
 
 ## Read Next
 
 - Use `realtime_turn_flow.md` for exact event order, state transitions, interruptions, and edge cases.
 - Use `prompting_and_history.md` for prompt layering, history assembly, tool traces, and transcript ownership.
+- Use `robot_tools.md` for public tool IDs, provider capabilities, navigation/patrol/battery side effects, and live-robot safety notes.
 - Use `speaker_recognition.md` for voice enrollment, audio ownership, strict face ownership, and voice-reference management.
 - Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.

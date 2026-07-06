@@ -1,0 +1,4 @@
+interface:
+  display_name: "Argos HTML Presentation"
+  short_description: "Build evidence-backed Argos HTML decks"
+  default_prompt: "Use $argos-html-presentation-workflow to create an evidence-backed HTML presentation for Argos."

@@ -56,8 +56,10 @@ python3 -m argos_src.memory.manage_memory --person person_your_name_20260505_123
 ## Fresh Local Reset
 
 After the identity/memory split, old local identity databases that still contain
-social-memory columns are not supported. For a clean local reset from the repo
-root, remove the identity DB, both embedding DB directories, and the memory DB:
+social-memory columns are not supported. The reset below is destructive: it
+deletes local identity rows, face embeddings, speaker embeddings, and memory
+items. Use it only for disposable local smoke-test state, after exporting or
+backing up anything you need to keep:
 
 ```bash
 rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory
@@ -77,7 +79,7 @@ The next runtime/enrollment run recreates the current schemas:
 - the speaker embedding, if present
 
 It does not delete memory items. Memory has its own store so operators can audit
-what was learned from live chat, robot encounters, and future Slack imports.
+what was learned from live chat, robot encounters, and Slack imports.
 
 ## Runtime Behavior
 

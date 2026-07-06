@@ -22,10 +22,10 @@ This document covers the current Argos face path:
 3. continuous recognition preprocessing
 4. multi-face scenes
 5. face identity vs audio speaker ownership
+6. config knobs and threshold policy
 
 For the dedicated attention-gate flow, thresholds, and mic-admission behavior,
 see `docs/attention_gate.md`.
-6. config knobs and threshold policy
 
 ## Short Answer
 
@@ -373,7 +373,7 @@ face_recognition:
   loop_interval_sec: 0.3
   recognition_threshold: 0.6
   depth_gate:
-    enabled: true
+    enabled: false
     sync_slop_sec: 0.12
     sync_queue_size: 10
     capture_timeout_sec: 1.5
@@ -477,11 +477,12 @@ realtime:
     open_on_attention_presence: true
 ```
 
-## Thresholds Not Yet in YAML
+## Thresholds And Profile Knobs
 
-Some thresholds are intentionally centralized in code but not yet profile-driven:
+Most field-tuned face policy lives in the profile. A few thresholds remain
+centralized in code:
 
-- `FaceEnrollmentPolicy` for enrollment quality
+- `face_recognition.enrollment_policy` for enrollment quality
 - `MIN_FACE_DETECTION_CONFIDENCE = 0.9` in `face_recognition/constants.py`
 - presence cache expiry from `CACHE_EXPIRE_SEC` in `models.py`
 - speaker ownership thresholds under `speaker_recognition:` in YAML
@@ -530,9 +531,12 @@ Relevant focused tests:
 
 ```bash
 poetry run pytest \
-  tests/argos_src/test_employee_directory_service.py \
   tests/argos_src/face_recognition/test_face_recognition_service.py \
+  tests/argos_src/face_recognition/test_attention_gate.py \
+  tests/argos_src/face_recognition/test_enrollment_display_review.py \
   tests/argos_src/tools/unitree_go2/vision/test_enroll_visible_person_tool.py \
+  tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py \
+  tests/scripts/labs/test_rapidfuzz_employee_lab.py \
   tests/argos_src/speaker_recognition/test_policy.py \
   tests/argos_src/speaker_recognition/test_service.py \
   tests/argos_src/agent/test_agent_runtime.py

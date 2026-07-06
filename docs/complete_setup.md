@@ -90,13 +90,12 @@ export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 ### 3. Clone And Install Argos
 
 ```bash
-export WORKSPACE_DIR="$HOME/go2_quadruped_companion"
-git clone git@github.com:Chewy-Inc/go2_quadruped_companion.git "$WORKSPACE_DIR"
-cd "$WORKSPACE_DIR/argos_src"
+export WORKSPACE_DIR="$HOME/argos-agent"
+git clone https://github.com/spatil2-chwy/argos-agent.git "$WORKSPACE_DIR"
+cd "$WORKSPACE_DIR"
 poetry install
 source setup_shell.sh
 python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
-python3 -m pip install eclipse-zenoh
 ```
 
 `setup_shell.sh` activates the Argos Poetry environment and exposes the repo
@@ -106,12 +105,11 @@ root on `PYTHONPATH`. It does not source ROS.
 
 ```bash
 export OPENAI_API_KEY=...
-export ARGOS_PROVIDER_TRANSPORT=zenoh
-export ARGOS_ZENOH_KEY_PREFIX=argos/providers/puffle-go2
-export ARGOS_PROVIDER_RESOURCE_ID=base
 ```
 
-If the provider is not discovered automatically, configure Zenoh endpoints:
+The selected profile loads `config/manifests/puffle.yaml`, which supplies the
+provider transport, key prefix, and resource IDs. If the Zenoh provider is not
+discovered automatically, configure endpoints:
 
 ```bash
 export ARGOS_ZENOH_CONNECT=tcp/ROBOT_OR_PROVIDER_HOST:7447
@@ -136,10 +134,9 @@ when that profile feature is enabled.
 Start the external robot provider first. Then start Argos:
 
 ```bash
-cd "$WORKSPACE_DIR/argos_src"
+cd "$WORKSPACE_DIR"
 source setup_shell.sh
 export OPENAI_API_KEY=...
-export ARGOS_PROVIDER_TRANSPORT=zenoh
 python3 run_profile.py --profile static_interaction
 ```
 
@@ -157,7 +154,7 @@ The provider owns:
 - ROS workspace sourcing
 - `go2_interfaces` and other robot message packages
 - Nav2 actions/services
-- camera topics and transforms
+- camera streams and transforms
 - Unitree SDK / CycloneDDS setup
 - optional `zenoh-bridge-ros2dds` routing
 
@@ -206,16 +203,14 @@ remain compatible.
 
 ## Troubleshooting
 
-- If Argos cannot import `zenoh`, install the Python Zenoh package in the Argos
-  environment with `python3 -m pip install eclipse-zenoh`.
 - If Argos times out on robot actions, confirm the provider is running and using
-  the same `ARGOS_ZENOH_KEY_PREFIX` and resource IDs as the selected manifest.
+  the same manifest key prefix and resource IDs as the selected profile.
 - If the provider cannot publish Go2 actions, check ROS sourcing and
   `go2_interfaces` on the provider machine, not the Argos machine.
-- If camera snapshots fail, confirm the provider implements
-  `camera.latest_image` or `camera.latest_rgbd`.
-- If owner-turn fails, confirm the provider implements `tf.transform` and
-  `motion.velocity_sample`.
+- If camera snapshots fail, confirm the selected camera resource provides
+  `camera.rgb` or `camera.rgbd`.
+- If owner-turn fails, confirm the selected robot and camera resources provide
+  `transform.lookup`, `camera.intrinsics`, and the needed motion capability.
 - If the Puffle screen does not update, confirm the local display server is
   running at `http://localhost:4173` and that the selected profile includes
   `display.enabled: true`.

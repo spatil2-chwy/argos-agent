@@ -1,0 +1,52 @@
+# Project-local command policy for live robot/runtime safety.
+#
+# These rules apply to commands requested outside the sandbox. They are not a
+# substitute for review; they add a prompt around commands that can affect live
+# robot behavior or local runtime state.
+
+prefix_rule(
+    pattern = ["python3", "run_profile.py"],
+    decision = "prompt",
+    justification = "Starting the live realtime robot agent needs explicit operator approval.",
+    match = [
+        "python3 run_profile.py --profile static_interaction",
+    ],
+)
+git commit --no-editgit commit --no-edit
+prefix_rule(
+    pattern = ["python", "run_profile.py"],
+    decision = "prompt",
+    justification = "Starting the live realtime robot agent needs explicit operator approval.",
+    match = [
+        "python run_profile.py --profile static_interaction",
+    ],
+)
+
+prefix_rule(
+    pattern = ["python3", "-m", "argos_src.identity.manage_identity"],
+    decision = "prompt",
+    justification = "Identity management can modify local person records and linked embeddings.",
+    match = [
+        "python3 -m argos_src.identity.manage_identity --delete Someone",
+        "python3 -m argos_src.identity.manage_identity --list",
+    ],
+)
+
+prefix_rule(
+    pattern = ["python3", "-m", "argos_src.memory.manage_memory"],
+    decision = "prompt",
+    justification = "Memory management can archive or inspect local social memory state.",
+    match = [
+        "python3 -m argos_src.memory.manage_memory --archive mem_abc123",
+        "python3 -m argos_src.memory.manage_memory --person Someone",
+    ],
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf", "var"],
+    decision = "forbidden",
+    justification = "Do not delete runtime state broadly; ask for the exact reset path instead.",
+    match = [
+        "rm -rf var",
+    ],
+)

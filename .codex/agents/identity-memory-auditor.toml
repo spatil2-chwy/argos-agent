@@ -1,0 +1,15 @@
+name = "identity-memory-auditor"
+description = "Audits face recognition, speaker recognition, owner resolution, identity records, memory extraction, and prompt memory projection when parallel review is requested."
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+developer_instructions = """
+Audit person identity and memory behavior.
+
+Primary areas include `argos_src/face_recognition/`, `argos_src/speaker_recognition/`, `argos_src/identity/`, `argos_src/memory/`, `argos_src/employee_directory/`, and related tools under `argos_src/tools/unitree_go2/vision/`.
+
+Read the relevant parts of `docs/face_recognition.md`, `docs/speaker_recognition.md`, `docs/identity_store.md`, `docs/memory_store.md`, and `docs/prompting_and_history.md`.
+
+Check strict single-face ownership, voice/face conflict handling, enrollment consent and review gates, stable person IDs, memory kind semantics, follow-up expiry, prompt projection caps, and source-aware memory writes.
+
+Report findings with suggested targeted tests and any risk to stored local state.
+"""

@@ -18,7 +18,7 @@ context feeds.
 | `kind` | `preference`, `boundary`, `pet`, `fact`, `note`, `followup`, `encounter`, `office_event`. |
 | `key` | Stable dedupe/update key within scope/kind/source. |
 | `summary` | Prompt-safe text. |
-| `source` | `live_chat`, `robot`, or future `slack`. |
+| `source` | `live_chat`, `robot`, or `slack`. |
 | `source_ref` | Source event/message/segment id when available. |
 | `status` | `active`, `archived`, or `superseded`. |
 | `created_at` | First insert time. |
@@ -146,10 +146,15 @@ rows when face recognition records a new presence episode.
 
 ### `slack`
 
-Not implemented yet. The future Slack importer should live under
-`argos_src/memory/slack/` or `argos_src/memory/slack.py` depending on size. It should
-normalize Slack messages/events into `memory_items` with `source='slack'`;
-prompt compilation should not know Slack-specific parsing details.
+Optional Slack ingestion is implemented under `argos_src/memory/slack/` and
+documented in `docs/slack_memory.md`. It polls approved Slack channels, extracts
+prompt-ready person or site memories, writes normal `memory_items` rows with
+`source='slack'`, and stages unresolved person memories in `slack_pending_memory`
+until a local identity row can be matched.
+
+Prompt compilation does not know Slack-specific parsing details. Once promoted
+to active `memory_items`, Slack-derived rows flow through the same
+`MemoryContextCompiler` path as live chat and robot encounter memory.
 
 ## Prompt Flow
 
@@ -230,9 +235,11 @@ prompt projection: identity `Directory` lines, memory `About`,
 Plain `--person` shows raw person rows; plain `--site` shows site rows plus
 recent same-site encounters for debugging.
 
-If `python3 -m argos_src.memory.manage_memory --person ...` reports an unsupported identity
-database schema, the local identity DB is still from the old identity-owned
-memory design. From the repo root, reset local runtime storage with:
+If `python3 -m argos_src.memory.manage_memory --person ...` reports an
+unsupported identity database schema, the local identity DB is still from the old
+identity-owned memory design. The destructive local reset below deletes identity,
+face, speaker, and memory state. Use it only for disposable local smoke-test
+state, after exporting or backing up anything you need to keep:
 
 ```bash
 rm -rf var/identity/identity.sqlite3 var/face_recognition var/speaker_recognition var/memory

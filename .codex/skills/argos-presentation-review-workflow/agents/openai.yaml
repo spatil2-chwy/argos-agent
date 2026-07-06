@@ -1,0 +1,4 @@
+interface:
+  display_name: "Argos Presentation Review"
+  short_description: "Review Argos decks for clarity and evidence"
+  default_prompt: "Use $argos-presentation-review-workflow to review this Argos presentation for accuracy, layout, and evidence gaps."
