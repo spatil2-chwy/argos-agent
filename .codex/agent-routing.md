@@ -84,6 +84,7 @@ Read-only agents must report the proposed learning update instead of editing fil
 | Latency logs, realtime markers, cost telemetry, bring-up failures | `observability-debugger` | read-only by default | `debug-bringup-workflow` |
 | HTML deck, demo briefing, roadmap deck, weekly status presentation, or stakeholder review package | `presentation-creator` | workspace-write | `argos-html-presentation-workflow` |
 | Presentation artifact needs QA, claim checking, browser/layout review, or source alignment | `presentation-reviewer` | read-only | `argos-presentation-review-workflow` |
+| VBR-style written review, deck-to-DOCX conversion, or 2-3 page source-backed stakeholder write-up | `vbr-docx-writer` | workspace-write | `argos-html-presentation-workflow` when starting from an Argos deck |
 
 ## Common Bundles
 
@@ -96,6 +97,7 @@ Read-only agents must report the proposed learning update instead of editing fil
 - Bring-up/debug session: `observability-debugger`, optionally `provider-contract-guardian` if resources or transports are involved.
 - Documentation update: `docs-sync-auditor`, optionally the domain auditor for the subsystem being documented.
 - Weekly change presentation: main thread owns synthesis and gathers `git log`/diff/source artifacts; optionally use `docs-sync-auditor` for source-backed theme extraction or doc drift, then `presentation-creator` builds the deck and `presentation-reviewer` checks claims and layout.
+- VBR DOCX from an existing deck: main thread or `vbr-docx-writer` turns the deck into a concise write-up with tables/figures, then optionally use `docs-sync-auditor` or `presentation-reviewer` for source-backed claim and layout review.
 - Final pre-handoff check for risky work: relevant domain auditor, `test-runner`, `docs-sync-auditor`, and `change-reviewer`.
 
 ## Prompt Template
