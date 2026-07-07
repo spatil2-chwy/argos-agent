@@ -3,7 +3,8 @@
 import time
 
 from argos_src.agent.control.coalescer import EventCoalescer
-from argos_src.agent.control.engagement_runtime import EngagementState, EngagementStateMachine
+from argos_src.agent.control.engagement_runtime import EngagementStateMachine
+from argos_src.agent.control.types import EngagementMode
 
 
 class _FakeGoalHandle:
@@ -69,7 +70,7 @@ def test_playback_events_drive_speaking_to_cooldown():
         machine.on_agent_done(has_reply=True, req_id="rt-1")
         machine.on_playback_event("playback_completed", "rt-1", stream_id="resp-1")
 
-        assert machine.state == EngagementState.COOLDOWN
+        assert machine.state == EngagementMode.COOLDOWN
     finally:
         machine.shutdown()
 
@@ -86,7 +87,7 @@ def test_matching_stream_id_completes_playback_without_req_id():
         machine.on_agent_done(has_reply=True, req_id="rt-1")
         machine.on_playback_event("playback_completed", "", stream_id="resp-1")
 
-        assert machine.state == EngagementState.COOLDOWN
+        assert machine.state == EngagementMode.COOLDOWN
     finally:
         machine.shutdown()
 
@@ -121,7 +122,7 @@ def test_speaking_watchdog_falls_back_to_cooldown():
 
         time.sleep(1.3)
 
-        assert machine.state == EngagementState.COOLDOWN
+        assert machine.state == EngagementMode.COOLDOWN
     finally:
         machine.shutdown()
 

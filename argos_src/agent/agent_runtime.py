@@ -33,7 +33,9 @@ from argos_src.agent.realtime_turns import (
     TURN_PHASE_CANCELED,
     TURN_PHASE_FINALIZED,
     TURN_PHASE_PLAYING,
+    TURN_PHASE_QUEUED,
     TURN_PHASE_RESPONSE_REQUESTED,
+    TURN_PHASE_REQUESTING_FOLLOWUP,
     TURN_PHASE_SUPERSEDED,
     TURN_PHASE_WAITING_FIRST_AUDIO,
     TURN_PHASE_WAITING_TOOLS,
@@ -372,8 +374,14 @@ class RealtimeRobotAgent:
             speaker_visible=speaker_visible,
         )
 
-    def _set_turn_phase(self, turn: QueuedTurn, phase: str) -> None:
-        self._state_controller()._set_turn_phase(turn, phase)
+    def _set_turn_phase(
+        self,
+        turn: QueuedTurn,
+        phase: str,
+        *,
+        trigger: str = "set_turn_phase",
+    ) -> None:
+        self._state_controller()._set_turn_phase(turn, phase, trigger=trigger)
 
     def _is_turn_terminal(self, turn: Optional[QueuedTurn]) -> bool:
         return self._state_controller()._is_turn_terminal(turn)
@@ -1101,6 +1109,7 @@ class RealtimeRobotAgent:
             ),
             context_snapshot=context,
         )
+        self._set_turn_phase(turn, TURN_PHASE_QUEUED, trigger="enqueue_text_turn")
         self._turn_queue.put(turn)
 
     def update_face_presence_snapshot(self, snapshot: dict[str, Any]) -> None:
@@ -1456,7 +1465,15 @@ class RealtimeRobotAgent:
             return
         turn.response_requested_at = time.time()
         turn.pending_response_requests += 1
-        self._set_turn_phase(turn, TURN_PHASE_RESPONSE_REQUESTED)
+        self._set_turn_phase(
+            turn,
+            TURN_PHASE_RESPONSE_REQUESTED,
+            trigger=(
+                "response_followup_create"
+                if turn.phase == TURN_PHASE_REQUESTING_FOLLOWUP
+                else "response_create"
+            ),
+        )
         self._queue_pending_response_turn(turn.req_id)
         self._latency.emit(
             event="response_create",
@@ -1794,7 +1811,7 @@ class RealtimeRobotAgent:
             terminal_reason="completed",
             **self._exchange_log_fields(turn),
         )
-        self._set_turn_phase(turn, TURN_PHASE_FINALIZED)
+        self._set_turn_phase(turn, TURN_PHASE_FINALIZED, trigger="turn_completed")
         turn.response_finished.set()
         turn.playback_finished.set()
         self._discard_pending_response_turn(turn.req_id)
@@ -1824,7 +1841,7 @@ class RealtimeRobotAgent:
             terminal_reason=reason,
             **self._exchange_log_fields(turn),
         )
-        self._set_turn_phase(turn, phase)
+        self._set_turn_phase(turn, phase, trigger=reason or phase)
         self.logger.warning(
             "Terminating turn req_id=%s phase=%s reason=%s response_id=%s audio_started=%s pending_tool_calls=%s pending_response_requests=%s",
             turn.req_id,

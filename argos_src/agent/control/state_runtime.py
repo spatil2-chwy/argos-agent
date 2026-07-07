@@ -3,17 +3,11 @@
 from __future__ import annotations
 
 from collections import deque
-from copy import deepcopy
-import json
 import os
 import time
 from typing import Any, Optional
 
-import websocket
-
 from argos_src.agent.realtime_turns import (
-    INCOMPLETE_AUDIO_CONTINUATION_LIMIT,
-    NO_AUDIO_RESPONSE_RETRY_LIMIT,
     RESPONSE_STALL_TIMEOUT_SEC,
     TERMINAL_TURN_PHASES,
     TURN_PHASE_FINALIZED,
@@ -23,10 +17,11 @@ from argos_src.agent.realtime_turns import (
 )
 from argos_src.agent.control.observers import safe_transition
 from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.response_lifecycle_runtime import ResponseLifecycleRuntime
+from argos_src.agent.control.transport_runtime import TransportRuntime
+from argos_src.agent.control.turn_context_runtime import TurnContextRuntime
 from argos_src.agent.control.turn_store import PendingResponseBindingStore, ResponseBinding
 from argos_src.agent.control.types import StateAxis, StateTransition
-from argos_src.face_recognition.models import PersonContext
-from argos_src.identity.prompting import format_identity_profile_lines
 
 
 class AgentStateRuntime:
@@ -59,45 +54,37 @@ class AgentStateRuntime:
     def _transport_host(self) -> Any:
         return object.__getattribute__(self, "__dict__").get("_host") or self
 
-    def _enrich_person_context_with_memory(self, person: PersonContext) -> PersonContext:
-        compiler = getattr(self, "memory_context_compiler", None)
-        if compiler is None:
-            return person
-        person_id = str(getattr(person, "person_id", "") or "").strip()
-        if not person_id:
-            return person
-        try:
-            context = compiler.person_context(
-                person_id,
-                fallback_profile_lines=tuple(getattr(person, "memory_profile_lines", ()) or ()),
-                fallback_followup_lines=tuple(getattr(person, "potential_followups", ()) or ()),
-            )
-        except Exception:
-            self.logger.exception("Failed to compile memory context for %s", person_id)
-            return person
-        person.memory_profile_lines = tuple(context.profile_lines or ())
-        person.potential_followups = tuple(context.followup_lines or ())
-        if context.preferred_language:
-            person.preferred_language = context.preferred_language
-        return person
+    def _response_lifecycle(self) -> ResponseLifecycleRuntime:
+        runtime = getattr(self, "_response_lifecycle_runtime", None)
+        host = self._transport_host()
+        if runtime is None or getattr(runtime, "_host", None) is not host:
+            runtime = ResponseLifecycleRuntime(host)
+            self._response_lifecycle_runtime = runtime
+        return runtime
+
+    def _transport_runtime(self) -> TransportRuntime:
+        runtime = getattr(self, "_transport_runtime_controller", None)
+        host = self._transport_host()
+        if runtime is None or getattr(runtime, "_host", None) is not host:
+            runtime = TransportRuntime(host)
+            self._transport_runtime_controller = runtime
+        return runtime
+
+    def _turn_context_runtime(self) -> TurnContextRuntime:
+        runtime = getattr(self, "_turn_context_runtime_controller", None)
+        host = self._transport_host()
+        if runtime is None or getattr(runtime, "_host", None) is not host:
+            runtime = TurnContextRuntime(host)
+            self._turn_context_runtime_controller = runtime
+        return runtime
+
+    def _enrich_person_context_with_memory(self, person: Any) -> Any:
+        return self._turn_context_runtime().enrich_person_context_with_memory(person)
 
     def _compile_memory_context_blocks(self, current_person_id: Optional[str]) -> tuple[str, ...]:
-        compiler = getattr(self, "memory_context_compiler", None)
-        if compiler is None:
-            return ()
-        site_code = str(getattr(self, "_current_office_location", "") or "").strip()
-        if not site_code:
-            return ()
-        try:
-            return tuple(
-                compiler.site_blocks(
-                    site_code,
-                    current_person_id=str(current_person_id or "").strip() or None,
-                )
-            )
-        except Exception:
-            self.logger.exception("Failed to compile site memory context")
-            return ()
+        return self._turn_context_runtime().compile_memory_context_blocks(
+            current_person_id
+        )
 
     def _append_text_message_item(
         self,
@@ -198,104 +185,22 @@ class AgentStateRuntime:
         owner_confidence: float = 0.0,
         speaker_visible: bool = False,
     ) -> FrozenTurnContext:
-        def identity_person(person_id: Optional[str]) -> PersonContext | None:
-            rendered = str(person_id or "").strip()
-            identity_store = getattr(self, "identity_store", None)
-            if not rendered or identity_store is None:
-                return None
-            try:
-                record = identity_store.get_person(rendered)
-                if record is None:
-                    return None
-                metadata = dict(record.get("metadata") or {})
-                person = PersonContext(
-                    person_id=rendered,
-                    name=str(record.get("name") or metadata.get("name") or rendered),
-                    interaction_count=int(metadata.get("interaction_count", 0) or 0),
-                    confidence=1.0,
-                    bbox_area=0,
-                    timestamp=time.time(),
-                    directory_profile_lines=format_identity_profile_lines(metadata),
-                    memory_profile_lines=(),
-                    preferred_language="",
-                    potential_followups=(),
-                    visible=False,
-                )
-                return self._enrich_person_context_with_memory(person)
-            except Exception:
-                self.logger.exception("Failed to build identity context for %s", rendered)
-                return None
+        return self._turn_context_runtime().capture_turn_context(
+            primary_face_person_id=primary_face_person_id,
+            audio_speaker_id=audio_speaker_id,
+            owner_id=owner_id,
+            owner_source=owner_source,
+            owner_confidence=owner_confidence,
+            speaker_visible=speaker_visible,
+        )
 
-        current_person_id = owner_id
-        memory_context_blocks = self._compile_memory_context_blocks(current_person_id)
-        if self.face_service is None:
-            person = identity_person(owner_id)
-            return FrozenTurnContext(
-                persons=[person] if person is not None else [],
-                primary_face_person_id=primary_face_person_id,
-                audio_speaker_id=audio_speaker_id,
-                owner_id=owner_id,
-                owner_source=owner_source,
-                owner_confidence=owner_confidence,
-                speaker_visible=speaker_visible,
-                memory_context_blocks=memory_context_blocks,
-            )
-        try:
-            persons = deepcopy(self.face_service.get_cached_persons())
-            owner_context_id = str(owner_id or "").strip()
-            if owner_context_id:
-                persons = [
-                    self._enrich_person_context_with_memory(person)
-                    if str(getattr(person, "person_id", "") or "").strip() == owner_context_id
-                    else person
-                    for person in persons
-                ]
-            face_snapshot = deepcopy(self.face_service.get_presence_snapshot())
-            if owner_context_id and not any(
-                str(getattr(person, "person_id", "") or "").strip() == owner_context_id
-                for person in persons
-            ):
-                person = identity_person(owner_context_id)
-                if person is not None:
-                    persons.append(person)
-            if primary_face_person_id is None:
-                attention_getter = getattr(
-                    self.face_service,
-                    "get_primary_attention_person_id",
-                    None,
-                )
-                if callable(attention_getter):
-                    primary_face_person_id = attention_getter()
-                if primary_face_person_id is None:
-                    getter = getattr(self.face_service, "get_primary_face_person_id", None)
-                    if callable(getter):
-                        primary_face_person_id = getter()
-                    else:
-                        primary_face_person_id = self.face_service.get_attention_target_person_id()
-            return FrozenTurnContext(
-                persons=persons,
-                face_snapshot=face_snapshot,
-                primary_face_person_id=primary_face_person_id,
-                audio_speaker_id=audio_speaker_id,
-                owner_id=owner_id,
-                owner_source=owner_source,
-                owner_confidence=owner_confidence,
-                speaker_visible=speaker_visible,
-                memory_context_blocks=memory_context_blocks,
-            )
-        except Exception:
-            self.logger.exception("Failed to capture turn context snapshot")
-            return FrozenTurnContext(
-                primary_face_person_id=primary_face_person_id,
-                audio_speaker_id=audio_speaker_id,
-                owner_id=owner_id,
-                owner_source=owner_source,
-                owner_confidence=owner_confidence,
-                speaker_visible=speaker_visible,
-                memory_context_blocks=memory_context_blocks,
-            )
-
-    def _set_turn_phase(self, turn: QueuedTurn, phase: str) -> None:
+    def _set_turn_phase(
+        self,
+        turn: QueuedTurn,
+        phase: str,
+        *,
+        trigger: str = "set_turn_phase",
+    ) -> None:
         if turn.phase == phase:
             return
         old_phase = turn.phase
@@ -311,7 +216,7 @@ class AgentStateRuntime:
                 axis=StateAxis.TURN,
                 old_state=old_phase,
                 new_state=phase,
-                trigger="set_turn_phase",
+                trigger=trigger,
                 req_id=turn.req_id,
                 fields={
                     "audio_started": bool(getattr(turn, "audio_started", False)),
@@ -620,128 +525,49 @@ class AgentStateRuntime:
         )
 
     def _forget_response_id(self, response_id: str) -> None:
-        rendered = str(response_id or "").strip()
-        if not rendered:
-            return
-        with self._turn_lock:
-            self._response_id_to_req_id.pop(rendered, None)
+        self._response_lifecycle().forget_response_id(response_id)
 
     def _discard_pending_response_turn(self, req_id: str) -> int:
-        with self._turn_lock:
-            store = self._response_bindings()
-            discarded = store.discard(req_id)
-            self._pending_response_turn_req_ids = store.pending_req_ids
-            return discarded
+        return self._response_lifecycle().discard_pending_response_turn(req_id)
 
     def _response_output_types(self, response: dict[str, Any]) -> list[str]:
-        output_types: list[str] = []
-        for output_item in response.get("output", []) or []:
-            rendered = str(output_item.get("type", "") or "").strip()
-            if rendered:
-                output_types.append(rendered)
-        return output_types
+        return self._response_lifecycle().response_output_types(response)
 
     def _cleanup_silent_response_items(
         self,
         turn: QueuedTurn,
         response: dict[str, Any],
     ) -> None:
-        assistant_item_ids: list[str] = []
-        for output_item in response.get("output", []) or []:
-            if str(output_item.get("type", "") or "").strip() != "message":
-                continue
-            item_id = str(output_item.get("id", "") or "").strip()
-            if item_id:
-                assistant_item_ids.append(item_id)
-        for item_id in assistant_item_ids:
-            try:
-                self._transport_host()._send_event(
-                    {"type": "conversation.item.delete", "item_id": item_id}
-                )
-            except Exception:
-                self.logger.exception(
-                    "Failed to delete silent assistant item req_id=%s item_id=%s",
-                    turn.req_id,
-                    item_id,
-                )
-                continue
-            self._forget_history_item(turn, item_id)
+        self._response_lifecycle().cleanup_silent_response_items(turn, response)
 
     def _retry_no_audio_response(
         self,
         turn: QueuedTurn,
         response: dict[str, Any],
     ) -> bool:
-        if turn.no_audio_retry_count >= NO_AUDIO_RESPONSE_RETRY_LIMIT:
-            return False
-        turn.no_audio_retry_count += 1
-        response_id = turn.response_id
-        self.logger.warning(
-            "Realtime response completed without audio; retrying req_id=%s response_id=%s retry=%s output_types=%s transcript=%r",
-            turn.req_id,
-            response_id,
-            turn.no_audio_retry_count,
-            self._response_output_types(response),
-            turn.assistant_transcript.strip(),
-        )
-        self._cleanup_silent_response_items(turn, response)
-        self._forget_response_id(response_id)
-        turn.response_id = ""
-        turn.assistant_item_id = ""
-        turn.assistant_item_ids.clear()
-        turn.assistant_transcript = ""
-        turn.response_done_at = 0.0
-        self._send_response_create(turn)
-        return True
+        return self._response_lifecycle().retry_no_audio_response(turn, response)
 
     def _transcript_looks_truncated(self, transcript: str) -> bool:
-        rendered = str(transcript or "").rstrip()
-        if not rendered:
-            return False
-        return rendered[-1] not in ".!?)]}\"'"
+        return self._response_lifecycle().transcript_looks_truncated(transcript)
 
     def _should_continue_incomplete_audio_reply(self, turn: QueuedTurn) -> bool:
-        if turn.incomplete_audio_continuation_count >= INCOMPLETE_AUDIO_CONTINUATION_LIMIT:
-            return False
-        if turn.pending_tool_calls > 0:
-            return False
-        return self._transcript_looks_truncated(turn.assistant_transcript)
+        return self._response_lifecycle().should_continue_incomplete_audio_reply(turn)
 
     def _continue_incomplete_audio_reply(self, turn: QueuedTurn) -> None:
-        response_id = turn.response_id
-        turn.incomplete_audio_continuation_count += 1
-        self.logger.info(
-            "Continuing incomplete audio reply req_id=%s previous_response_id=%s continuation_count=%s",
-            turn.req_id,
-            response_id,
-            turn.incomplete_audio_continuation_count,
-        )
-        self._forget_response_id(response_id)
-        turn.response_id = ""
-        turn.response_done_at = 0.0
-        self._send_response_create(turn)
+        self._response_lifecycle().continue_incomplete_audio_reply(turn)
 
     def _stringify_tool_output(self, content: object) -> str:
-        if isinstance(content, str):
-            return content
-        if isinstance(content, (dict, list, tuple)):
-            return json.dumps(content, ensure_ascii=True)
-        return str(content)
+        transport = getattr(self, "_transport_runtime", None)
+        if callable(transport):
+            return transport().stringify_tool_output(content)
+        return TransportRuntime(self).stringify_tool_output(content)
 
     def _send_event(self, payload: dict[str, Any]) -> None:
-        if self._ws is None:
-            if self._stop_event.is_set():
-                return
-            raise RuntimeError("Realtime websocket is not connected.")
-        with self._ws_lock:
-            try:
-                self._ws.send(json.dumps(payload))
-            except websocket.WebSocketConnectionClosedException:
-                if not self._stop_event.is_set():
-                    self.logger.warning("Realtime websocket closed during send; stopping runtime")
-                    self._stop_event.set()
-                self._ws = None
-                return
+        transport = getattr(self, "_transport_runtime", None)
+        if callable(transport):
+            transport().send_event(payload)
+            return
+        TransportRuntime(self).send_event(payload)
 
     def _transcript_from_response(self, response: dict[str, Any]) -> str:
         parts: list[str] = []

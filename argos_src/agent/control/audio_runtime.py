@@ -14,7 +14,7 @@ from uuid import uuid4
 import numpy as np
 import sounddevice as sd
 
-from argos_src.agent.realtime_turns import AUDIO_CHANNELS, QueuedTurn
+from argos_src.agent.realtime_turns import AUDIO_CHANNELS, TURN_PHASE_QUEUED, QueuedTurn
 from argos_src.agent.control.observers import safe_transition
 from argos_src.agent.control.types import CaptureState, StateAxis, StateTransition
 from argos_src.observability.observability import perf_now
@@ -319,6 +319,11 @@ class AudioRuntime:
                 )
                 self._wake_window_until = wake_until
                 if allowed:
+                    self._set_capture_state(
+                        CaptureState.ADMISSION_OPEN,
+                        trigger="admission_open",
+                        reason=admission_reason or "allowed",
+                    )
                     display_mode = getattr(self, "_set_display_mode_async", None)
                     display_state_still_current = True
                     if interaction_state in {"alert", "cooldown"}:
@@ -329,6 +334,11 @@ class AudioRuntime:
                     if callable(display_mode) and display_state_still_current:
                         display_mode("alert")
                 else:
+                    self._set_capture_state(
+                        CaptureState.ADMISSION_CLOSED,
+                        trigger="admission_closed",
+                        reason=admission_reason or "blocked",
+                    )
                     clear_passive_alert = getattr(
                         self,
                         "_clear_passive_alert_display_if_needed",
@@ -360,6 +370,11 @@ class AudioRuntime:
                         self._current_turn_vad_positive_blocks = confirmed_voice_blocks
                         self._last_voice_at = now
                     else:
+                        self._set_capture_state(
+                            CaptureState.CANDIDATE_VOICE,
+                            trigger="candidate_voice",
+                            reason=admission_reason or "voice_detected",
+                        )
                         self._remember_preroll_chunk_locked(
                             now_s=now,
                             raw_chunk=raw_chunk,
@@ -635,6 +650,7 @@ class AudioRuntime:
         self._register_pending_audio_turn(turn)
         self.engagement.on_human_input(req_id)
         self._last_external_input_s = time.time()
+        self._set_turn_phase(turn, TURN_PHASE_QUEUED, trigger="enqueue_audio_turn")
         self._turn_queue.put(turn)
 
     def _playback_callback(

@@ -7,6 +7,7 @@ from typing import Any
 
 from argos_src.agent.realtime_turns import (
     TURN_PHASE_CANCELED,
+    TURN_PHASE_MODEL_DONE,
     TURN_PHASE_PLAYING,
     TURN_PHASE_RESPONSE_REQUESTED,
     TURN_PHASE_WAITING_FIRST_AUDIO,
@@ -68,7 +69,7 @@ class TurnWatchdogRuntime:
                     host._terminate_turn(turn, TURN_PHASE_CANCELED, "tool_timeout")
                     continue
             if (
-                turn.phase == TURN_PHASE_PLAYING
+                turn.phase in {TURN_PHASE_PLAYING, TURN_PHASE_MODEL_DONE}
                 and turn.response_finished.is_set()
                 and not turn.playback_finished.is_set()
             ):

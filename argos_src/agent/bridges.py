@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Optional
 
 from argos_src.nav_support.locations import NavigationState
 
-from .control.engagement_runtime import EngagementState
 from .control.robot_arbitration import decide_proactive_face_attention
+from .control.types import EngagementMode
 
 if TYPE_CHECKING:
     from argos_src.face_recognition.face_recognition_service import FaceRecognitionService

@@ -29,7 +29,7 @@ def test_face_bridge_suppresses_proactive_events_while_recording(monkeypatch):
         submit=lambda text, metadata: submitted.append((text, metadata))
     )
     bridge._engagement = types.SimpleNamespace(
-        state=bridges_module.EngagementState.IDLE,
+        state=bridges_module.EngagementMode.IDLE,
         on_face_or_wake=lambda: wake_calls.append("wake"),
         is_recording_active=lambda: True,
     )
@@ -71,7 +71,7 @@ def test_face_bridge_requires_attention_when_configured(monkeypatch):
         submit=lambda text, metadata: submitted.append((text, metadata))
     )
     bridge._engagement = types.SimpleNamespace(
-        state=bridges_module.EngagementState.IDLE,
+        state=bridges_module.EngagementMode.IDLE,
         on_face_or_wake=lambda: wake_calls.append("wake"),
         is_recording_active=lambda: False,
     )

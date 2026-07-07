@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import enum
 import logging
 import threading
 import time
@@ -16,17 +15,9 @@ from argos_src.agent.control.reducers.engagement import (
     decision_has_action,
     reduce_engagement,
 )
-from argos_src.agent.control.types import StateAxis, StateTransition
+from argos_src.agent.control.types import EngagementMode, StateAxis, StateTransition
 
 logger = logging.getLogger(__name__)
-
-
-class EngagementState(enum.Enum):
-    IDLE = "idle"
-    ALERT = "alert"
-    ENGAGED = "engaged"
-    SPEAKING = "speaking"
-    COOLDOWN = "cooldown"
 
 
 @dataclass(frozen=True)
@@ -57,7 +48,7 @@ class EngagementStateMachine:
         self_charge_available: bool = True,
         state_observer: Any = None,
     ):
-        self._state = EngagementState.IDLE
+        self._state = EngagementMode.IDLE
         self._lock = threading.RLock()
         self._last_transition = time.time()
         self._voice_cmd_pub = voice_cmd_publisher
@@ -87,7 +78,7 @@ class EngagementStateMachine:
         self._watchdog.start()
 
     @property
-    def state(self) -> EngagementState:
+    def state(self) -> EngagementMode:
         with self._lock:
             return self._state
 
@@ -126,7 +117,7 @@ class EngagementStateMachine:
         )
 
     def should_suppress_patrol(self) -> bool:
-        return self.state != EngagementState.IDLE
+        return self.state != EngagementMode.IDLE
 
     def attach_coalescer(self, coalescer: Optional[EventCoalescer]) -> None:
         """Attach the runtime coalescer after construction."""
@@ -167,6 +158,20 @@ class EngagementStateMachine:
         self._latest_playback_stream_id = ""
         self._awaiting_playback_terminal = False
 
+    def _apply_decision_locked(
+        self,
+        decision: Any,
+        *,
+        req_id: str,
+    ) -> None:
+        if not decision.changed:
+            return
+        self._set_state_locked(
+            EngagementMode(decision.new_state),
+            reason=decision.reason,
+            req_id=req_id,
+        )
+
     def on_face_or_wake(self) -> None:
         """Called when a proactive face event claims the robot."""
         should_act = False
@@ -178,11 +183,7 @@ class EngagementStateMachine:
             if decision.changed:
                 self._current_req_id = ""
                 self._clear_playback_tracking_locked()
-                self._set_state_locked(
-                    EngagementState(decision.new_state),
-                    reason=decision.reason,
-                    req_id="",
-                )
+                self._apply_decision_locked(decision, req_id="")
                 should_act = decision_has_action(decision, "cancel_active_navigation")
         if should_act:
             self._publish_voice_cmd("stop")
@@ -201,11 +202,7 @@ class EngagementStateMachine:
                 should_cancel = decision_has_action(decision, "cancel_active_navigation")
                 self._current_req_id = req
                 self._clear_playback_tracking_locked()
-                self._set_state_locked(
-                    EngagementState(decision.new_state),
-                    reason=decision.reason,
-                    req_id=req,
-                )
+                self._apply_decision_locked(decision, req_id=req)
         if should_cancel:
             self._publish_voice_cmd("stop")
             self._cancel_active_navigation()
@@ -223,9 +220,9 @@ class EngagementStateMachine:
             return
         with self._lock:
             if self._state not in (
-                EngagementState.ALERT,
-                EngagementState.ENGAGED,
-                EngagementState.SPEAKING,
+                EngagementMode.ALERT,
+                EngagementMode.ENGAGED,
+                EngagementMode.SPEAKING,
             ):
                 return
             self._current_req_id = req
@@ -236,11 +233,7 @@ class EngagementStateMachine:
                 EngagementTrigger.AGENT_OUTPUT_STARTED,
             )
             if decision.changed:
-                self._set_state_locked(
-                    EngagementState(decision.new_state),
-                    reason=decision.reason,
-                    req_id=req,
-                )
+                self._apply_decision_locked(decision, req_id=req)
             return
 
     def on_agent_done(self, *, has_reply: bool, req_id: Optional[str]) -> None:
@@ -254,9 +247,9 @@ class EngagementStateMachine:
             )
             if has_reply:
                 if self._state not in (
-                    EngagementState.ALERT,
-                    EngagementState.ENGAGED,
-                    EngagementState.SPEAKING,
+                    EngagementMode.ALERT,
+                    EngagementMode.ENGAGED,
+                    EngagementMode.SPEAKING,
                 ):
                     return
                 chosen_req = req or self._current_req_id
@@ -266,20 +259,12 @@ class EngagementStateMachine:
                 self._awaiting_playback_stream_id = chosen_stream
                 self._awaiting_playback_terminal = True
                 if decision.changed:
-                    self._set_state_locked(
-                        EngagementState(decision.new_state),
-                        reason=decision.reason,
-                        req_id=chosen_req,
-                    )
+                    self._apply_decision_locked(decision, req_id=chosen_req)
                 return
             if decision.changed:
                 self._current_req_id = req
                 self._clear_playback_tracking_locked()
-                self._set_state_locked(
-                    EngagementState(decision.new_state),
-                    reason=decision.reason,
-                    req_id=req,
-                )
+                self._apply_decision_locked(decision, req_id=req)
 
     def on_playback_event(
         self,
@@ -302,12 +287,12 @@ class EngagementStateMachine:
                 if stream:
                     self._latest_playback_stream_id = stream
                 if self._state in (
-                    EngagementState.ALERT,
-                    EngagementState.ENGAGED,
+                    EngagementMode.ALERT,
+                    EngagementMode.ENGAGED,
                 ):
                     self._current_req_id = req
                     self._set_state_locked(
-                        EngagementState.SPEAKING,
+                        EngagementMode.SPEAKING,
                         reason="playback_started",
                         req_id=req,
                     )
@@ -315,7 +300,7 @@ class EngagementStateMachine:
             if event not in ("playback_completed", "playback_stopped"):
                 return
             if not self._awaiting_playback_terminal:
-                if self._state == EngagementState.SPEAKING:
+                if self._state == EngagementMode.SPEAKING:
                     logger.warning(
                         "Ignoring terminal playback event while not awaiting one: event=%s req_id=%s stream_id=%s state=%s",
                         event,
@@ -356,8 +341,8 @@ class EngagementStateMachine:
                 )
                 return
             if self._state not in (
-                EngagementState.SPEAKING,
-                EngagementState.ENGAGED,
+                EngagementMode.SPEAKING,
+                EngagementMode.ENGAGED,
             ):
                 logger.warning(
                     "Ignoring terminal playback event because state is %s instead of an awaited playback state: event=%s req_id=%s stream_id=%s",
@@ -376,26 +361,26 @@ class EngagementStateMachine:
                 req,
                 stream,
             )
-            self._set_state_locked(
-                EngagementState.COOLDOWN,
-                reason=event,
-                req_id=req,
+            decision = reduce_engagement(
+                self._state.value,
+                EngagementTrigger.PLAYBACK_TERMINAL,
             )
+            self._apply_decision_locked(decision, req_id=req)
 
     def shutdown(self) -> None:
         self._watchdog_stop.set()
         self._watchdog.join(timeout=2.0)
 
-    def _expires_at_for(self, state: EngagementState, entered_at: float) -> Optional[float]:
-        if state == EngagementState.ALERT:
+    def _expires_at_for(self, state: EngagementMode, entered_at: float) -> Optional[float]:
+        if state == EngagementMode.ALERT:
             return entered_at + self._alert_timeout
-        if state == EngagementState.COOLDOWN:
+        if state == EngagementMode.COOLDOWN:
             return entered_at + self._cooldown_timeout
         return None
 
     def _set_state_locked(
         self,
-        new_state: EngagementState,
+        new_state: EngagementMode,
         *,
         reason: str,
         req_id: str,
@@ -405,7 +390,7 @@ class EngagementStateMachine:
             return
         self._state = new_state
         self._last_transition = time.time()
-        if new_state == EngagementState.IDLE:
+        if new_state == EngagementMode.IDLE:
             self._current_req_id = ""
             self._clear_playback_tracking_locked()
         logger.info(
@@ -452,24 +437,24 @@ class EngagementStateMachine:
             with self._lock:
                 elapsed = time.time() - self._last_transition
                 if (
-                    self._state == EngagementState.ALERT
+                    self._state == EngagementMode.ALERT
                     and elapsed >= self._alert_timeout
                 ):
-                    self._set_state_locked(
-                        EngagementState.IDLE,
-                        reason="timeout",
-                        req_id="",
+                    decision = reduce_engagement(
+                        self._state.value,
+                        EngagementTrigger.ALERT_TIMEOUT,
                     )
+                    self._apply_decision_locked(decision, req_id="")
                     action = "alert_timeout"
                 elif (
-                    self._state == EngagementState.COOLDOWN
+                    self._state == EngagementMode.COOLDOWN
                     and elapsed >= self._cooldown_timeout
                 ):
-                    self._set_state_locked(
-                        EngagementState.IDLE,
-                        reason="timeout",
-                        req_id="",
+                    decision = reduce_engagement(
+                        self._state.value,
+                        EngagementTrigger.COOLDOWN_TIMEOUT,
                     )
+                    self._apply_decision_locked(decision, req_id="")
                     action = "cooldown_timeout"
                 elif (
                     (
@@ -477,11 +462,11 @@ class EngagementStateMachine:
                             self._awaiting_playback_terminal
                             and self._state
                             in (
-                                EngagementState.ENGAGED,
-                                EngagementState.SPEAKING,
+                                EngagementMode.ENGAGED,
+                                EngagementMode.SPEAKING,
                             )
                         )
-                        or self._state == EngagementState.SPEAKING
+                        or self._state == EngagementMode.SPEAKING
                     )
                     and elapsed >= self._speaking_timeout
                 ):
@@ -494,11 +479,11 @@ class EngagementStateMachine:
                         self._current_req_id,
                     )
                     self._clear_playback_tracking_locked()
-                    self._set_state_locked(
-                        EngagementState.COOLDOWN,
-                        reason="fallback",
-                        req_id=req,
+                    decision = reduce_engagement(
+                        self._state.value,
+                        EngagementTrigger.PLAYBACK_FALLBACK,
                     )
+                    self._apply_decision_locked(decision, req_id=req)
 
             if action == "alert_timeout":
                 if self._coalescer:
@@ -519,7 +504,7 @@ class EngagementStateMachine:
         """Inject BATTERY_LOW_EVENT when IDLE + battery is below threshold + no nav."""
         if self._battery_cache is None or self._battery_low_submit is None:
             return
-        if self.state != EngagementState.IDLE:
+        if self.state != EngagementMode.IDLE:
             self._battery_low_latch = False
             return
         if (

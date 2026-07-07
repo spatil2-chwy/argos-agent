@@ -5,9 +5,30 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from argos_src.agent.realtime_turns import PendingToolCall, QueuedTurn
+from argos_src.agent.realtime_turns import (
+    PendingToolCall,
+    QueuedTurn,
+    TURN_PHASE_REQUESTING_FOLLOWUP,
+)
 from argos_src.agent.runtime_context import parse_tool_output, summarize_tool_payload
 from argos_src.observability.observability import clear_request_context, set_request_context
+
+TOOL_LOG_PREVIEW_LIMIT = 900
+
+
+def log_preview(value: object, *, limit: int = TOOL_LOG_PREVIEW_LIMIT) -> str:
+    """Render a bounded single-line value for pipe-separated latency logs."""
+    if isinstance(value, str):
+        rendered = value
+    else:
+        try:
+            rendered = json.dumps(value, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            rendered = str(value)
+    rendered = " ".join(rendered.replace("|", "/").split())
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[: max(limit - 3, 0)] + "..."
 
 
 class ToolRuntime:
@@ -65,6 +86,8 @@ class ToolRuntime:
             req_id=turn.req_id,
             tool=pending.tool_name,
             call_id=pending.call_id,
+            tool_success=parse_tool_output(content).get("success"),
+            tool_result_preview=log_preview(content),
             **(
                 host._exchange_log_fields(turn)
                 if callable(getattr(host, "_exchange_log_fields", None))
@@ -90,6 +113,13 @@ class ToolRuntime:
         if host._is_turn_terminal(turn):
             return
         if turn.pending_tool_calls == 0:
+            set_phase = getattr(host, "_set_turn_phase", None)
+            if callable(set_phase):
+                set_phase(
+                    turn,
+                    TURN_PHASE_REQUESTING_FOLLOWUP,
+                    trigger="tool_results_complete",
+                )
             host._send_response_create(turn)
 
     @staticmethod

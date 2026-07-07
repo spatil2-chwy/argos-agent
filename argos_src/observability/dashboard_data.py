@@ -154,6 +154,9 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "speaker_visible",
         "tool",
         "call_id",
+        "tool_arguments_json",
+        "tool_success",
+        "tool_result_preview",
         "response_status",
         "terminal_status",
         "terminal_reason",
@@ -250,6 +253,9 @@ class InteractionAccumulator:
         lifecycle: list[dict[str, Any]] = []
         context: dict[str, Any] = {}
         openai_session_ids: set[str] = set()
+        state_by_axis: dict[str, dict[str, Any]] = {}
+        tool_calls_by_key: dict[str, dict[str, Any]] = {}
+        counted_tool_keys: set[str] = set()
 
         for index, row in enumerate(self.rows):
             label = _event_label(row)
@@ -263,7 +269,10 @@ class InteractionAccumulator:
                 if duration is not None:
                     metrics[label] = duration
             if row.get("tool"):
-                tools[row["tool"]] += 1
+                tool_key = str(row.get("call_id") or row.get("tool") or f"tool-{index}")
+                if tool_key not in counted_tool_keys:
+                    tools[row["tool"]] += 1
+                    counted_tool_keys.add(tool_key)
             for cost_key in ("estimated_cost_usd", "session_total_cost_usd"):
                 cost = _float(row, cost_key)
                 if cost is not None:
@@ -287,24 +296,57 @@ class InteractionAccumulator:
                 if value not in (None, ""):
                     context[context_key] = value
             if row.get("component") == "state" and row.get("event") == "transition":
-                state_transitions.append(
-                    {
-                        "axis": row.get("axis", "unknown"),
-                        "old_state": row.get("old_state"),
-                        "new_state": row.get("new_state"),
-                        "trigger": row.get("trigger"),
-                        "ts": row.get("ts"),
-                    }
-                )
+                transition = {
+                    "axis": row.get("axis", "unknown"),
+                    "old_state": row.get("old_state"),
+                    "new_state": row.get("new_state"),
+                    "trigger": row.get("trigger"),
+                    "ts": row.get("ts"),
+                }
+                state_transitions.append(transition)
+                axis = str(transition["axis"] or "unknown")
+                state_by_axis.setdefault(
+                    axis,
+                    {"axis": axis, "transitions": [], "ignored": []},
+                )["transitions"].append(transition)
             if row.get("component") == "state" and row.get("event") == "ignored":
-                ignored_state_events.append(
+                ignored = {
+                    "axis": row.get("axis", "unknown"),
+                    "trigger": row.get("trigger"),
+                    "ignored_reason": row.get("ignored_reason", "unknown"),
+                    "ts": row.get("ts"),
+                }
+                ignored_state_events.append(ignored)
+                axis = str(ignored["axis"] or "unknown")
+                state_by_axis.setdefault(
+                    axis,
+                    {"axis": axis, "transitions": [], "ignored": []},
+                )["ignored"].append(ignored)
+            if label in {"tool_call_requested", "tool_result"} or row.get("tool"):
+                call_key = str(row.get("call_id") or row.get("tool") or f"tool-{index}")
+                tool_call = tool_calls_by_key.setdefault(
+                    call_key,
                     {
-                        "axis": row.get("axis", "unknown"),
-                        "trigger": row.get("trigger"),
-                        "ignored_reason": row.get("ignored_reason", "unknown"),
-                        "ts": row.get("ts"),
-                    }
+                        "call_id": row.get("call_id") or "",
+                        "tool": row.get("tool") or "",
+                        "requested_at": None,
+                        "finished_at": None,
+                        "arguments_json": "",
+                        "result_preview": "",
+                        "success": None,
+                    },
                 )
+                if row.get("tool") and not tool_call["tool"]:
+                    tool_call["tool"] = row.get("tool")
+                if row.get("call_id") and not tool_call["call_id"]:
+                    tool_call["call_id"] = row.get("call_id")
+                if label == "tool_call_requested":
+                    tool_call["requested_at"] = row.get("ts")
+                    tool_call["arguments_json"] = row.get("tool_arguments_json", "")
+                if label == "tool_result":
+                    tool_call["finished_at"] = row.get("ts")
+                    tool_call["result_preview"] = row.get("tool_result_preview", "")
+                    tool_call["success"] = row.get("tool_success")
             stage = _stage_from_row(row)
             if stage is not None:
                 lifecycle.append(stage)
@@ -321,6 +363,10 @@ class InteractionAccumulator:
                     "trigger": row.get("trigger"),
                     "duration_s": _float(row, "duration_s"),
                     "tool": row.get("tool"),
+                    "call_id": row.get("call_id"),
+                    "tool_arguments_json": row.get("tool_arguments_json"),
+                    "tool_success": row.get("tool_success"),
+                    "tool_result_preview": row.get("tool_result_preview"),
                     "ignored_reason": row.get("ignored_reason"),
                 }
             )
@@ -354,7 +400,38 @@ class InteractionAccumulator:
             "metrics": metrics,
             "state_transitions": state_transitions,
             "ignored_state_events": ignored_state_events,
+            "state_by_axis": [
+                state_by_axis[axis]
+                for axis in sorted(
+                    state_by_axis,
+                    key=lambda value: (
+                        (
+                            "capture",
+                            "turn",
+                            "playback",
+                            "engagement",
+                            "transcription",
+                            "robot_arbitration",
+                            "coalescer",
+                            "session",
+                        ).index(value)
+                        if value
+                        in {
+                            "capture",
+                            "turn",
+                            "playback",
+                            "engagement",
+                            "transcription",
+                            "robot_arbitration",
+                            "coalescer",
+                            "session",
+                        }
+                        else 99
+                    ),
+                )
+            ],
             "tools": dict(tools),
+            "tool_calls": list(tool_calls_by_key.values()),
             "costs": costs,
             "first_audio_latency_s": metrics.get("first_audio_latency_s"),
             "timeline": timeline,

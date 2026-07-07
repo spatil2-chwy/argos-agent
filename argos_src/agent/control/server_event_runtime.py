@@ -14,9 +14,11 @@ from argos_src.agent.agent_events.parsing import (
     server_event_response_id,
 )
 from argos_src.agent.control.types import PlaybackState, TranscriptionState
+from argos_src.agent.control.tool_runtime import log_preview
 from argos_src.agent.realtime_turns import (
     TURN_PHASE_CANCELED,
     TURN_PHASE_FINALIZED,
+    TURN_PHASE_MODEL_DONE,
     TURN_PHASE_PLAYING,
     TURN_PHASE_WAITING_FIRST_AUDIO,
     TURN_PHASE_WAITING_TOOLS,
@@ -134,7 +136,11 @@ class ServerEventRuntime:
                 self.recover_pending_response_after_expired_stale(response_id)
             return
         self.logger.info("Realtime response created req_id=%s response_id=%s", turn.req_id, response_id)
-        self._set_turn_phase(turn, TURN_PHASE_WAITING_FIRST_AUDIO)
+        self._set_turn_phase(
+            turn,
+            TURN_PHASE_WAITING_FIRST_AUDIO,
+            trigger="response.created",
+        )
 
     def recover_pending_response_after_expired_stale(self, response_id: str) -> None:
         turn = self._next_pending_response_turn()
@@ -258,6 +264,13 @@ class ServerEventRuntime:
         audio_bytes = base64.b64decode(str(event.get("delta", "") or ""))
         if not audio_bytes:
             return
+        if not turn.audio_started:
+            self._playback_controller().transition(
+                PlaybackState.BUFFERING,
+                trigger="output_audio.delta",
+                req_id=turn.req_id,
+                stream_id=response_id,
+            )
         self._playback_buffer.append(audio_bytes)
         if turn.audio_started:
             if response_id and response_id != self._playback_stream_id:
@@ -282,7 +295,11 @@ class ServerEventRuntime:
         turn.audio_started = True
         turn.audio_started_at = time.time()
         turn.last_playback_progress_at = turn.audio_started_at
-        self._set_turn_phase(turn, TURN_PHASE_PLAYING)
+        self._set_turn_phase(
+            turn,
+            TURN_PHASE_PLAYING,
+            trigger="output_audio.delta",
+        )
         if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
             first_audio_perf = perf_now()
             self._latency.timing(
@@ -348,6 +365,14 @@ class ServerEventRuntime:
         turn.playback_completion_armed = True
         stream_id = str(turn.response_id or self._playback_stream_id or "").strip()
         self.engagement.on_agent_done(has_reply=True, req_id=turn.req_id)
+        self._playback_controller().transition(
+            PlaybackState.AWAITING_DRAIN
+            if turn.response_finished.is_set()
+            else PlaybackState.AWAITING_MODEL_DONE,
+            trigger="playback_completion_armed",
+            req_id=turn.req_id,
+            stream_id=stream_id,
+        )
         threading.Thread(
             target=self._wait_for_playback_and_complete,
             args=(turn, stream_id),
@@ -424,12 +449,17 @@ class ServerEventRuntime:
             turn.function_call_item_ids.add(item_id)
         turn.pending_tool_calls += 1
         turn.pending_call_ids.add(call_id)
-        self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
+        self._set_turn_phase(
+            turn,
+            TURN_PHASE_WAITING_TOOLS,
+            trigger="function_call_done",
+        )
         self._latency.emit(
             event="tool_call_requested",
             req_id=turn.req_id,
             tool=tool_name,
             call_id=call_id,
+            tool_arguments_json=log_preview(arguments_json or "{}"),
             **self._exchange_log_fields(turn),
         )
         self._tool_queue.put(
@@ -460,6 +490,7 @@ class ServerEventRuntime:
             self._bind_response_id(turn, response_id)
         status = str(response.get("status", "unknown") or "unknown").strip()
         self._emit_response_usage(turn, response)
+        self._set_turn_phase(turn, TURN_PHASE_MODEL_DONE, trigger="response.done")
         self._latency.emit(
             event="response_done",
             req_id=turn.req_id,
@@ -485,7 +516,11 @@ class ServerEventRuntime:
             str(item.get("type", "") or "") == "function_call" for item in output_items
         )
         if has_function_call or turn.pending_tool_calls > 0:
-            self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
+            self._set_turn_phase(
+                turn,
+                TURN_PHASE_WAITING_TOOLS,
+                trigger="response.done_waiting_tools",
+            )
             return
 
         incomplete_details = response.get("incomplete_details")

@@ -5,7 +5,11 @@ import logging
 import threading
 
 from argos_src.agent.control.turn_runner import TurnRunner
-from argos_src.agent.realtime_turns import QueuedTurn, TURN_PHASE_FINALIZED
+from argos_src.agent.realtime_turns import (
+    QueuedTurn,
+    TURN_PHASE_FINALIZED,
+    TURN_PHASE_PREPARING_HISTORY,
+)
 
 
 class _Host:
@@ -20,12 +24,17 @@ class _Host:
         self.response_creates = []
         self.voice_refs = []
         self.preferences = []
+        self.phases = []
 
     def _clear_playback_tracking_locked(self):
         return
 
     def _maybe_rotate_history_for_turn(self, turn):
         self.rotated.append(turn.req_id)
+
+    def _set_turn_phase(self, turn, phase, *, trigger="set_turn_phase"):
+        self.phases.append((turn.req_id, phase, trigger))
+        turn.phase = phase
 
     def _append_text_message_item(self, turn, text, *, role):
         self.text_items.append((turn.req_id, text, role))
@@ -71,6 +80,11 @@ def test_turn_runner_prepares_text_turn_and_finalizes_success() -> None:
     runner.run(turn)
 
     assert host.rotated == [turn.req_id]
+    assert host.phases[0] == (
+        turn.req_id,
+        TURN_PHASE_PREPARING_HISTORY,
+        "turn_runner_prepare",
+    )
     assert host.text_items == [
         (turn.req_id, "SYSTEM_EVENT", "system"),
         (turn.req_id, "PENDING_EVENT", "system"),

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from argos_src.agent.realtime_turns import QueuedTurn, TURN_PHASE_FINALIZED
+from argos_src.agent.realtime_turns import (
+    QueuedTurn,
+    TURN_PHASE_FINALIZED,
+    TURN_PHASE_PREPARING_HISTORY,
+)
 from argos_src.observability.observability import clear_request_context, set_request_context
 
 
@@ -13,6 +17,13 @@ class TurnRunner:
 
     def __init__(self, host: Any) -> None:
         self._host = host
+
+    def _set_phase(self, turn: QueuedTurn, phase: str, *, trigger: str) -> None:
+        setter = getattr(self._host, "_set_turn_phase", None)
+        if callable(setter):
+            setter(turn, phase, trigger=trigger)
+            return
+        turn.phase = phase
 
     def run(self, turn: QueuedTurn) -> None:
         host = self._host
@@ -29,6 +40,11 @@ class TurnRunner:
             transcript_perf_s=turn.transcript_perf_s,
         )
         try:
+            self._set_phase(
+                turn,
+                TURN_PHASE_PREPARING_HISTORY,
+                trigger="turn_runner_prepare",
+            )
             host._maybe_rotate_history_for_turn(turn)
             if turn.kind == "text":
                 host._append_text_message_item(

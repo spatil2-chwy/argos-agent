@@ -25,8 +25,14 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
             "metric=first_audio_latency_s | duration_s=0.320 | session_id=s-1 | req_id=rt-1"
         ),
         _row(
+            "ts=2026-07-07 10:00:00.450 | component=realtime | event=tool_call_requested | "
+            "tool=capture_scene | call_id=call-1 | tool_arguments_json={\"mode\":\"quick\"} | "
+            "session_id=s-1 | req_id=rt-1"
+        ),
+        _row(
             "ts=2026-07-07 10:00:00.500 | component=tool | event=tool_result | "
-            "tool=capture_scene | session_id=s-1 | req_id=rt-1"
+            "tool=capture_scene | call_id=call-1 | tool_success=True | "
+            "tool_result_preview={\"success\":true} | session_id=s-1 | req_id=rt-1"
         ),
         _row(
             "ts=2026-07-07 10:00:00.600 | component=realtime | event=response_usage | "
@@ -57,6 +63,32 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert interaction["status"] == "complete"
     assert interaction["first_audio_latency_s"] == 0.32
     assert interaction["tools"] == {"capture_scene": 1}
+    assert interaction["state_by_axis"] == [
+        {
+            "axis": "capture",
+            "transitions": [
+                {
+                    "axis": "capture",
+                    "old_state": "idle",
+                    "new_state": "recording",
+                    "trigger": "recording_started",
+                    "ts": "2026-07-07 10:00:00.100",
+                }
+            ],
+            "ignored": [],
+        }
+    ]
+    assert interaction["tool_calls"] == [
+        {
+            "call_id": "call-1",
+            "tool": "capture_scene",
+            "requested_at": "2026-07-07 10:00:00.450",
+            "finished_at": "2026-07-07 10:00:00.500",
+            "arguments_json": "{\"mode\":\"quick\"}",
+            "result_preview": "{\"success\":true}",
+            "success": "True",
+        }
+    ]
     assert interaction["state_transitions"] == [
         {
             "axis": "capture",

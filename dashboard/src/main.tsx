@@ -71,11 +71,27 @@ type StateTransition = {
   ts?: string | null;
 };
 
+type StateAxisGroup = {
+  axis: string;
+  transitions: StateTransition[];
+  ignored: IgnoredStateEvent[];
+};
+
 type IgnoredStateEvent = {
   axis: string;
   trigger?: string | null;
   ignored_reason: string;
   ts?: string | null;
+};
+
+type ToolCall = {
+  call_id?: string | null;
+  tool?: string | null;
+  requested_at?: string | null;
+  finished_at?: string | null;
+  arguments_json?: string | null;
+  result_preview?: string | null;
+  success?: string | boolean | null;
 };
 
 type LifecycleStage = {
@@ -105,7 +121,9 @@ type Exchange = {
   metrics: Record<string, number>;
   state_transitions: StateTransition[];
   ignored_state_events: IgnoredStateEvent[];
+  state_by_axis?: StateAxisGroup[];
   tools: Record<string, number>;
+  tool_calls?: ToolCall[];
   costs: Record<string, number>;
   first_audio_latency_s: number | null;
   timeline: TimelineItem[];
@@ -308,6 +326,86 @@ function Stage({ stage }: { stage: LifecycleStage }) {
   );
 }
 
+function StateAxisCard({ group }: { group: StateAxisGroup }) {
+  const latest = [...group.transitions].reverse().find((item) => item.new_state);
+  return (
+    <section className="axis-card">
+      <div className="axis-card-head">
+        <strong>{humanize(group.axis)}</strong>
+        <span>{latest?.new_state ? humanize(latest.new_state) : `${group.transitions.length} transitions`}</span>
+      </div>
+      <div className="axis-events">
+        {group.transitions.slice(-6).map((item, index) => (
+          <div className="axis-event" key={`${item.ts}-${item.trigger}-${index}`}>
+            <span>{formatTime(item.ts)}</span>
+            <b>
+              {humanize(item.old_state ?? "?")} {"->"} {humanize(item.new_state ?? "?")}
+            </b>
+            {item.trigger ? <small>{humanize(item.trigger)}</small> : null}
+          </div>
+        ))}
+        {group.ignored.slice(-3).map((item, index) => (
+          <div className="axis-event ignored" key={`ignored-${item.ts}-${index}`}>
+            <span>{formatTime(item.ts)}</span>
+            <b>{humanize(item.trigger ?? "ignored")}</b>
+            <small>{humanize(item.ignored_reason)}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ToolCallList({ calls }: { calls: ToolCall[] }) {
+  if (!calls.length) return <span className="muted">none</span>;
+  return (
+    <div className="tool-call-list">
+      {calls.map((call, index) => (
+        <section className="tool-call" key={`${call.call_id ?? call.tool ?? "tool"}-${index}`}>
+          <div className="tool-call-head">
+            <strong>{call.tool ? humanize(call.tool) : "tool call"}</strong>
+            <span>{call.success === undefined || call.success === null ? "unknown" : String(call.success)}</span>
+          </div>
+          <KeyValueList
+            values={[
+              ["call_id", call.call_id],
+              ["requested", formatTime(call.requested_at)],
+              ["finished", formatTime(call.finished_at)]
+            ]}
+          />
+          {call.arguments_json ? (
+            <div className="code-preview">
+              <span>arguments</span>
+              <code>{call.arguments_json}</code>
+            </div>
+          ) : null}
+          {call.result_preview ? (
+            <div className="code-preview">
+              <span>result</span>
+              <code>{call.result_preview}</code>
+            </div>
+          ) : null}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function OwnerResolution({ exchange }: { exchange?: Exchange }) {
+  const context = exchange?.context ?? {};
+  const owner = context.owner_id;
+  return (
+    <div className={`owner-resolution ${owner ? "resolved" : "unresolved"}`}>
+      <strong>{owner ? `Owner: ${String(owner)}` : "No resolved owner"}</strong>
+      <span>
+        {owner
+          ? `source ${String(context.owner_source ?? "unknown")}`
+          : "No owner_id was logged for this exchange. Check face, speaker, and owner_source evidence below."}
+      </span>
+    </div>
+  );
+}
+
 function App() {
   const [snapshot, setSnapshot] = React.useState<DashboardSnapshot>(emptySnapshot);
   const [loading, setLoading] = React.useState(false);
@@ -491,7 +589,8 @@ function App() {
             {selectedExchange ? <StatusPill status={selectedExchange.status} /> : null}
           </div>
 
-          <div className="timeline">
+          <div className="flow-grid">
+            <div className="timeline">
             {selectedExchange ? null : (
               <div className="empty-state">
                 <Activity size={24} />
@@ -502,6 +601,19 @@ function App() {
             {(selectedExchange?.lifecycle ?? []).map((stage, index) => (
               <Stage stage={stage} key={`${stage.key}-${stage.ts ?? index}`} />
             ))}
+            </div>
+            <div className="axis-flow">
+              <div className="axis-flow-head">
+                <strong>State trajectory</strong>
+                <span>{selectedExchange?.state_transitions.length ?? 0} transitions</span>
+              </div>
+              {(selectedExchange?.state_by_axis ?? []).length ? null : (
+                <span className="muted">no state transitions</span>
+              )}
+              {(selectedExchange?.state_by_axis ?? []).map((group) => (
+                <StateAxisCard group={group} key={group.axis} />
+              ))}
+            </div>
           </div>
         </section>
 
@@ -528,6 +640,7 @@ function App() {
               <h2>People Context</h2>
               <UserRound size={18} />
             </div>
+            <OwnerResolution exchange={selectedExchange} />
             <KeyValueList
               values={[
                 ["primary_face", selectedExchange?.context.primary_face_person_id],
@@ -539,6 +652,14 @@ function App() {
                 ["speaker_visible", selectedExchange?.context.speaker_visible]
               ]}
             />
+          </div>
+
+          <div className="panel">
+            <div className="panel-heading">
+              <h2>Tool Calls</h2>
+              <Wrench size={18} />
+            </div>
+            <ToolCallList calls={selectedExchange?.tool_calls ?? []} />
           </div>
 
           <details className="panel diagnostic-panel">

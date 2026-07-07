@@ -103,6 +103,12 @@ of inheriting broad runtime mixins.
 - The remaining state/history/transport helper surface has moved from the
   deleted top-level `agent_state.py` into
   `argos_src/agent/control/state_runtime.py`.
+- Response retry, silent-response cleanup, and incomplete-audio continuation
+  now live behind `argos_src/agent/control/response_lifecycle_runtime.py`.
+- Websocket send and transport-safe payload stringification now live behind
+  `argos_src/agent/control/transport_runtime.py`.
+- Frozen turn context assembly for identity, face snapshots, and memory prompt
+  blocks now lives behind `argos_src/agent/control/turn_context_runtime.py`.
 - Top-level legacy runtime modules `agent_audio.py`, `agent_state.py`,
   `agent_preferences.py`, `agent_playback.py`, `agent_tools.py`,
   `orchestrator.py`, and `agent_events/dispatch.py` have been removed.
@@ -333,24 +339,20 @@ Do not start this cleanup until a live validation run proves:
 Once that baseline is captured, the next cleanup targets are:
 
 1. Align declared state axes with emitted runtime transitions.
-   The typed model includes states such as `candidate_voice`, `queued`,
-   `preparing_history`, `buffering`, and `awaiting_drain`, while the current
-   runtime emits a smaller practical subset. Either emit the missing transitions
-   when they help dashboard diagnosis, or trim/mark them as reserved so the docs
-   do not imply stronger observability than the runtime provides.
+   Status: mostly complete. Capture now emits admission and candidate-voice
+   states, turns emit queued/preparing/model-done/follow-up states, and playback
+   emits buffering/awaiting-drain states. Keep future axes honest: either emit a
+   declared state when it helps dashboard diagnosis, or mark it reserved instead
+   of implying stronger observability than runtime logs provide.
 
 2. Keep engagement state names single-sourced.
-   `EngagementMode` and `EngagementState` intentionally describe the same
-   values today. Consolidate them, or add a narrow compatibility check, if future
-   edits start touching engagement names frequently enough for drift to become a
-   real risk.
+   Status: complete. The runtime uses the typed `EngagementMode` directly; the
+   old duplicate `EngagementState` enum/name has been removed.
 
 3. Route engagement transitions through one clear policy surface.
-   The pure reducer owns the main transition table, but a few runtime paths still
-   perform direct state changes for playback terminal events and watchdog
-   fallback. Keep the direct paths if they remain simpler, but prefer reducer
-   coverage when changing those behaviors so the transition policy stays easy to
-   audit.
+   Status: improved. Playback terminal events and watchdog fallback now route
+   through the reducer decision path before applying state changes. Keep new
+   engagement transitions reducer-first.
 
 4. Replace host proxy controllers with explicit dependencies.
    `AudioRuntime`, `ServerEventRuntime`, and `AgentStateRuntime` currently use
@@ -372,9 +374,11 @@ Once that baseline is captured, the next cleanup targets are:
    depend directly on controller interfaces and the root can shrink further.
 
 7. Split `AgentStateRuntime` into narrower services.
-   The current module is the remaining broad state/history/transport helper.
-   Candidate splits are `PromptContextRuntime`, `HistoryRuntime`,
-   `ResponseCreateRuntime`, and `TransportRuntime`.
+   Status: in progress. Response lifecycle, transport, and turn-context
+   responsibilities have moved to narrower controllers. The remaining broad
+   surface is mostly history item ownership, response binding, item binding, and
+   compatibility delegates. Candidate next split is a dedicated `HistoryRuntime`
+   for owner-scoped item registration/deletion/rotation.
 
 8. Replace `Any` host typing with controller protocols.
    Each controller should declare the exact methods and fields it consumes. This

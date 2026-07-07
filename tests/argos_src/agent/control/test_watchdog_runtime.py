@@ -8,6 +8,7 @@ from argos_src.agent.control.watchdog_runtime import TurnWatchdogRuntime
 from argos_src.agent.realtime_turns import (
     QueuedTurn,
     TURN_PHASE_CANCELED,
+    TURN_PHASE_MODEL_DONE,
     TURN_PHASE_PLAYING,
     TURN_PHASE_RESPONSE_REQUESTED,
     TURN_PHASE_WAITING_TOOLS,
@@ -80,6 +81,21 @@ def test_watchdog_force_completes_stalled_playback() -> None:
     runtime = TurnWatchdogRuntime(host)
     turn = _turn()
     turn.phase = TURN_PHASE_PLAYING
+    turn.response_id = "resp-playback"
+    turn.last_playback_progress_at = 1.0
+    turn.response_finished.set()
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.poll_once(response_timeout_s=2.0, playback_timeout_s=3.0, now=7.0)
+
+    assert host.force_completed == [(turn.req_id, "stall_timeout")]
+
+
+def test_watchdog_force_completes_stalled_playback_after_model_done() -> None:
+    host = _Host()
+    runtime = TurnWatchdogRuntime(host)
+    turn = _turn()
+    turn.phase = TURN_PHASE_MODEL_DONE
     turn.response_id = "resp-playback"
     turn.last_playback_progress_at = 1.0
     turn.response_finished.set()

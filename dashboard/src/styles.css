@@ -386,12 +386,98 @@ button {
   padding: 14px;
 }
 
-.timeline {
+.flow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 14px;
   height: calc(100vh - 232px);
   min-height: 520px;
   margin-top: 12px;
+  overflow: hidden;
+}
+
+.timeline {
+  min-height: 0;
   overflow: auto;
   padding-right: 4px;
+}
+
+.axis-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 2px 0;
+}
+
+.axis-flow-head,
+.axis-card-head,
+.tool-call-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.axis-flow-head strong,
+.axis-card-head strong,
+.tool-call-head strong {
+  color: #18202b;
+  font-size: 0.9rem;
+}
+
+.axis-flow-head span,
+.axis-card-head span,
+.tool-call-head span {
+  color: #667085;
+  font-size: 0.78rem;
+}
+
+.axis-card {
+  padding: 10px;
+  border: 1px solid #e4e9f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.axis-events {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.axis-event {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 4px 8px;
+  padding: 7px 8px;
+  border: 1px solid #e4e9f0;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.axis-event span {
+  color: #667085;
+  font-size: 0.74rem;
+}
+
+.axis-event b {
+  color: #18202b;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.axis-event small {
+  grid-column: 2;
+  color: #667085;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.axis-event.ignored {
+  border-color: #fed7aa;
+  background: #fff7ed;
 }
 
 .stage {
@@ -606,6 +692,74 @@ button {
   padding: 14px;
 }
 
+.owner-resolution {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #d9e0e8;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.owner-resolution strong {
+  color: #18202b;
+  font-size: 0.9rem;
+}
+
+.owner-resolution span {
+  color: #667085;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.owner-resolution.unresolved {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.tool-call-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.tool-call {
+  padding: 10px;
+  border: 1px solid #e4e9f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.code-preview {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.code-preview span {
+  color: #667085;
+  font-size: 0.75rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.code-preview code {
+  display: block;
+  max-height: 140px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #d9e0e8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #18202b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .diagnostic-panel summary {
   display: flex;
   align-items: center;
@@ -735,6 +889,18 @@ button {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     max-height: none;
+  }
+
+  .flow-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .timeline,
+  .axis-flow {
+    max-height: 520px;
   }
 }
 
