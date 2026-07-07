@@ -213,6 +213,19 @@ function formatSessionRange(session: Session) {
   return `${start} - ${end}`;
 }
 
+function shortSessionId(session: Session) {
+  const id = session.session_id || "";
+  if (!id) return "unknown";
+  return id.length <= 8 ? id : id.slice(-6);
+}
+
+function formatSessionTitle(session: Session, sessions: Session[]) {
+  const range = formatSessionRange(session);
+  const duplicateRange = sessions.filter((candidate) => formatSessionRange(candidate) === range).length > 1;
+  const suffix = duplicateRange ? ` · ${shortSessionId(session)}` : "";
+  return `Run ${range}${suffix}`;
+}
+
 function median(values: number[]) {
   const clean = [...values].filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
   if (!clean.length) return null;
@@ -561,7 +574,7 @@ function App() {
                   setSelectedExchangeId(first?.exchange_id ?? null);
                 }}
               >
-                <strong>{formatSessionRange(session)}</strong>
+                <strong>{formatSessionTitle(session, snapshot.sessions)}</strong>
                 <span>{session.exchange_count ?? session.interaction_count} exchanges</span>
                 <small>{formatNumber(session.avg_first_audio_latency_s, "s")} avg first audio</small>
               </button>

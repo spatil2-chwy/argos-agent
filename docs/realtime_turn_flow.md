@@ -180,7 +180,7 @@ When admission is open and voice is detected:
 - the runtime sends `input_audio_buffer.clear`
 - raw PCM chunks start flowing into `_audio_send_queue`
 - a small pre-roll window is prepended so the first syllable is less likely to be clipped
-- passive starts require two consecutive VAD-positive chunks; wake-word starts open immediately
+- passive and wake-word starts open on the first VAD-positive chunk
 - `_audio_sender_loop()` converts each chunk to base64 and sends `input_audio_buffer.append`
 
 Recording gesture updates are dispatched through a serial background worker.

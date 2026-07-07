@@ -2030,6 +2030,11 @@ def test_active_recording_survives_admission_closing_mid_capture():
     chunk = np.zeros((1600, 1), dtype=np.int16)
 
     agent._capture_callback(chunk, 1600, None, None)
+
+    assert agent._recording_active is True
+    assert len(agent._current_turn_audio_chunks) == 1
+    assert agent._current_turn_vad_positive_blocks == 1
+
     agent._capture_callback(chunk, 1600, None, None)
     agent._capture_callback(chunk, 1600, None, None)
 
