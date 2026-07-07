@@ -1,4 +1,4 @@
-"""Audio capture, commit, and playback helpers for the Argos agent runtime."""
+"""Audio capture, commit, and playback controller for the realtime runtime."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ import numpy as np
 import sounddevice as sd
 
 from argos_src.agent.realtime_turns import AUDIO_CHANNELS, QueuedTurn
+from argos_src.agent.control.observers import safe_transition
+from argos_src.agent.control.types import CaptureState, StateAxis, StateTransition
 from argos_src.observability.observability import perf_now
 from argos_src.runtime.audio_admission import resolve_record_admission
 from argos_src.speaker_recognition.policy import clip_stats
@@ -26,7 +28,48 @@ RECORDING_PREROLL_SEC = 0.35
 RECORDING_START_CONFIRMATION_BLOCKS = 2
 
 
-class RealtimeAgentAudioMixin:
+class AudioRuntime:
+    """Own live capture/playback callbacks while preserving host turn semantics."""
+
+    def __init__(self, host: Any) -> None:
+        object.__setattr__(self, "_host", host)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._host, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_host":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._host, name, value)
+
+    def _set_capture_state(
+        self,
+        state: CaptureState | str,
+        *,
+        trigger: str,
+        req_id: str = "",
+        reason: str = "",
+    ) -> None:
+        new_state = state.value if isinstance(state, CaptureState) else str(state)
+        old_state = str(
+            getattr(self, "_capture_state", CaptureState.ADMISSION_CLOSED.value) or ""
+        )
+        if old_state == new_state:
+            return
+        self._capture_state = new_state
+        safe_transition(
+            getattr(self, "_state_observer", None),
+            StateTransition(
+                axis=StateAxis.CAPTURE,
+                old_state=old_state,
+                new_state=new_state,
+                trigger=trigger,
+                req_id=req_id,
+                reason=reason,
+            ),
+        )
+
     def _ensure_preroll_buffer_locked(self) -> deque[tuple[float, bytes, bytes]]:
         buffer = getattr(self, "_recording_preroll_chunks", None)
         if buffer is None:
@@ -342,6 +385,11 @@ class RealtimeAgentAudioMixin:
         wake_detected: bool = False,
     ) -> None:
         self._recording_active = True
+        self._set_capture_state(
+            CaptureState.RECORDING,
+            trigger="recording_started",
+            reason=admission_reason or "unknown",
+        )
         self._recording_started_at = now_s
         self._last_voice_at = now_s
         self._cancel_preference_idle_flush()
@@ -371,6 +419,7 @@ class RealtimeAgentAudioMixin:
 
     def _finalize_recording_locked(self, *, now_s: float) -> None:
         self._recording_active = False
+        self._set_capture_state(CaptureState.FINALIZING, trigger="speech_end")
         self._recording_started_at = 0.0
         primary_face_person_id = self._current_primary_face_person_id
         visible_face_person_ids = self._current_visible_face_person_ids
@@ -410,11 +459,16 @@ class RealtimeAgentAudioMixin:
         speech_end_perf_s: float,
         speech_end_unix_s: float,
     ) -> None:
+        self._set_capture_state(CaptureState.COMMITTING, trigger="audio_commit_start")
         try:
             self._audio_send_queue.join()
             self._send_event({"type": "input_audio_buffer.commit"})
         except Exception:
             self.logger.exception("Failed to commit input audio buffer")
+            self._set_capture_state(
+                CaptureState.ADMISSION_CLOSED,
+                trigger="audio_commit_failed",
+            )
             return
         display_mode = getattr(self, "_set_display_mode_async", None)
         if callable(display_mode):
@@ -422,6 +476,11 @@ class RealtimeAgentAudioMixin:
         transcript_perf_s = perf_now()
         req_id = f"rt-{uuid4().hex[:12]}"
         self._latency.emit(event="audio_commit", req_id=req_id)
+        self._set_capture_state(
+            CaptureState.COMMITTED,
+            trigger="audio_commit",
+            req_id=req_id,
+        )
         if self.coalescer is not None:
             internal_text, merged_meta = self.coalescer.drain_internal_events_for_audio_turn(
                 {

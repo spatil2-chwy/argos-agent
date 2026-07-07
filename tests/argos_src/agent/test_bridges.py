@@ -116,3 +116,98 @@ def test_face_bridge_requires_attention_when_configured(monkeypatch):
     assert len(submitted) == 1
     assert "recognized person 'Sakshee' appeared" in submitted[0][0]
     assert wake_calls == ["wake"]
+
+
+def test_patrol_bridge_drops_delayed_hop_when_active_goal_appears(monkeypatch):
+    bridges_module = _load_bridges_module(monkeypatch)
+    submitted = []
+
+    class _NavState:
+        def __init__(self):
+            self.active_goal = None
+            self.patrol = {"enabled": True, "awaiting_target": "desk"}
+
+        def get_patrol(self):
+            return dict(self.patrol)
+
+        def get_active_goal(self):
+            return self.active_goal
+
+        def patrol_mark_arrived_and_get_next(self, arrived_target):
+            assert arrived_target == "lobby"
+            self.active_goal = {"goal_id": "new-goal"}
+            return "desk"
+
+    class _ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(bridges_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bridges_module.threading, "Thread", _ImmediateThread)
+    bridge = bridges_module.PatrolLoopBridge(
+        coalescer=types.SimpleNamespace(
+            submit=lambda text, metadata: submitted.append((text, metadata))
+        ),
+        nav_state=_NavState(),
+        next_hop_delay_sec=0.0,
+    )
+
+    bridge.on_nav_event(
+        {
+            "event_type": "goal_result",
+            "outcome": "succeeded",
+            "target_label": "lobby",
+        }
+    )
+
+    assert submitted == []
+
+
+def test_patrol_bridge_drops_delayed_hop_when_awaiting_target_changes(monkeypatch):
+    bridges_module = _load_bridges_module(monkeypatch)
+    submitted = []
+
+    class _NavState:
+        def __init__(self):
+            self.patrol = {"enabled": True, "awaiting_target": "desk"}
+
+        def get_patrol(self):
+            return dict(self.patrol)
+
+        def get_active_goal(self):
+            return None
+
+        def patrol_mark_arrived_and_get_next(self, arrived_target):
+            assert arrived_target == "lobby"
+            self.patrol["awaiting_target"] = "atrium"
+            return "desk"
+
+    class _ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(bridges_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bridges_module.threading, "Thread", _ImmediateThread)
+    bridge = bridges_module.PatrolLoopBridge(
+        coalescer=types.SimpleNamespace(
+            submit=lambda text, metadata: submitted.append((text, metadata))
+        ),
+        nav_state=_NavState(),
+        next_hop_delay_sec=0.0,
+    )
+
+    bridge.on_nav_event(
+        {
+            "event_type": "goal_result",
+            "outcome": "succeeded",
+            "target_label": "lobby",
+        }
+    )
+
+    assert submitted == []

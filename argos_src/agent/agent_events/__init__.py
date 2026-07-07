@@ -1,6 +1,5 @@
-"""Helpers for parsing and routing OpenAI Realtime server events."""
+"""Pure helpers for parsing OpenAI Realtime server events."""
 
-from .dispatch import dispatch_server_event
 from .parsing import (
     server_event_item,
     server_event_item_id,
@@ -10,7 +9,6 @@ from .parsing import (
 )
 
 __all__ = [
-    "dispatch_server_event",
     "server_event_item",
     "server_event_item_id",
     "server_event_response",

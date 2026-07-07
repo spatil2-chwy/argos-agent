@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import atexit
-import base64
 import json
 import logging
 import os
@@ -17,23 +16,16 @@ from uuid import uuid4
 
 import websocket
 
-from argos_src.agent.orchestrator import EngagementStateMachine, EventCoalescer
+from argos_src.agent.control.coalescer import EventCoalescer
+from argos_src.agent.control.display_controller import DisplayController
+from argos_src.agent.control.engagement_runtime import EngagementStateMachine
 from argos_src.agent.preference_segments import _PreferenceSegmentCoordinator
-from argos_src.agent.agent_events.dispatch import dispatch_server_event
-from argos_src.agent.agent_events.parsing import (
-    server_event_item,
-    server_event_item_id,
-    server_event_response,
-    server_event_response_id,
-)
-from argos_src.agent.agent_audio import (
+from argos_src.agent.control.audio_runtime import (
+    AudioRuntime,
     VAD_SAMPLE_RATE,
-    RealtimeAgentAudioMixin,
 )
-from argos_src.agent.agent_playback import RealtimeAgentPlaybackMixin
-from argos_src.agent.agent_preferences import RealtimeAgentPreferenceMixin
-from argos_src.agent.agent_state import RealtimeAgentStateMixin
-from argos_src.agent.agent_tools import RealtimeAgentToolsMixin
+from argos_src.agent.control.state_runtime import AgentStateRuntime
+from argos_src.agent.control.server_event_runtime import ServerEventRuntime
 from argos_src.agent.realtime_turns import (
     NO_AUDIO_RESPONSE_RETRY_LIMIT,
     PLAYBACK_STALL_TIMEOUT_SEC,
@@ -51,6 +43,23 @@ from argos_src.agent.realtime_turns import (
     PlaybackBuffer,
     QueuedTurn,
 )
+from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.event_adapter import RealtimeEventAdapter
+from argos_src.agent.control.observers import safe_transition
+from argos_src.agent.control.playback_runtime import PlaybackRuntime
+from argos_src.agent.control.preference_runtime import PreferenceRuntime
+from argos_src.agent.control.turn_store import PendingResponseBindingStore
+from argos_src.agent.control.tool_runtime import ToolRuntime
+from argos_src.agent.control.turn_runner import TurnRunner
+from argos_src.agent.control.types import (
+    SessionState,
+    StateAxis,
+    StateTransition,
+    TranscriptionState,
+)
+from argos_src.agent.control.watchdog_runtime import TurnWatchdogRuntime
+from argos_src.agent.control.voice_command_runtime import VoiceCommandRuntime
+from argos_src.observability.state_observer import StructuredStateObserver
 from argos_src.agent.runtime_context import (
     format_current_office_location_block,
     format_current_time_block,
@@ -60,13 +69,10 @@ from argos_src.agent.runtime_context import (
 )
 from argos_src.observability.observability import (
     LatencyLogger,
-    clear_request_context,
     perf_now,
-    set_request_context,
 )
 from argos_src.observability.pricing import (
     estimate_realtime_response_cost,
-    estimate_transcription_cost,
 )
 from argos_src.openai_realtime import (
     realtime_audio_session_payload,
@@ -104,13 +110,7 @@ def _human_text_from_text_turn(text: str) -> str:
     return rendered.split(marker, 1)[1].strip()
 
 
-class RealtimeRobotAgent(
-    RealtimeAgentAudioMixin,
-    RealtimeAgentPlaybackMixin,
-    RealtimeAgentToolsMixin,
-    RealtimeAgentPreferenceMixin,
-    RealtimeAgentStateMixin,
-):
+class RealtimeRobotAgent:
     """Persistent realtime speech-to-speech robot agent runtime."""
 
     def __init__(
@@ -139,6 +139,7 @@ class RealtimeRobotAgent(
         initial_robot_posture: str = "standing",
         stand_tool_name: str = "move_robot",
         supports_navigation: bool = False,
+        state_observer: Any = None,
     ) -> None:
         self.logger = logging.getLogger("argos.agent_runtime")
         self.scenario_profile = scenario_profile
@@ -175,6 +176,8 @@ class RealtimeRobotAgent(
 
         self._latency = LatencyLogger("realtime")
         self._tool_latency = LatencyLogger("tool")
+        self._state_observer = state_observer or StructuredStateObserver()
+        self._session_state = SessionState.STOPPED.value
         self._preference_segments = (
             _PreferenceSegmentCoordinator() if preference_extraction_enabled else None
         )
@@ -202,12 +205,24 @@ class RealtimeRobotAgent(
         self._watchdog_thread: Optional[threading.Thread] = None
         self._executor_thread: Optional[threading.Thread] = None
         self._executor: Optional[Any] = None
+        self._event_adapter = RealtimeEventAdapter(self)
+        self._server_event_runtime = ServerEventRuntime(self)
 
         self._stop_event = threading.Event()
         self._audio_send_queue: queue.Queue[bytes] = queue.Queue()
         self._turn_queue: queue.Queue[QueuedTurn] = queue.Queue()
         self._tool_queue: queue.Queue[PendingToolCall] = queue.Queue()
         self._playback_buffer = PlaybackBuffer()
+        self._turn_runner = TurnRunner(self)
+        self._playback_runtime = PlaybackRuntime(self)
+        self._turn_watchdog_runtime = TurnWatchdogRuntime(self)
+        self._audio_runtime = AudioRuntime(self)
+        self._state_runtime = AgentStateRuntime(self)
+        self._preference_runtime = PreferenceRuntime(self)
+        self._voice_command_runtime = VoiceCommandRuntime(self)
+        self._display_controller = DisplayController(self)
+        self._playback_state = "idle"
+        self._capture_state = "not_ready"
         self._input_stream: Optional[Any] = None
         self._output_stream: Optional[Any] = None
 
@@ -243,12 +258,28 @@ class RealtimeRobotAgent(
         self._call_id_to_req_id: dict[str, str] = {}
         self._pending_function_args: dict[str, dict[str, str]] = {}
         self._pending_response_turn_req_ids: deque[str] = deque()
+        self._expired_stale_response_turn_req_ids: deque[str] = deque()
+        self._stale_response_deadlines_by_req_id: dict[str, float] = {}
+        self._response_binding_store = PendingResponseBindingStore(
+            turns_by_req_id=self._turns_by_req_id,
+            is_terminal=self._is_turn_terminal,
+            pending_req_ids=self._pending_response_turn_req_ids,
+            expired_stale_req_ids=self._expired_stale_response_turn_req_ids,
+            stale_deadlines_by_req_id=self._stale_response_deadlines_by_req_id,
+            response_id_to_req_id=self._response_id_to_req_id,
+            now=time.time,
+        )
         self._pending_audio_turn_req_ids: deque[str] = deque()
         self._pending_audio_item_ids: deque[str] = deque()
         self._pending_local_created_items: deque[Any] = deque()
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
+        self._history_index_store = OwnerScopedHistoryIndex(
+            item_order=self._history_item_order,
+            known_item_ids=self._known_history_item_ids,
+            item_owner_req_id=self._history_item_owner_req_id,
+        )
         self._active_history_owner_key: str = ""
         self._playback_req_id: str = ""
         self._playback_stream_id: str = ""
@@ -257,6 +288,7 @@ class RealtimeRobotAgent(
         self._ignored_voice_commands: deque[tuple[str, float]] = deque()
 
         self._tool_registry = {str(getattr(tool, "name", "")).strip(): tool for tool in self.tools}
+        self._tool_runtime_controller = ToolRuntime(self)
         self._tool_schemas = [
             self._build_tool_schema(tool)
             for tool in self.tools
@@ -266,6 +298,521 @@ class RealtimeRobotAgent(
         self._session_estimated_cost_usd = 0.0
 
     # ------------------------------------------------------------------
+    # State/history runtime
+    # ------------------------------------------------------------------
+
+    def _state_controller(self) -> AgentStateRuntime:
+        runtime = getattr(self, "_state_runtime", None)
+        if runtime is None or getattr(runtime, "_host", None) is not self:
+            runtime = AgentStateRuntime(self)
+            self._state_runtime = runtime
+        return runtime
+
+    def _enrich_person_context_with_memory(self, person: Any) -> Any:
+        return self._state_controller()._enrich_person_context_with_memory(person)
+
+    def _compile_memory_context_blocks(self, current_person_id: Optional[str]) -> tuple[str, ...]:
+        return self._state_controller()._compile_memory_context_blocks(current_person_id)
+
+    def _append_text_message_item(self, turn: QueuedTurn, text: str, *, role: str) -> None:
+        self._state_controller()._append_text_message_item(turn, text, role=role)
+
+    def _queue_pending_local_created_item(
+        self,
+        owner_req_id: str,
+        expected_type: str,
+        expected_role: str = "",
+    ) -> None:
+        self._state_controller()._queue_pending_local_created_item(
+            owner_req_id,
+            expected_type,
+            expected_role,
+        )
+
+    def _consume_pending_local_created_item(
+        self,
+        expected_type: str,
+        expected_role: str = "",
+    ) -> str:
+        return self._state_controller()._consume_pending_local_created_item(
+            expected_type,
+            expected_role,
+        )
+
+    def _register_pending_audio_turn(self, turn: QueuedTurn) -> None:
+        self._state_controller()._register_pending_audio_turn(turn)
+
+    def _consume_pending_audio_turn_req_id(self, *, include_finalized: bool = False) -> str:
+        return self._state_controller()._consume_pending_audio_turn_req_id(
+            include_finalized=include_finalized,
+        )
+
+    def _capture_turn_context(
+        self,
+        *,
+        primary_face_person_id: Optional[str] = None,
+        audio_speaker_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        owner_source: str = "unknown",
+        owner_confidence: float = 0.0,
+        speaker_visible: bool = False,
+    ) -> FrozenTurnContext:
+        return self._state_controller()._capture_turn_context(
+            primary_face_person_id=primary_face_person_id,
+            audio_speaker_id=audio_speaker_id,
+            owner_id=owner_id,
+            owner_source=owner_source,
+            owner_confidence=owner_confidence,
+            speaker_visible=speaker_visible,
+        )
+
+    def _set_turn_phase(self, turn: QueuedTurn, phase: str) -> None:
+        self._state_controller()._set_turn_phase(turn, phase)
+
+    def _is_turn_terminal(self, turn: Optional[QueuedTurn]) -> bool:
+        return self._state_controller()._is_turn_terminal(turn)
+
+    def _response_bindings(self) -> PendingResponseBindingStore:
+        return self._state_controller()._response_bindings()
+
+    def _history_index(self) -> OwnerScopedHistoryIndex:
+        return self._state_controller()._history_index()
+
+    def _bind_response_id(self, turn: QueuedTurn, response_id: str) -> None:
+        self._state_controller()._bind_response_id(turn, response_id)
+
+    def _bind_item_id_to_turn(self, turn: QueuedTurn, item_id: str) -> None:
+        self._state_controller()._bind_item_id_to_turn(turn, item_id)
+
+    def _req_id_for_response_id(self, response_id: str) -> str:
+        return self._state_controller()._req_id_for_response_id(response_id)
+
+    def _resolve_turn_for_item(self, item_id: str) -> Optional[QueuedTurn]:
+        return self._state_controller()._resolve_turn_for_item(item_id)
+
+    def _resolve_turn_for_output(
+        self,
+        *,
+        response_id: str = "",
+        item_id: str = "",
+        call_id: str = "",
+    ) -> Optional[QueuedTurn]:
+        return self._state_controller()._resolve_turn_for_output(
+            response_id=response_id,
+            item_id=item_id,
+            call_id=call_id,
+        )
+
+    def _consume_pending_response_turn(
+        self,
+        response_id: str,
+        *,
+        consume_only_if_missing: bool = True,
+    ) -> Optional[QueuedTurn]:
+        return self._state_controller()._consume_pending_response_turn(
+            response_id,
+            consume_only_if_missing=consume_only_if_missing,
+        )
+
+    def _consume_pending_response_binding(
+        self,
+        response_id: str,
+        *,
+        consume_only_if_missing: bool = True,
+    ) -> Any:
+        return self._state_controller()._consume_pending_response_binding(
+            response_id,
+            consume_only_if_missing=consume_only_if_missing,
+        )
+
+    def _queue_pending_response_turn(self, req_id: str) -> None:
+        self._state_controller()._queue_pending_response_turn(req_id)
+
+    def _mark_pending_response_turn_stale(self, req_id: str) -> bool:
+        return self._state_controller()._mark_pending_response_turn_stale(req_id)
+
+    def _pending_stale_response_deadline(self) -> float | None:
+        return self._state_controller()._pending_stale_response_deadline()
+
+    def _next_pending_response_turn(self) -> Optional[QueuedTurn]:
+        return self._state_controller()._next_pending_response_turn()
+
+    def _wait_for_stale_response_slot(self) -> bool:
+        return self._state_controller()._wait_for_stale_response_slot()
+
+    def _conversation_item_looks_like_audio_input(self, item: dict[str, Any]) -> bool:
+        return self._state_controller()._conversation_item_looks_like_audio_input(item)
+
+    def _register_history_item(self, item_id: str, *, owner_req_id: str = "") -> None:
+        self._state_controller()._register_history_item(
+            item_id,
+            owner_req_id=owner_req_id,
+        )
+
+    def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
+        self._state_controller()._register_turn_history_item(turn, item_id)
+
+    def _forget_history_item(self, turn: Optional[QueuedTurn], item_id: str) -> None:
+        self._state_controller()._forget_history_item(turn, item_id)
+
+    def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
+        return self._state_controller()._history_owner_key_for_turn(turn)
+
+    def _history_protected_item_ids(self, current_turn: Optional[QueuedTurn]) -> set[str]:
+        return self._state_controller()._history_protected_item_ids(current_turn)
+
+    def _forget_deleted_history_item(self, item_id: str) -> None:
+        self._state_controller()._forget_deleted_history_item(item_id)
+
+    def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
+        self._state_controller()._maybe_rotate_history_for_turn(turn)
+
+    def _forget_response_id(self, response_id: str) -> None:
+        self._state_controller()._forget_response_id(response_id)
+
+    def _discard_pending_response_turn(self, req_id: str) -> int:
+        return self._state_controller()._discard_pending_response_turn(req_id)
+
+    def _response_output_types(self, response: dict[str, Any]) -> list[str]:
+        return self._state_controller()._response_output_types(response)
+
+    def _cleanup_silent_response_items(
+        self,
+        turn: QueuedTurn,
+        response: dict[str, Any],
+    ) -> None:
+        self._state_controller()._cleanup_silent_response_items(turn, response)
+
+    def _retry_no_audio_response(
+        self,
+        turn: QueuedTurn,
+        response: dict[str, Any],
+    ) -> bool:
+        return self._state_controller()._retry_no_audio_response(turn, response)
+
+    def _transcript_looks_truncated(self, transcript: str) -> bool:
+        return self._state_controller()._transcript_looks_truncated(transcript)
+
+    def _should_continue_incomplete_audio_reply(self, turn: QueuedTurn) -> bool:
+        return self._state_controller()._should_continue_incomplete_audio_reply(turn)
+
+    def _continue_incomplete_audio_reply(self, turn: QueuedTurn) -> None:
+        self._state_controller()._continue_incomplete_audio_reply(turn)
+
+    def _stringify_tool_output(self, content: object) -> str:
+        return self._state_controller()._stringify_tool_output(content)
+
+    def _send_event(self, payload: dict[str, Any]) -> None:
+        self._state_controller()._send_event(payload)
+
+    def _transcript_from_response(self, response: dict[str, Any]) -> str:
+        return self._state_controller()._transcript_from_response(response)
+
+    def _log_wakeword_debug(
+        self,
+        *,
+        wake_detected: bool,
+        wake_output: dict[str, Any],
+    ) -> None:
+        self._state_controller()._log_wakeword_debug(
+            wake_detected=wake_detected,
+            wake_output=wake_output,
+        )
+
+    def _get_current_primary_face_person_id(self) -> Optional[str]:
+        return self._state_controller()._get_current_primary_face_person_id()
+
+    def _get_current_visible_face_person_ids(self) -> tuple[str, ...]:
+        return self._state_controller()._get_current_visible_face_person_ids()
+
+    # ------------------------------------------------------------------
+    # Tool runtime
+    # ------------------------------------------------------------------
+
+    def _tool_runtime(self) -> ToolRuntime:
+        runtime = getattr(self, "_tool_runtime_controller", None)
+        if runtime is None or runtime._host is not self:
+            runtime = ToolRuntime(self)
+            self._tool_runtime_controller = runtime
+        return runtime
+
+    def _execute_tool_call(self, pending: PendingToolCall) -> None:
+        self._tool_runtime().execute(pending)
+
+    def _build_tool_schema(self, tool: Any) -> dict[str, Any]:
+        return ToolRuntime.build_schema(tool)
+
+    def _maybe_handle_tool_side_effects(self, tool_name: str, content: object) -> None:
+        self._tool_runtime().maybe_handle_side_effects(tool_name, content)
+
+    # ------------------------------------------------------------------
+    # Playback runtime
+    # ------------------------------------------------------------------
+
+    def _playback_controller(self) -> PlaybackRuntime:
+        runtime = getattr(self, "_playback_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = PlaybackRuntime(self)
+            self._playback_runtime = runtime
+        return runtime
+
+    def _wait_for_playback_and_complete(self, turn: QueuedTurn, stream_id: str) -> None:
+        self._playback_controller().wait_for_playback_and_complete(turn, stream_id)
+
+    def _force_complete_stalled_playback(self, turn: QueuedTurn, *, reason: str) -> None:
+        self._playback_controller().force_complete_stalled_playback(turn, reason=reason)
+
+    def interrupt_current_response(self, *, reason: str) -> None:
+        self._playback_controller().interrupt_current_response(reason=reason)
+
+    # ------------------------------------------------------------------
+    # Turn watchdog runtime
+    # ------------------------------------------------------------------
+
+    def _turn_watchdog(self) -> TurnWatchdogRuntime:
+        runtime = getattr(self, "_turn_watchdog_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = TurnWatchdogRuntime(self)
+            self._turn_watchdog_runtime = runtime
+        return runtime
+
+    def _turn_runner_controller(self) -> TurnRunner:
+        runner = getattr(self, "_turn_runner", None)
+        if runner is None or runner._host is not self:
+            runner = TurnRunner(self)
+            self._turn_runner = runner
+        return runner
+
+    # ------------------------------------------------------------------
+    # Audio runtime
+    # ------------------------------------------------------------------
+
+    def _audio_controller(self) -> AudioRuntime:
+        runtime = getattr(self, "_audio_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = AudioRuntime(self)
+            self._audio_runtime = runtime
+        return runtime
+
+    def _set_capture_state(
+        self,
+        state: Any,
+        *,
+        trigger: str,
+        req_id: str = "",
+        reason: str = "",
+    ) -> None:
+        self._audio_controller()._set_capture_state(
+            state,
+            trigger=trigger,
+            req_id=req_id,
+            reason=reason,
+        )
+
+    def _start_audio_streams(self) -> None:
+        self._audio_controller()._start_audio_streams()
+
+    def _capture_callback(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
+        self._audio_controller()._capture_callback(indata, frames, time_info, status)
+
+    def _start_recording_locked(
+        self,
+        *,
+        now_s: float,
+        admission_reason: str = "",
+        interaction_state: str = "",
+        wake_detected: bool = False,
+    ) -> None:
+        self._audio_controller()._start_recording_locked(
+            now_s=now_s,
+            admission_reason=admission_reason,
+            interaction_state=interaction_state,
+            wake_detected=wake_detected,
+        )
+
+    def _finalize_recording_locked(self, *, now_s: float) -> None:
+        self._audio_controller()._finalize_recording_locked(now_s=now_s)
+
+    def _commit_audio_turn(
+        self,
+        primary_face_person_id: Optional[str],
+        visible_face_person_ids: tuple[str, ...],
+        audio_pcm16: bytes,
+        capture_vad_positive_blocks: int,
+        speech_end_perf_s: float,
+        speech_end_unix_s: float,
+    ) -> None:
+        self._audio_controller()._commit_audio_turn(
+            primary_face_person_id,
+            visible_face_person_ids,
+            audio_pcm16,
+            capture_vad_positive_blocks,
+            speech_end_perf_s,
+            speech_end_unix_s,
+        )
+
+    def _playback_callback(self, outdata: Any, frames: int, time_info: Any, status: Any) -> None:
+        self._audio_controller()._playback_callback(outdata, frames, time_info, status)
+
+    def _audio_sender_loop(self) -> None:
+        self._audio_controller()._audio_sender_loop()
+
+    def _input_playback_guard_active(self, *, now_s: float | None = None) -> bool:
+        return self._audio_controller()._input_playback_guard_active(now_s=now_s)
+
+    # ------------------------------------------------------------------
+    # Preference runtime
+    # ------------------------------------------------------------------
+
+    def _preference_controller(self) -> PreferenceRuntime:
+        runtime = getattr(self, "_preference_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = PreferenceRuntime(self)
+            self._preference_runtime = runtime
+        return runtime
+
+    def flush_preference_segments(self, reason: str = "idle") -> None:
+        """Flush any buffered speaker-owned preference segment."""
+        self._preference_controller().flush_segments(reason=reason)
+
+    def _schedule_preference_idle_flush(self) -> None:
+        self._preference_controller().schedule_idle_flush()
+
+    def _cancel_preference_idle_flush(self) -> None:
+        self._preference_controller().cancel_idle_flush()
+
+    def _maybe_note_preference_turn(self, turn: Any) -> None:
+        self._preference_controller().maybe_note_turn(turn)
+
+    def _schedule_preference_segment_extraction(self, segment: Any, *, reason: str) -> None:
+        self._preference_controller().schedule_segment_extraction(segment, reason=reason)
+
+    def _retry_ready_preference_turns(self) -> None:
+        self._preference_controller().retry_ready_turns()
+
+    # ------------------------------------------------------------------
+    # State observability
+    # ------------------------------------------------------------------
+
+    def _set_session_state(
+        self,
+        state: SessionState | str,
+        *,
+        trigger: str,
+        reason: str = "",
+    ) -> None:
+        new_state = state.value if isinstance(state, SessionState) else str(state)
+        old_state = str(getattr(self, "_session_state", SessionState.STOPPED.value) or "")
+        if old_state == new_state:
+            return
+        self._session_state = new_state
+        safe_transition(
+            getattr(self, "_state_observer", None),
+            StateTransition(
+                axis=StateAxis.SESSION,
+                old_state=old_state,
+                new_state=new_state,
+                trigger=trigger,
+                reason=reason,
+                fields={"session_id": getattr(self, "_session_id", "") or ""},
+            ),
+        )
+
+    def _set_transcription_state(
+        self,
+        turn: QueuedTurn | None,
+        state: TranscriptionState | str,
+        *,
+        trigger: str,
+        item_id: str = "",
+        reason: str = "",
+    ) -> None:
+        if turn is None:
+            return
+        new_state = state.value if isinstance(state, TranscriptionState) else str(state)
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        old_state = str(
+            metadata.get("_transcription_state", TranscriptionState.NONE.value) or ""
+        )
+        if old_state == new_state:
+            return
+        metadata["_transcription_state"] = new_state
+        turn.metadata = metadata
+        safe_transition(
+            getattr(self, "_state_observer", None),
+            StateTransition(
+                axis=StateAxis.TRANSCRIPTION,
+                old_state=old_state,
+                new_state=new_state,
+                trigger=trigger,
+                req_id=turn.req_id,
+                reason=reason,
+                fields={"item_id": item_id},
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Voice command runtime
+    # ------------------------------------------------------------------
+
+    def _voice_command_controller(self) -> VoiceCommandRuntime:
+        runtime = getattr(self, "_voice_command_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = VoiceCommandRuntime(self)
+            self._voice_command_runtime = runtime
+        return runtime
+
+    def note_local_voice_command(self, command: str, *, ttl_sec: float = 1.5) -> None:
+        self._voice_command_controller().note_local_voice_command(
+            command,
+            ttl_sec=ttl_sec,
+        )
+
+    def _should_ignore_voice_command(self, command: str) -> bool:
+        return self._voice_command_controller().should_ignore(command)
+
+    def _on_voice_command(self, msg: Any) -> None:
+        self._voice_command_controller().handle_message(msg)
+
+    def handle_voice_command(self, command: str) -> None:
+        """Handle a local or bridge-provided voice command."""
+        self._on_voice_command(command)
+
+    # ------------------------------------------------------------------
+    # Display controller
+    # ------------------------------------------------------------------
+
+    def _display_controller_runtime(self) -> DisplayController:
+        controller = getattr(self, "_display_controller", None)
+        if controller is None or controller._host is not self:
+            controller = DisplayController(self)
+            self._display_controller = controller
+        return controller
+
+    def _set_display_mode_async(self, mode: str, *, force: bool = False) -> None:
+        self._display_controller_runtime().set_mode_async(mode, force=force)
+
+    def _clear_passive_alert_display_if_needed(self) -> None:
+        self._display_controller_runtime().clear_passive_alert_if_needed()
+
+    def _show_display_subtitle_async(self, text: str, *, duration_ms: int = 5000) -> None:
+        self._display_controller_runtime().show_subtitle_async(
+            text,
+            duration_ms=duration_ms,
+        )
+
+    @staticmethod
+    def _display_subtitle_window(text: str, *, max_chars: int = 180) -> str:
+        return DisplayController.subtitle_window(text, max_chars=max_chars)
+
+    def _display_worker_loop(self) -> None:
+        self._display_controller_runtime().worker_loop()
+
+    @staticmethod
+    def _apply_display_mode(display: Any, mode: str) -> None:
+        DisplayController.apply_mode(display, mode)
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -273,9 +820,15 @@ class RealtimeRobotAgent(
         """Connect audio, websocket, robot transport, and worker threads."""
         if self._ws is not None:
             return
+        self._set_session_state(SessionState.CONNECTING, trigger="start")
 
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
+            self._set_session_state(
+                SessionState.STOPPED,
+                trigger="start_failed",
+                reason="missing_api_key",
+            )
             raise RuntimeError("OPENAI_API_KEY must be set for realtime speech runtime.")
 
         headers = realtime_auth_headers(api_key)
@@ -289,6 +842,7 @@ class RealtimeRobotAgent(
         if callable(display_starter):
             display_starter()
         self._start_websocket_threads()
+        self._set_session_state(SessionState.CONFIGURING, trigger="session_configure")
         self._configure_session()
         self._start_audio_streams()
         self._start_workers()
@@ -305,6 +859,7 @@ class RealtimeRobotAgent(
         """Stop playback/capture, websocket threads, robot transport, and workers."""
         if self._stop_event.is_set():
             return
+        self._set_session_state(SessionState.SHUTTING_DOWN, trigger="shutdown")
         self._stop_event.set()
 
         self._cancel_preference_idle_flush()
@@ -400,6 +955,7 @@ class RealtimeRobotAgent(
             except Exception:
                 self.logger.exception("Failed to stop robot client cleanly")
         self._preference_executor.shutdown(wait=False, cancel_futures=False)
+        self._set_session_state(SessionState.STOPPED, trigger="shutdown_complete")
 
     # ------------------------------------------------------------------
     # Public hooks expected by orchestration code
@@ -458,51 +1014,6 @@ class RealtimeRobotAgent(
     def update_face_presence_snapshot(self, snapshot: dict[str, Any]) -> None:
         """Update local mic admission from a face-presence snapshot."""
         self._face_gate.update_from_snapshot(dict(snapshot or {}))
-
-    def flush_preference_segments(self, reason: str = "idle") -> None:
-        """Flush any buffered speaker-owned preference segment."""
-        if self._preference_segments is None:
-            return
-        if reason == "idle":
-            self._schedule_preference_idle_flush()
-            return
-        self._cancel_preference_idle_flush()
-        self._retry_ready_preference_turns()
-        completed_segment = self._preference_segments.flush_active()
-        if completed_segment is None:
-            if reason in {"idle_timeout", "shutdown"}:
-                finish_episode = getattr(
-                    self.preference_extractor,
-                    "finish_active_episode",
-                    None,
-                )
-                if callable(finish_episode):
-                    finish_episode(reason=reason)
-            return
-        self._schedule_preference_segment_extraction(completed_segment, reason=reason)
-
-    def _schedule_preference_idle_flush(self) -> None:
-        if self._preference_segments is None:
-            return
-
-        def run_flush() -> None:
-            with self._preference_idle_flush_lock:
-                self._preference_idle_flush_timer = None
-            self.flush_preference_segments(reason="idle_timeout")
-
-        with self._preference_idle_flush_lock:
-            if self._preference_idle_flush_timer is not None:
-                self._preference_idle_flush_timer.cancel()
-            timer = threading.Timer(self._preference_idle_flush_delay_sec, run_flush)
-            timer.daemon = True
-            self._preference_idle_flush_timer = timer
-            timer.start()
-
-    def _cancel_preference_idle_flush(self) -> None:
-        with self._preference_idle_flush_lock:
-            if self._preference_idle_flush_timer is not None:
-                self._preference_idle_flush_timer.cancel()
-                self._preference_idle_flush_timer = None
 
     def _face_owner_resolution(
         self,
@@ -813,87 +1324,6 @@ class RealtimeRobotAgent(
             )
             self._display_thread.start()
 
-    def _set_display_mode_async(self, mode: str, *, force: bool = False) -> None:
-        if getattr(self, "display_runtime", None) is None:
-            return
-        rendered = str(mode or "").strip()
-        if not rendered:
-            return
-        with self._display_mode_lock:
-            if not force and rendered == self._display_mode:
-                return
-            self._display_mode = rendered
-        self._display_queue.put(("mode", rendered))
-
-    def _clear_passive_alert_display_if_needed(self) -> None:
-        if getattr(self, "display_runtime", None) is None:
-            return
-        with self._display_mode_lock:
-            should_clear = self._display_mode == "alert"
-        if should_clear:
-            self._set_display_mode_async("idle")
-
-    def _show_display_subtitle_async(self, text: str, *, duration_ms: int = 5000) -> None:
-        if getattr(self, "display_runtime", None) is None:
-            return
-        rendered = str(text or "").strip()
-        if not rendered:
-            return
-        self._display_queue.put(
-            (
-                "subtitle",
-                {
-                    "text": rendered,
-                    "duration_ms": int(duration_ms),
-                },
-            )
-        )
-
-    @staticmethod
-    def _display_subtitle_window(text: str, *, max_chars: int = 180) -> str:
-        rendered = " ".join(str(text or "").split())
-        if len(rendered) <= max_chars:
-            return rendered
-        trimmed = rendered[-max_chars:]
-        if " " in trimmed:
-            trimmed = trimmed.split(" ", 1)[1]
-        return trimmed.strip()
-
-    def _display_worker_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                kind, payload = self._display_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            try:
-                display = getattr(self, "display_runtime", None)
-                if display is None:
-                    continue
-                if kind == "mode":
-                    self._apply_display_mode(display, str(payload or ""))
-                elif kind == "subtitle" and isinstance(payload, dict):
-                    display.show_subtitle(
-                        str(payload.get("text", "") or ""),
-                        duration_ms=int(payload.get("duration_ms", 5000) or 5000),
-                    )
-            except Exception:
-                self.logger.debug("Display update failed", exc_info=True)
-            finally:
-                self._display_queue.task_done()
-
-    @staticmethod
-    def _apply_display_mode(display: Any, mode: str) -> None:
-        if mode == "idle":
-            display.show_idle()
-        elif mode == "alert":
-            display.show_alert()
-        elif mode == "recording":
-            display.show_recording()
-        elif mode == "thinking":
-            display.show_thinking()
-        elif mode == "speaking":
-            display.show_speaking()
-
     def _configure_session(self) -> None:
         session = realtime_audio_session_payload(
             profile=self.realtime_profile,
@@ -929,11 +1359,13 @@ class RealtimeRobotAgent(
     def _send_response_create(self, turn: QueuedTurn) -> None:
         if self._is_turn_terminal(turn):
             return
+        if not self._wait_for_stale_response_slot():
+            self._terminate_turn(turn, TURN_PHASE_CANCELED, "stale_response_wait_aborted")
+            return
         turn.response_requested_at = time.time()
         turn.pending_response_requests += 1
         self._set_turn_phase(turn, TURN_PHASE_RESPONSE_REQUESTED)
-        with self._turn_lock:
-            self._pending_response_turn_req_ids.append(turn.req_id)
+        self._queue_pending_response_turn(turn.req_id)
         self._latency.emit(event="response_create", req_id=turn.req_id)
         self.logger.info(
             "Queueing response.create req_id=%s pending_response_requests=%s",
@@ -999,113 +1431,21 @@ class RealtimeRobotAgent(
                 self._tool_queue.task_done()
 
     def _watchdog_loop(self) -> None:
-        while not self._stop_event.wait(WATCHDOG_POLL_SEC):
-            now = time.time()
-            with self._turn_lock:
-                turns = list(self._turns_by_req_id.values())
-            for turn in turns:
-                if self._is_turn_terminal(turn):
-                    continue
-                if turn.phase in {TURN_PHASE_RESPONSE_REQUESTED, TURN_PHASE_WAITING_FIRST_AUDIO}:
-                    started_at = turn.response_requested_at or turn.phase_updated_at
-                    if now - started_at >= RESPONSE_STALL_TIMEOUT_SEC:
-                        self.logger.warning(
-                            "Realtime response watchdog cancel req_id=%s phase=%s",
-                            turn.req_id,
-                            turn.phase,
-                        )
-                        self._terminate_turn(turn, TURN_PHASE_CANCELED, "response_timeout")
-                        continue
-                if turn.phase == TURN_PHASE_WAITING_TOOLS and turn.pending_tool_calls > 0:
-                    started_at = turn.phase_updated_at
-                    if now - started_at >= RESPONSE_STALL_TIMEOUT_SEC:
-                        self.logger.warning(
-                            "Realtime tool watchdog cancel req_id=%s pending_tool_calls=%s",
-                            turn.req_id,
-                            turn.pending_tool_calls,
-                        )
-                        self._terminate_turn(turn, TURN_PHASE_CANCELED, "tool_timeout")
-                        continue
-                if (
-                    turn.phase == TURN_PHASE_PLAYING
-                    and turn.response_finished.is_set()
-                    and not turn.playback_finished.is_set()
-                ):
-                    progress_at = (
-                        turn.last_playback_progress_at
-                        or turn.audio_started_at
-                        or turn.phase_updated_at
-                    )
-                    if now - progress_at >= max(
-                        PLAYBACK_STALL_TIMEOUT_SEC,
-                        float(getattr(self.realtime_profile, "silence_grace_period", 0.0)) + 5.0,
-                    ):
-                        self.logger.warning(
-                            "Realtime playback stall forcing completion req_id=%s response_id=%s",
-                            turn.req_id,
-                            turn.response_id,
-                        )
-                        self._force_complete_stalled_playback(turn, reason="stall_timeout")
+        self._turn_watchdog().loop(
+            poll_s=WATCHDOG_POLL_SEC,
+            response_timeout_s=RESPONSE_STALL_TIMEOUT_SEC,
+            playback_timeout_s=PLAYBACK_STALL_TIMEOUT_SEC,
+        )
 
     # ------------------------------------------------------------------
     # Turn handling
     # ------------------------------------------------------------------
 
     def _run_turn(self, turn: QueuedTurn) -> None:
-        with self._turn_lock:
-            self._active_turn = turn
-            self._turns_by_req_id[turn.req_id] = turn
-            self._clear_playback_tracking_locked()
-        self.logger.info("Starting turn req_id=%s kind=%s", turn.req_id, turn.kind)
-
-        set_request_context(
-            req_id=turn.req_id,
-            speech_end_perf_s=turn.speech_end_perf_s,
-            speech_end_unix_s=turn.speech_end_unix_s,
-            transcript_perf_s=turn.transcript_perf_s,
-        )
-        try:
-            self._maybe_rotate_history_for_turn(turn)
-            if turn.kind == "text":
-                self._append_text_message_item(
-                    turn,
-                    turn.input_text,
-                    role="system" if turn.source_is_internal else "user",
-                )
-            if turn.pending_internal_text:
-                self._append_text_message_item(
-                    turn,
-                    turn.pending_internal_text,
-                    role="system",
-                )
-            self._send_response_create(turn)
-            self._wait_for_turn_settled(turn)
-            if not self._is_turn_terminal(turn):
-                self._complete_turn_success(turn)
-            if turn.phase == TURN_PHASE_FINALIZED:
-                self._maybe_capture_voice_reference(turn)
-                self._maybe_note_preference_turn(turn)
-        finally:
-            self.logger.info(
-                "Finished turn req_id=%s phase=%s finalized_reason=%s audio_started=%s pending_tool_calls=%s pending_response_requests=%s",
-                turn.req_id,
-                turn.phase,
-                turn.finalized_reason,
-                turn.audio_started,
-                turn.pending_tool_calls,
-                turn.pending_response_requests,
-            )
-            clear_request_context()
-            with self._turn_lock:
-                if self._active_turn is turn:
-                    self._active_turn = None
+        self._turn_runner_controller().run(turn)
 
     def _wait_for_turn_settled(self, turn: QueuedTurn) -> None:
-        while not self._stop_event.is_set():
-            if turn.response_finished.wait(timeout=0.1) and turn.playback_finished.wait(timeout=0.1):
-                return
-            if self._is_turn_terminal(turn):
-                return
+        self._turn_runner_controller().wait_for_settled(turn)
 
     def _bump_session_estimated_cost(self, amount_usd: Optional[float]) -> Optional[float]:
         if amount_usd is None:
@@ -1230,6 +1570,13 @@ class RealtimeRobotAgent(
     # Websocket receiver
     # ------------------------------------------------------------------
 
+    def _server_event_adapter(self) -> RealtimeEventAdapter:
+        adapter = getattr(self, "_event_adapter", None)
+        if adapter is None or adapter._host is not self:
+            adapter = RealtimeEventAdapter(self)
+            self._event_adapter = adapter
+        return adapter
+
     def _receiver_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -1256,470 +1603,61 @@ class RealtimeRobotAgent(
             self._handle_server_event(event)
 
     def _handle_server_event(self, event: dict[str, Any]) -> None:
-        dispatch_server_event(self, event)
+        self._server_event_adapter().handle(event)
+
+    def _server_event_runtime_controller(self) -> ServerEventRuntime:
+        runtime = getattr(self, "_server_event_runtime", None)
+        if runtime is None or runtime._host is not self:
+            runtime = ServerEventRuntime(self)
+            self._server_event_runtime = runtime
+        return runtime
 
     def _handle_conversation_item_created(self, event: dict[str, Any]) -> None:
-        item = server_event_item(event)
-        item_id = server_event_item_id(event, item=item)
-        if not item_id:
-            return
-        if item_id in self._item_id_to_req_id:
-            self._register_history_item(item_id)
-            return
-
-        item_type = str(item.get("type", "") or "").strip()
-        role = str(item.get("role", "") or "").strip()
-        response_id = server_event_response_id(event, item=item)
-        req_id = ""
-
-        if item_type == "message" and role == "user":
-            if self._conversation_item_looks_like_audio_input(item):
-                req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
-            else:
-                req_id = self._consume_pending_local_created_item("message", "user")
-        elif item_type == "message" and role == "system":
-            req_id = self._consume_pending_local_created_item("message", "system")
-        elif item_type == "function_call_output":
-            req_id = self._consume_pending_local_created_item("function_call_output")
-        elif item_type == "message" and role == "assistant":
-            req_id = self._req_id_for_response_id(response_id)
-        elif item_type == "function_call":
-            req_id = self._req_id_for_response_id(response_id)
-            call_id = str(item.get("call_id") or "").strip()
-            if call_id and req_id:
-                self._call_id_to_req_id[call_id] = req_id
-
-        self._register_history_item(item_id, owner_req_id=req_id)
-        if req_id:
-            turn = self._turns_by_req_id.get(req_id)
-            if turn is not None:
-                self._register_turn_history_item(turn, item_id)
-                if item_type == "message" and role == "user" and not turn.user_item_id:
-                    turn.user_item_id = item_id
-                elif item_type == "message" and role == "assistant":
-                    turn.assistant_item_ids.add(item_id)
-                elif item_type == "function_call":
-                    turn.function_call_item_ids.add(item_id)
+        self._server_event_runtime_controller().handle_conversation_item_created(event)
 
     def _handle_input_audio_buffer_committed(self, event: dict[str, Any]) -> None:
-        item_id = str(event.get("item_id") or "").strip()
-        if not item_id:
-            return
-        turn = self._resolve_turn_for_item(item_id)
-        if turn is None:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
-            if req_id:
-                turn = self._turns_by_req_id.get(req_id)
-        if turn is None:
-            with self._turn_lock:
-                self._pending_audio_item_ids.append(item_id)
-            self.logger.debug("Queued unbound audio item_id=%s for next audio turn", item_id)
-            return
-        self._bind_item_id_to_turn(turn, item_id)
-        if not turn.user_item_id:
-            turn.user_item_id = item_id
+        self._server_event_runtime_controller().handle_input_audio_buffer_committed(event)
 
     def _handle_response_created(self, event: dict[str, Any]) -> None:
-        response = server_event_response(event)
-        response_id = server_event_response_id(event, response=response)
-        if not response_id:
-            return
-        turn = self._consume_pending_response_turn(response_id)
-        if turn is None:
-            return
-        turn.pending_response_requests = max(0, turn.pending_response_requests - 1)
-        if self._is_turn_terminal(turn):
-            try:
-                self._send_event({"type": "response.cancel", "response_id": response_id})
-            except Exception:
-                self.logger.exception("Failed to cancel terminal response_id=%s", response_id)
-            return
-        self.logger.info("Realtime response created req_id=%s response_id=%s", turn.req_id, response_id)
-        self._set_turn_phase(turn, TURN_PHASE_WAITING_FIRST_AUDIO)
+        self._server_event_runtime_controller().handle_response_created(event)
+
+    def _recover_pending_response_after_expired_stale(self, response_id: str) -> None:
+        self._server_event_runtime_controller().recover_pending_response_after_expired_stale(
+            response_id
+        )
 
     def _handle_input_transcription_completed(self, event: dict[str, Any]) -> None:
-        transcript = str(event.get("transcript", "") or "").strip()
-        item_id = str(event.get("item_id") or "").strip()
-        turn = self._resolve_turn_for_item(item_id) if item_id else None
-        if turn is None and item_id:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
-            if req_id:
-                turn = self._turns_by_req_id.get(req_id)
-                if turn is not None:
-                    self._bind_item_id_to_turn(turn, item_id)
-        if turn is None:
-            return
-        if item_id and not turn.user_item_id:
-            turn.user_item_id = item_id
-        if transcript:
-            turn.user_transcript = transcript
-            if turn.phase == TURN_PHASE_FINALIZED:
-                self._maybe_note_preference_turn(turn)
-
-        usage = event.get("usage", {}) or {}
-        if isinstance(usage, dict):
-            cost_fields = estimate_transcription_cost(
-                usage,
-                model_name=self.realtime_profile.transcription_model,
-            )
-            session_total_cost_usd = self._bump_session_estimated_cost(
-                cost_fields.get("estimated_cost_usd")
-            )
-            self._latency.emit(
-                event="transcription_usage",
-                req_id=turn.req_id,
-                session_id=getattr(self, "_session_id", "") or None,
-                item_id=item_id or None,
-                model=self.realtime_profile.transcription_model,
-                input_tokens=usage.get("input_tokens"),
-                output_tokens=usage.get("output_tokens"),
-                total_tokens=usage.get("total_tokens"),
-                input_audio_tokens=cost_fields.get("input_audio_tokens"),
-                output_text_tokens=cost_fields.get("output_text_tokens"),
-                estimated_cost_usd=cost_fields.get("estimated_cost_usd"),
-                session_total_cost_usd=session_total_cost_usd,
-            )
+        self._server_event_runtime_controller().handle_input_transcription_completed(event)
 
     def _handle_input_transcription_failed(self, event: dict[str, Any]) -> None:
-        item_id = str(event.get("item_id") or "").strip()
-        turn = self._resolve_turn_for_item(item_id) if item_id else None
-        if turn is None and item_id:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
-            if req_id:
-                turn = self._turns_by_req_id.get(req_id)
-                if turn is not None:
-                    self._bind_item_id_to_turn(turn, item_id)
-                    if not turn.user_item_id:
-                        turn.user_item_id = item_id
-        error = event.get("error", {}) or {}
-        if not isinstance(error, dict):
-            error = {}
-        self.logger.warning(
-            "Input transcription failed req_id=%s item_id=%s type=%s code=%s message=%s",
-            getattr(turn, "req_id", "<unknown>"),
-            item_id or "<unknown>",
-            error.get("type", "unknown"),
-            error.get("code", "unknown"),
-            error.get("message", "unknown"),
-        )
+        self._server_event_runtime_controller().handle_input_transcription_failed(event)
 
     def _handle_output_audio_delta(self, event: dict[str, Any]) -> None:
-        response_id = server_event_response_id(event)
-        item_id = server_event_item_id(event)
-        turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
-        if turn is None:
-            if response_id or item_id:
-                self.logger.warning(
-                    "Ignoring output audio for unknown response_id=%s item_id=%s",
-                    response_id,
-                    item_id,
-                )
-            return
-        if self._is_turn_terminal(turn):
-            return
-        if response_id:
-            self._bind_response_id(turn, response_id)
-        if item_id:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id
-            turn.assistant_item_ids.add(item_id)
-        audio_bytes = base64.b64decode(str(event.get("delta", "") or ""))
-        if not audio_bytes:
-            return
-        self._playback_buffer.append(audio_bytes)
-        if turn.audio_started:
-            if response_id and response_id != self._playback_stream_id:
-                with self._turn_lock:
-                    self._playback_req_id = turn.req_id
-                    self._playback_stream_id = response_id
-                    self._playback_item_id = turn.assistant_item_id
-                    self._played_output_frames = 0
-                turn.last_playback_progress_at = time.time()
-                self.engagement.on_playback_event(
-                    "playback_started",
-                    turn.req_id,
-                    stream_id=response_id,
-                )
-            return
-        turn.audio_started = True
-        turn.audio_started_at = time.time()
-        turn.last_playback_progress_at = turn.audio_started_at
-        self._set_turn_phase(turn, TURN_PHASE_PLAYING)
-        if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
-            first_audio_perf = perf_now()
-            self._latency.timing(
-                "first_audio_latency_s",
-                first_audio_perf - turn.speech_end_perf_s,
-                req_id=turn.req_id,
-            )
-        self.engagement.on_agent_output_started(
-            turn.req_id,
-            stream_id=turn.response_id,
-        )
-        self._set_display_mode_async("speaking")
-        with self._turn_lock:
-            self._playback_req_id = turn.req_id
-            self._playback_stream_id = turn.response_id
-            self._playback_item_id = turn.assistant_item_id
-            self._played_output_frames = 0
-        self.engagement.on_playback_event(
-            "playback_started",
-            turn.req_id,
-            stream_id=turn.response_id,
-        )
+        self._server_event_runtime_controller().handle_output_audio_delta(event)
 
     def _handle_output_transcript_delta(self, event: dict[str, Any]) -> None:
-        delta = str(event.get("delta", "") or "")
-        if not delta:
-            return
-        response_id = server_event_response_id(event)
-        item_id = server_event_item_id(event)
-        turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
-        if turn is None:
-            return
-        if self._is_turn_terminal(turn) and turn.phase != TURN_PHASE_FINALIZED:
-            return
-        if item_id:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id or turn.assistant_item_id
-            turn.assistant_item_ids.add(item_id)
-        turn.assistant_transcript += delta
-        self._show_display_subtitle_async(
-            self._display_subtitle_window(turn.assistant_transcript),
-            duration_ms=5000,
-        )
-        if turn.phase == TURN_PHASE_FINALIZED:
-            self._maybe_note_preference_turn(turn)
+        self._server_event_runtime_controller().handle_output_transcript_delta(event)
 
     def _handle_output_text_delta(self, event: dict[str, Any]) -> None:
-        delta = str(event.get("delta", "") or "")
-        if not delta:
-            return
-        response_id = server_event_response_id(event)
-        item_id = server_event_item_id(event)
-        turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
-        if turn is None:
-            return
-        if self._is_turn_terminal(turn) and turn.phase != TURN_PHASE_FINALIZED:
-            return
-        if item_id:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id or turn.assistant_item_id
-            turn.assistant_item_ids.add(item_id)
-        turn.assistant_transcript += delta
-        self._show_display_subtitle_async(
-            self._display_subtitle_window(turn.assistant_transcript),
-            duration_ms=5000,
-        )
-        if turn.phase == TURN_PHASE_FINALIZED:
-            self._maybe_note_preference_turn(turn)
+        self._server_event_runtime_controller().handle_output_text_delta(event)
 
     def _arm_playback_completion(self, turn: QueuedTurn) -> None:
-        if turn.playback_completion_armed:
-            return
-        turn.playback_completion_armed = True
-        stream_id = str(turn.response_id or self._playback_stream_id or "").strip()
-        self.engagement.on_agent_done(has_reply=True, req_id=turn.req_id)
-        threading.Thread(
-            target=self._wait_for_playback_and_complete,
-            args=(turn, stream_id),
-            daemon=True,
-        ).start()
+        self._server_event_runtime_controller().arm_playback_completion(turn)
 
     def _handle_output_item_done(self, event: dict[str, Any]) -> None:
-        item = server_event_item(event)
-        item_id = server_event_item_id(event, item=item)
-        response_id = server_event_response_id(event, item=item)
-        turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
-        if turn is None or self._is_turn_terminal(turn):
-            return
-        if response_id:
-            self._bind_response_id(turn, response_id)
-        if item_id:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id or turn.assistant_item_id
-            turn.assistant_item_ids.add(item_id)
-        item_type = str(item.get("type", "") or "").strip()
-        role = str(item.get("role", "") or "").strip()
-        status = str(item.get("status", "") or "").strip()
-        if item_type != "message" or role != "assistant":
-            return
-        if status != "completed" or not turn.audio_started:
-            return
-        self._arm_playback_completion(turn)
+        self._server_event_runtime_controller().handle_output_item_done(event)
 
     def _handle_function_call_delta(self, event: dict[str, Any]) -> None:
-        item_id = str(event.get("item_id", "") or "")
-        if not item_id:
-            return
-        bucket = self._pending_function_args.setdefault(item_id, {})
-        if event.get("call_id") is not None:
-            bucket["call_id"] = str(event.get("call_id") or "")
-        if event.get("name") is not None:
-            bucket["name"] = str(event.get("name") or "")
-        if event.get("response_id") is not None:
-            bucket["response_id"] = str(event.get("response_id") or "")
-        bucket["arguments"] = bucket.get("arguments", "") + str(event.get("delta", "") or "")
-
-        response_id = bucket.get("response_id", "")
-        turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
-        if turn is not None:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.function_call_item_ids.add(item_id)
+        self._server_event_runtime_controller().handle_function_call_delta(event)
 
     def _handle_function_call_done(self, event: dict[str, Any]) -> None:
-        item_id = str(event.get("item_id", "") or "")
-        call_id = str(event.get("call_id", "") or "")
-        tool_name = str(event.get("name", "") or "")
-        arguments_json = str(event.get("arguments", "") or "")
-        cached = self._pending_function_args.pop(item_id, None) if item_id else None
-        response_id = str(event.get("response_id", "") or "")
-        if cached:
-            call_id = call_id or cached.get("call_id", "")
-            tool_name = tool_name or cached.get("name", "")
-            arguments_json = arguments_json or cached.get("arguments", "")
-            response_id = response_id or cached.get("response_id", "")
-        turn = self._resolve_turn_for_output(
-            response_id=response_id,
-            item_id=item_id,
-            call_id=call_id,
-        )
-        if turn is None or self._is_turn_terminal(turn):
-            return
-        if not call_id or not tool_name:
-            self.logger.warning("Ignoring incomplete function call payload")
-            return
-        self._cancel_owner_turn_for_tool(turn, tool_name)
-        self._call_id_to_req_id[call_id] = turn.req_id
-        if item_id:
-            self._bind_item_id_to_turn(turn, item_id)
-            turn.function_call_item_ids.add(item_id)
-        turn.pending_tool_calls += 1
-        turn.pending_call_ids.add(call_id)
-        self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
-        self._tool_queue.put(
-            PendingToolCall(
-                turn_req_id=turn.req_id,
-                call_id=call_id,
-                tool_name=tool_name,
-                arguments_json=arguments_json or "{}",
-                function_item_id=item_id,
-            )
-        )
+        self._server_event_runtime_controller().handle_function_call_done(event)
 
     def _handle_response_done(self, event: dict[str, Any]) -> None:
-        response = server_event_response(event)
-        response_id = server_event_response_id(event, response=response)
-        turn = self._resolve_turn_for_output(response_id=response_id)
-        if turn is None:
-            self.logger.warning("Ignoring response.done for unknown response_id=%s", response_id)
-            return
-        if self._is_turn_terminal(turn):
-            return
-        if turn.interrupted:
-            turn.response_finished.set()
-            turn.playback_finished.set()
-            return
-        turn.response_done_at = time.time()
-        if response_id:
-            self._bind_response_id(turn, response_id)
-        status = str(response.get("status", "unknown") or "unknown").strip()
-        self._emit_response_usage(turn, response)
-        if not turn.assistant_transcript:
-            turn.assistant_transcript = self._transcript_from_response(response)
-        output_items = response.get("output", []) or []
-        for output_item in output_items:
-            item_id = str(output_item.get("id", "") or "").strip()
-            item_type = str(output_item.get("type", "") or "").strip()
-            if item_id:
-                self._bind_item_id_to_turn(turn, item_id)
-                if item_type == "function_call":
-                    turn.function_call_item_ids.add(item_id)
-                elif item_type == "message":
-                    turn.assistant_item_ids.add(item_id)
-                    if not turn.assistant_item_id:
-                        turn.assistant_item_id = item_id
-        has_function_call = any(
-            str(item.get("type", "") or "") == "function_call" for item in output_items
-        )
-        if has_function_call or turn.pending_tool_calls > 0:
-            self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
-            return
-
-        incomplete_details = response.get("incomplete_details")
-        has_audio_reply = turn.audio_started
-        if status == "incomplete" and has_audio_reply:
-            self.logger.warning(
-                "Realtime response finished incomplete after audio started req_id=%s response_id=%s incomplete_details=%s transcript=%r",
-                turn.req_id,
-                response_id,
-                incomplete_details,
-                turn.assistant_transcript.strip(),
-            )
-            if self._should_continue_incomplete_audio_reply(turn):
-                self._continue_incomplete_audio_reply(turn)
-                return
-        elif status != "completed":
-            self.logger.warning(
-                "Realtime response ended without completion req_id=%s response_id=%s status=%s incomplete_details=%s output_types=%s transcript=%r",
-                turn.req_id,
-                response_id,
-                status,
-                incomplete_details,
-                self._response_output_types(response),
-                turn.assistant_transcript.strip(),
-            )
-            self._cleanup_silent_response_items(turn, response)
-            self._terminate_turn(
-                turn,
-                TURN_PHASE_CANCELED,
-                f"response_status_{status or 'unknown'}",
-                send_cancel=False,
-            )
-            return
-
-        if not has_audio_reply:
-            if self._retry_no_audio_response(turn, response):
-                return
-            self.logger.error(
-                "Realtime response completed without audio req_id=%s response_id=%s retries=%s status=%s incomplete_details=%s output_types=%s transcript=%r",
-                turn.req_id,
-                response_id,
-                turn.no_audio_retry_count,
-                status,
-                incomplete_details,
-                self._response_output_types(response),
-                turn.assistant_transcript.strip(),
-            )
-            self._cleanup_silent_response_items(turn, response)
-            self._terminate_turn(
-                turn,
-                TURN_PHASE_CANCELED,
-                "response_completed_without_audio",
-                send_cancel=False,
-            )
-            return
-
-        turn.response_finished.set()
-        if has_audio_reply:
-            self._arm_playback_completion(turn)
-        else:
-            self.engagement.on_agent_done(has_reply=False, req_id=turn.req_id)
+        self._server_event_runtime_controller().handle_response_done(event)
 
     def _handle_server_error(self, event: dict[str, Any]) -> None:
-        error = event.get("error", {})
-        self.logger.error(
-            "Realtime server error type=%s message=%s",
-            error.get("type", "unknown"),
-            error.get("message", "unknown"),
-        )
-        response_id = str(error.get("response_id", "") or "").strip()
-        turn = self._resolve_turn_for_output(response_id=response_id)
-        if turn is None:
-            with self._turn_lock:
-                turn = self._active_turn
-        if turn is not None:
-            self._terminate_turn(turn, TURN_PHASE_CANCELED, "server_error")
+        self._server_event_runtime_controller().handle_server_error(event)
 
     def _supersede_unanswered_turn(self, new_turn: QueuedTurn) -> None:
         with self._turn_lock:
@@ -1783,7 +1721,8 @@ class RealtimeRobotAgent(
             turn.pending_response_requests,
         )
         played_ms = 0
-        self._discard_pending_response_turn(turn.req_id)
+        if not self._mark_pending_response_turn_stale(turn.req_id):
+            self._discard_pending_response_turn(turn.req_id)
         with self._turn_lock:
             if self._playback_req_id == turn.req_id:
                 played_ms = int(

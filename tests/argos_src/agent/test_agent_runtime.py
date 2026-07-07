@@ -153,6 +153,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     class _FakeEngagementStateMachine:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            created.setdefault("engagements", []).append(self)
 
         def attach_coalescer(self, coalescer):
             self.coalescer = coalescer
@@ -169,6 +170,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     class _FakeEventCoalescer:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            created.setdefault("coalescers", []).append(self)
 
         def submit(self, *args, **kwargs):
             return None
@@ -525,6 +527,7 @@ def _make_agent():
     agent._turn_queue = queue.Queue()
     agent._tool_queue = queue.Queue()
     agent._playback_buffer = realtime_mod.PlaybackBuffer()
+    agent._capture_state = "admission_closed"
     agent._played_output_frames = 0
     agent._playback_req_id = ""
     agent._playback_stream_id = ""
@@ -536,6 +539,8 @@ def _make_agent():
     agent._call_id_to_req_id = {}
     agent._pending_function_args = {}
     agent._pending_response_turn_req_ids = deque()
+    agent._expired_stale_response_turn_req_ids = deque()
+    agent._stale_response_deadlines_by_req_id = {}
     agent._pending_audio_turn_req_ids = deque()
     agent._pending_audio_item_ids = deque()
     agent._pending_local_created_items = deque()
@@ -653,7 +658,7 @@ def test_send_event_stops_runtime_when_websocket_is_already_closed():
         def send(self, _payload):
             raise RuntimeError("socket is already closed.")
 
-    agent._send_event = realtime_mod.RealtimeAgentStateMixin._send_event.__get__(
+    agent._send_event = realtime_mod.AgentStateRuntime._send_event.__get__(
         agent,
         realtime_mod.RealtimeRobotAgent,
     )
@@ -1434,7 +1439,7 @@ def test_completed_output_item_arms_playback_completion_before_response_done():
     assert agent.engagement.playback_events[-1][0] == "playback_completed"
 
 
-def test_terminated_turn_is_removed_from_pending_response_queue():
+def test_terminated_precreated_turn_stays_as_stale_response_queue_head():
     agent = _make_agent()
     old_turn = _make_turn("rt-old-pending")
     new_turn = _make_turn("rt-new-pending")
@@ -1449,12 +1454,216 @@ def test_terminated_turn_is_removed_from_pending_response_queue():
         send_cancel=False,
     )
 
-    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert list(agent._pending_response_turn_req_ids) == [
+        old_turn.req_id,
+        new_turn.req_id,
+    ]
+
+    stale = agent._consume_pending_response_turn("resp-stale-old")
+    assert stale is old_turn
+    assert old_turn.response_id == "resp-stale-old"
 
     resolved = agent._consume_pending_response_turn("resp-new")
     assert resolved is new_turn
     assert new_turn.response_id == "resp-new"
     assert agent._response_id_to_req_id["resp-new"] == new_turn.req_id
+
+
+def test_expired_stale_pending_response_is_not_bound_to_later_turn(monkeypatch):
+    agent = _make_agent()
+    old_turn = _make_turn("rt-old-pending")
+    new_turn = _make_turn("rt-new-pending")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
+
+    now = 100.0
+    monkeypatch.setattr(realtime_mod.time, "time", lambda: now)
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel_before_response_created",
+        send_cancel=False,
+    )
+    now += realtime_mod.RESPONSE_STALL_TIMEOUT_SEC + 1.0
+
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-ambiguous-late"},
+        }
+    )
+
+    assert old_turn.response_id == "resp-ambiguous-late"
+    assert new_turn.response_id == ""
+    assert agent._response_id_to_req_id["resp-ambiguous-late"] == old_turn.req_id
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert agent._sent_events[-2] == {
+        "type": "response.cancel",
+        "response_id": "resp-ambiguous-late",
+    }
+    assert agent._sent_events[-1]["type"] == "response.create"
+
+
+def test_expired_stale_response_reissues_pending_live_turn(monkeypatch):
+    agent = _make_agent()
+    old_turn = _make_turn("rt-old-pending")
+    new_turn = _make_turn("rt-new-pending")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.append(old_turn.req_id)
+
+    now = 100.0
+    monkeypatch.setattr(realtime_mod.time, "time", lambda: now)
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel_before_response_created",
+        send_cancel=False,
+    )
+    now += realtime_mod.RESPONSE_STALL_TIMEOUT_SEC + 1.0
+
+    agent._send_response_create(new_turn)
+    assert new_turn.pending_response_requests == 1
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert list(agent._expired_stale_response_turn_req_ids) == [old_turn.req_id]
+
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-ambiguous-late"},
+        }
+    )
+
+    assert old_turn.response_id == "resp-ambiguous-late"
+    assert new_turn.response_id == ""
+    assert new_turn.pending_response_requests == 1
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert agent._sent_events[-3]["type"] == "response.create"
+    assert agent._sent_events[-2] == {
+        "type": "response.cancel",
+        "response_id": "resp-ambiguous-late",
+    }
+    assert agent._sent_events[-1]["type"] == "response.create"
+
+
+def test_stale_response_created_after_pending_cancel_is_not_bound_to_next_turn():
+    agent = _make_agent()
+    old_turn = _make_turn("rt-old-pending")
+    new_turn = _make_turn("rt-new-pending")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
+
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel_before_response_created",
+        send_cancel=False,
+    )
+
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-stale-old"},
+        }
+    )
+
+    assert new_turn.response_id == ""
+    assert agent._response_id_to_req_id["resp-stale-old"] == old_turn.req_id
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert agent._sent_events[-1] == {
+        "type": "response.cancel",
+        "response_id": "resp-stale-old",
+    }
+
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-new"},
+        }
+    )
+
+    assert new_turn.response_id == "resp-new"
+    assert agent._response_id_to_req_id["resp-new"] == new_turn.req_id
+
+
+def test_canceled_tool_followup_response_stays_as_stale_queue_head():
+    agent = _make_agent()
+    old_turn = _make_turn("rt-tool-followup")
+    old_turn.response_id = "resp-initial-tool-call"
+    old_turn.pending_response_requests = 1
+    new_turn = _make_turn("rt-new-after-tool")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
+
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel_tool_followup_before_response_created",
+        send_cancel=False,
+    )
+
+    assert list(agent._pending_response_turn_req_ids) == [
+        old_turn.req_id,
+        new_turn.req_id,
+    ]
+
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-stale-followup"},
+        }
+    )
+
+    assert old_turn.response_id == "resp-stale-followup"
+    assert new_turn.response_id == ""
+    assert agent._response_id_to_req_id["resp-stale-followup"] == old_turn.req_id
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert agent._sent_events[-1] == {
+        "type": "response.cancel",
+        "response_id": "resp-stale-followup",
+    }
+
+
+def test_expired_stale_tool_followup_reissues_pending_live_turn(monkeypatch):
+    agent = _make_agent()
+    old_turn = _make_turn("rt-tool-followup")
+    old_turn.response_id = "resp-initial-tool-call"
+    old_turn.pending_response_requests = 1
+    new_turn = _make_turn("rt-new-after-tool")
+    agent._turns_by_req_id[old_turn.req_id] = old_turn
+    agent._turns_by_req_id[new_turn.req_id] = new_turn
+    agent._pending_response_turn_req_ids.append(old_turn.req_id)
+
+    now = 200.0
+    monkeypatch.setattr(realtime_mod.time, "time", lambda: now)
+    agent._terminate_turn(
+        old_turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "test_cancel_tool_followup_before_response_created",
+        send_cancel=False,
+    )
+    now += realtime_mod.RESPONSE_STALL_TIMEOUT_SEC + 1.0
+
+    agent._send_response_create(new_turn)
+    agent._handle_response_created(
+        {
+            "type": "response.created",
+            "response": {"id": "resp-ambiguous-followup"},
+        }
+    )
+
+    assert old_turn.response_id == "resp-ambiguous-followup"
+    assert new_turn.response_id == ""
+    assert new_turn.pending_response_requests == 1
+    assert list(agent._pending_response_turn_req_ids) == [new_turn.req_id]
+    assert agent._sent_events[-2] == {
+        "type": "response.cancel",
+        "response_id": "resp-ambiguous-followup",
+    }
+    assert agent._sent_events[-1]["type"] == "response.create"
 
 
 def test_response_request_omits_output_budget_when_uncapped():
@@ -1984,10 +2193,13 @@ def test_repeated_missing_owner_turn_flushes_preference_segment_only_once():
 def test_internal_text_turn_uses_system_role_message():
     agent = _make_agent()
     followups = []
-    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
-    agent._wait_for_turn_settled = (
-        lambda turn: (turn.response_finished.set(), turn.playback_finished.set())
-    )
+
+    def _send_response_create(queued_turn):
+        followups.append(queued_turn.req_id)
+        queued_turn.response_finished.set()
+        queued_turn.playback_finished.set()
+
+    agent._send_response_create = _send_response_create
     turn = _make_turn(
         "evt-system",
         kind="text",
@@ -2025,14 +2237,12 @@ def test_external_text_turn_resolves_single_visible_owner_for_live_chat_memory()
     agent.preference_extractor = SimpleNamespace(
         extract_and_store_segment=lambda segment: seen.append(segment)
     )
-    agent._send_response_create = lambda queued_turn: None
-    agent._wait_for_turn_settled = (
-        lambda turn: (
-            setattr(turn, "assistant_transcript", "nice"),
-            turn.response_finished.set(),
-            turn.playback_finished.set(),
-        )
-    )
+    def _send_response_create(queued_turn):
+        queued_turn.assistant_transcript = "nice"
+        queued_turn.response_finished.set()
+        queued_turn.playback_finished.set()
+
+    agent._send_response_create = _send_response_create
 
     agent.enqueue_internal_event(
         "[PENDING EVENTS]\n- NAV_EVENT: reached desk\n[HUMAN INPUT]\nmy dog is luna",
@@ -2250,6 +2460,9 @@ def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(mo
     assert created["slack_services"][0].kwargs["episode_recorder"] is provider
     assert created["slack_services"][0].started is True
     assert agent.kwargs["slack_memory_service"] is created["slack_services"][0]
+    assert agent.kwargs["state_observer"] is not None
+    assert created["engagements"][0].kwargs["state_observer"] is agent.kwargs["state_observer"]
+    assert created["coalescers"][0].kwargs["state_observer"] is agent.kwargs["state_observer"]
 
 
 def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(monkeypatch):
@@ -2325,10 +2538,13 @@ def test_factory_memory_query_tools_create_tailwag_provider_without_face_runtime
 def test_audio_turn_pending_internal_text_uses_system_role_message():
     agent = _make_agent()
     followups = []
-    agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
-    agent._wait_for_turn_settled = (
-        lambda turn: (turn.response_finished.set(), turn.playback_finished.set())
-    )
+
+    def _send_response_create(queued_turn):
+        followups.append(queued_turn.req_id)
+        queued_turn.response_finished.set()
+        queued_turn.playback_finished.set()
+
+    agent._send_response_create = _send_response_create
     turn = _make_turn(
         "rt-audio-system",
         kind="audio",

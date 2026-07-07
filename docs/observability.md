@@ -16,6 +16,7 @@ The primary structured-log components are:
 - `realtime`
 - `tool`
 - `action`
+- `state`
 
 Cost visibility is folded into those same structured events rather than written to a
 separate billing log.
@@ -48,6 +49,34 @@ Typical human turn flow:
 | `realtime` | `event=response_usage` | final token/caching usage from `response.done`, including modality token counts and estimated response cost |
 
 This is the main felt-latency path now.
+
+## State Transition Markers
+
+The realtime control plane also emits structured state events:
+
+| component | event | meaning |
+|---|---|---|
+| `state` | `event=transition` | One control-plane state axis moved from `old_state` to `new_state`. |
+| `state` | `event=ignored` | A trigger was intentionally ignored, with `ignored_reason`. |
+
+Typical fields are:
+
+- `axis`
+- `old_state`
+- `new_state`
+- `trigger`
+- `req_id`
+- `stream_id`
+- `ignored_reason`
+
+These records are meant for debugging and future evaluation dashboards. They
+complement the latency markers rather than replacing them.
+
+Robot arbitration transitions currently cover patrol resume suppression/allow
+decisions and proactive face-attention suppression/allow decisions. Common
+states include `patrol_allowed`, `patrol_suppressed`,
+`battery_low_blocking`, `face_attention_allowed`, and
+`face_attention_suppressed`.
 
 ## Tool Timing
 
@@ -100,7 +129,89 @@ Aggregate summary:
 
 ```bash
 python3 -m argos_src.observability.latency_report
+python3 -m argos_src.observability.state_report
 ```
+
+## Dashboard
+
+The repo now includes a long-term dashboard shell under `dashboard/`:
+
+- FastAPI API and static host:
+  `argos_src.observability.dashboard_server:app`
+- log indexing and session/interaction aggregation:
+  `argos_src.observability.dashboard_data`
+- Vite React frontend:
+  `dashboard/`
+
+Run the API locally:
+
+```bash
+source setup_shell.sh
+uvicorn argos_src.observability.dashboard_server:app --host 127.0.0.1 --port 8765 --reload
+```
+
+Run the frontend locally:
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173` during development. After `npm run build`, the
+FastAPI app serves the built dashboard from `http://127.0.0.1:8765`.
+
+The API reads `logs/latency.log` by default. Override with
+`ARGOS_DASHBOARD_LOG_PATH=/path/to/latency.log`.
+
+### Viewing A Jetson Dashboard From Your PC
+
+Preferred: use an SSH tunnel so the dashboard is not exposed to the whole
+network.
+
+On the Jetson:
+
+```bash
+cd ~/argos-agent
+source setup_shell.sh
+cd dashboard
+npm install
+npm run build
+cd ..
+uvicorn argos_src.observability.dashboard_server:app --host 127.0.0.1 --port 8765
+```
+
+On your PC:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 USER@JETSON_HOST
+```
+
+Then open `http://127.0.0.1:8765` on your PC.
+
+Less preferred: bind the dashboard to the Jetson network interface and open it
+directly from the PC:
+
+```bash
+uvicorn argos_src.observability.dashboard_server:app --host 0.0.0.0 --port 8765
+```
+
+Then open `http://JETSON_HOST:8765`. Use this only on a trusted network because
+the dashboard is an operator tool and does not currently include authentication.
+
+The main endpoint is:
+
+```text
+GET /api/snapshot
+```
+
+It returns:
+
+- session summaries
+- per-interaction timelines keyed by `req_id`
+- state transitions and ignored state events
+- latency metrics such as `first_audio_latency_s`
+- tool usage, cost fields, component counts, and detected error markers
 
 ## What To Look For
 

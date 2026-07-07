@@ -5,8 +5,8 @@ Read this with:
 - `resources/prompts/static_interaction_prompt.md`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
-- `argos_src/agent/agent_tools.py`
-- `argos_src/agent/agent_state.py`
+- `argos_src/agent/control/tool_runtime.py`
+- `argos_src/agent/control/state_runtime.py`
 
 This document explains what the realtime model actually sees on each turn:
 
@@ -234,7 +234,7 @@ These events are assembled into a `PendingToolCall`.
 
 ### Step 2: Python executes the tool locally
 
-`RealtimeAgentToolsMixin._execute_tool_call(...)` invokes the registered tool and updates:
+`ToolRuntime.execute(...)` invokes the registered tool and updates:
 
 - `_last_tool_name`
 - `_last_tool_summary`

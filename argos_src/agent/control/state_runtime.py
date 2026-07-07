@@ -1,4 +1,4 @@
-"""State, history, and transport helpers for the Argos agent runtime."""
+"""State, history, and transport helpers for the realtime control runtime."""
 
 from __future__ import annotations
 
@@ -14,17 +14,51 @@ import websocket
 from argos_src.agent.realtime_turns import (
     INCOMPLETE_AUDIO_CONTINUATION_LIMIT,
     NO_AUDIO_RESPONSE_RETRY_LIMIT,
+    RESPONSE_STALL_TIMEOUT_SEC,
     TERMINAL_TURN_PHASES,
     TURN_PHASE_FINALIZED,
     FrozenTurnContext,
     PendingCreatedItem,
     QueuedTurn,
 )
+from argos_src.agent.control.observers import safe_transition
+from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.turn_store import PendingResponseBindingStore, ResponseBinding
+from argos_src.agent.control.types import StateAxis, StateTransition
 from argos_src.face_recognition.models import PersonContext
 from argos_src.identity.prompting import format_identity_profile_lines
 
 
-class RealtimeAgentStateMixin:
+class AgentStateRuntime:
+    """State/history/transport helper surface for the realtime agent.
+
+    The class can still be subclassed by focused tests. In production it is
+    composed by `RealtimeRobotAgent` and proxies field access to that host.
+    """
+
+    def __init__(self, host: Any | None = None) -> None:
+        if host is not None:
+            object.__setattr__(self, "_host", host)
+
+    def __getattr__(self, name: str) -> Any:
+        host = object.__getattribute__(self, "__dict__").get("_host")
+        if host is None:
+            raise AttributeError(name)
+        return getattr(host, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_host":
+            object.__setattr__(self, name, value)
+            return
+        host = object.__getattribute__(self, "__dict__").get("_host")
+        if host is None:
+            object.__setattr__(self, name, value)
+            return
+        setattr(host, name, value)
+
+    def _transport_host(self) -> Any:
+        return object.__getattribute__(self, "__dict__").get("_host") or self
+
     def _enrich_person_context_with_memory(self, person: PersonContext) -> PersonContext:
         compiler = getattr(self, "memory_context_compiler", None)
         if compiler is None:
@@ -79,7 +113,7 @@ class RealtimeAgentStateMixin:
         if rendered_role not in {"user", "system"}:
             raise ValueError(f"Unsupported realtime text message role: {role!r}")
         self._queue_pending_local_created_item(turn.req_id, "message", rendered_role)
-        self._send_event(
+        self._transport_host()._send_event(
             {
                 "type": "conversation.item.create",
                 "item": {
@@ -264,11 +298,99 @@ class RealtimeAgentStateMixin:
     def _set_turn_phase(self, turn: QueuedTurn, phase: str) -> None:
         if turn.phase == phase:
             return
+        old_phase = turn.phase
         turn.phase = phase
         turn.phase_updated_at = time.time()
+        safe_transition(
+            getattr(self, "_state_observer", None),
+            StateTransition(
+                axis=StateAxis.TURN,
+                old_state=old_phase,
+                new_state=phase,
+                trigger="set_turn_phase",
+                req_id=turn.req_id,
+                fields={
+                    "audio_started": bool(getattr(turn, "audio_started", False)),
+                    "pending_tool_calls": int(getattr(turn, "pending_tool_calls", 0) or 0),
+                    "pending_response_requests": int(
+                        getattr(turn, "pending_response_requests", 0) or 0
+                    ),
+                },
+            ),
+        )
 
     def _is_turn_terminal(self, turn: Optional[QueuedTurn]) -> bool:
         return turn is None or turn.phase in TERMINAL_TURN_PHASES or turn.finalized
+
+    def _response_bindings(self) -> PendingResponseBindingStore:
+        store = getattr(self, "_response_binding_store", None)
+        pending_req_ids = getattr(self, "_pending_response_turn_req_ids", None)
+        if pending_req_ids is None:
+            pending_req_ids = deque()
+            self._pending_response_turn_req_ids = pending_req_ids
+        stale_deadlines = getattr(self, "_stale_response_deadlines_by_req_id", None)
+        if stale_deadlines is None:
+            stale_deadlines = {}
+            self._stale_response_deadlines_by_req_id = stale_deadlines
+        expired_stale_req_ids = getattr(self, "_expired_stale_response_turn_req_ids", None)
+        if expired_stale_req_ids is None:
+            expired_stale_req_ids = deque()
+            self._expired_stale_response_turn_req_ids = expired_stale_req_ids
+        response_id_to_req_id = getattr(self, "_response_id_to_req_id", None)
+        if response_id_to_req_id is None:
+            response_id_to_req_id = {}
+            self._response_id_to_req_id = response_id_to_req_id
+        turns_by_req_id = getattr(self, "_turns_by_req_id", None)
+        if turns_by_req_id is None:
+            turns_by_req_id = {}
+            self._turns_by_req_id = turns_by_req_id
+        if (
+            store is None
+            or store.pending_req_ids is not pending_req_ids
+            or store.expired_stale_req_ids is not expired_stale_req_ids
+            or store.stale_deadlines_by_req_id is not stale_deadlines
+            or store.response_id_to_req_id is not response_id_to_req_id
+            or store.turns_by_req_id is not turns_by_req_id
+        ):
+            store = PendingResponseBindingStore(
+                turns_by_req_id=turns_by_req_id,
+                is_terminal=self._is_turn_terminal,
+                pending_req_ids=pending_req_ids,
+                expired_stale_req_ids=expired_stale_req_ids,
+                stale_deadlines_by_req_id=stale_deadlines,
+                response_id_to_req_id=response_id_to_req_id,
+                now=time.time,
+            )
+            self._response_binding_store = store
+        return store
+
+    def _history_index(self) -> OwnerScopedHistoryIndex:
+        store = getattr(self, "_history_index_store", None)
+        item_order = getattr(self, "_history_item_order", None)
+        if item_order is None:
+            item_order = deque()
+            self._history_item_order = item_order
+        known_item_ids = getattr(self, "_known_history_item_ids", None)
+        if known_item_ids is None:
+            known_item_ids = set()
+            self._known_history_item_ids = known_item_ids
+        item_owner_req_id = getattr(self, "_history_item_owner_req_id", None)
+        if item_owner_req_id is None:
+            item_owner_req_id = {}
+            self._history_item_owner_req_id = item_owner_req_id
+        if (
+            store is None
+            or store.item_order is not item_order
+            or store.known_item_ids is not known_item_ids
+            or store.item_owner_req_id is not item_owner_req_id
+        ):
+            store = OwnerScopedHistoryIndex(
+                item_order=item_order,
+                known_item_ids=known_item_ids,
+                item_owner_req_id=item_owner_req_id,
+            )
+            self._history_index_store = store
+        return store
 
     def _bind_response_id(self, turn: QueuedTurn, response_id: str) -> None:
         rendered = str(response_id or "").strip()
@@ -332,22 +454,58 @@ class RealtimeAgentStateMixin:
         *,
         consume_only_if_missing: bool = True,
     ) -> Optional[QueuedTurn]:
-        rendered = str(response_id or "").strip()
-        if not rendered:
-            return None
+        binding = self._consume_pending_response_binding(
+            response_id,
+            consume_only_if_missing=consume_only_if_missing,
+        )
+        return binding.turn if binding is not None else None
+
+    def _consume_pending_response_binding(
+        self,
+        response_id: str,
+        *,
+        consume_only_if_missing: bool = True,
+    ) -> ResponseBinding | None:
         with self._turn_lock:
-            existing_req_id = self._response_id_to_req_id.get(rendered, "")
-            if existing_req_id and consume_only_if_missing:
-                return self._turns_by_req_id.get(existing_req_id)
+            return self._response_bindings().consume_binding(
+                response_id,
+                consume_only_if_missing=consume_only_if_missing,
+            )
+
+    def _queue_pending_response_turn(self, req_id: str) -> None:
+        with self._turn_lock:
+            self._response_bindings().queue(req_id)
+
+    def _mark_pending_response_turn_stale(self, req_id: str) -> bool:
+        with self._turn_lock:
+            return self._response_bindings().mark_stale(
+                req_id,
+                timeout_s=RESPONSE_STALL_TIMEOUT_SEC,
+            )
+
+    def _pending_stale_response_deadline(self) -> float | None:
+        with self._turn_lock:
+            return self._response_bindings().next_stale_deadline()
+
+    def _next_pending_response_turn(self) -> Optional[QueuedTurn]:
+        with self._turn_lock:
             while self._pending_response_turn_req_ids:
-                req_id = self._pending_response_turn_req_ids.popleft()
+                req_id = self._pending_response_turn_req_ids[0]
                 turn = self._turns_by_req_id.get(req_id)
                 if turn is None or self._is_turn_terminal(turn):
+                    self._discard_pending_response_turn(req_id)
                     continue
-                self._response_id_to_req_id[rendered] = req_id
-                turn.response_id = rendered
                 return turn
         return None
+
+    def _wait_for_stale_response_slot(self) -> bool:
+        while not self._stop_event.is_set():
+            deadline = self._pending_stale_response_deadline()
+            if deadline is None:
+                return True
+            wait_s = max(0.0, min(0.05, float(deadline) - time.time()))
+            self._stop_event.wait(wait_s)
+        return False
 
     def _conversation_item_looks_like_audio_input(self, item: dict[str, Any]) -> bool:
         for content in item.get("content", []) or []:
@@ -361,11 +519,7 @@ class RealtimeAgentStateMixin:
         if not rendered:
             return
         with self._turn_lock:
-            if rendered not in self._known_history_item_ids:
-                self._known_history_item_ids.add(rendered)
-                self._history_item_order.append(rendered)
-            if owner_req_id:
-                self._history_item_owner_req_id[rendered] = owner_req_id
+            self._history_index().register(rendered, owner_req_id=owner_req_id)
 
     def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
         rendered = str(item_id or "").strip()
@@ -388,64 +542,30 @@ class RealtimeAgentStateMixin:
             turn.function_call_item_ids.discard(rendered)
         with self._turn_lock:
             self._item_id_to_req_id.pop(rendered, None)
-            self._history_item_owner_req_id.pop(rendered, None)
-            self._known_history_item_ids.discard(rendered)
-            try:
-                self._history_item_order.remove(rendered)
-            except ValueError:
-                pass
+            self._history_index().forget(rendered)
 
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
-        owner_id = str(getattr(turn, "owner_id", "") or "").strip()
-        if owner_id:
-            return f"owner:{owner_id}"
-        return "anonymous"
+        return self._history_index().owner_key(getattr(turn, "owner_id", None))
 
     def _history_protected_item_ids(self, current_turn: Optional[QueuedTurn]) -> set[str]:
-        protected_item_ids: set[str] = set()
         with self._turn_lock:
-            for turn in self._turns_by_req_id.values():
-                if not self._is_turn_terminal(turn):
-                    protected_item_ids.update(turn.history_item_ids)
-                    if turn.user_item_id:
-                        protected_item_ids.add(turn.user_item_id)
-                    if turn.assistant_item_id:
-                        protected_item_ids.add(turn.assistant_item_id)
-                    protected_item_ids.update(turn.assistant_item_ids)
-                    protected_item_ids.update(turn.function_call_item_ids)
-            if current_turn is not None:
-                protected_item_ids.update(current_turn.history_item_ids)
-                if current_turn.user_item_id:
-                    protected_item_ids.add(current_turn.user_item_id)
-                if current_turn.assistant_item_id:
-                    protected_item_ids.add(current_turn.assistant_item_id)
-                protected_item_ids.update(current_turn.assistant_item_ids)
-                protected_item_ids.update(current_turn.function_call_item_ids)
-                if (
-                    current_turn.kind == "audio"
-                    and not current_turn.user_item_id
-                    and self._history_item_order
-                ):
-                    for item_id in reversed(self._history_item_order):
-                        if (
-                            item_id not in self._history_item_owner_req_id
-                            and item_id not in self._item_id_to_req_id
-                        ):
-                            protected_item_ids.add(item_id)
-                            break
-                protected_item_ids.update(self._pending_audio_item_ids)
-            if self._playback_item_id:
-                protected_item_ids.add(self._playback_item_id)
-        return protected_item_ids
+            return self._history_index().protected_item_ids(
+                turns=self._turns_by_req_id.values(),
+                is_terminal=self._is_turn_terminal,
+                current_turn=current_turn,
+                pending_audio_item_ids=self._pending_audio_item_ids,
+                playback_item_id=self._playback_item_id,
+                bound_item_ids=self._item_id_to_req_id,
+            )
 
     def _forget_deleted_history_item(self, item_id: str) -> None:
         rendered = str(item_id or "").strip()
         if not rendered:
             return
         with self._turn_lock:
-            req_id = self._history_item_owner_req_id.get(
+            req_id = self._history_index().owner_req_id_for(
                 rendered,
-                self._item_id_to_req_id.get(rendered, ""),
+                fallback=self._item_id_to_req_id.get(rendered, ""),
             )
             turn = self._turns_by_req_id.get(req_id) if req_id else None
         self._forget_history_item(turn, rendered)
@@ -463,14 +583,16 @@ class RealtimeAgentStateMixin:
 
         protected_item_ids = self._history_protected_item_ids(turn)
         with self._turn_lock:
-            history_snapshot = list(self._history_item_order)
+            history_snapshot = self._history_index().delete_candidates(
+                protected_item_ids=protected_item_ids
+            )
 
         deleted_count = 0
         for item_id in history_snapshot:
-            if item_id in protected_item_ids:
-                continue
             try:
-                self._send_event({"type": "conversation.item.delete", "item_id": item_id})
+                self._transport_host()._send_event(
+                    {"type": "conversation.item.delete", "item_id": item_id}
+                )
             except Exception:
                 self.logger.exception(
                     "Failed to delete owner-scoped conversation item_id=%s",
@@ -499,16 +621,12 @@ class RealtimeAgentStateMixin:
         with self._turn_lock:
             self._response_id_to_req_id.pop(rendered, None)
 
-    def _discard_pending_response_turn(self, req_id: str) -> None:
-        rendered = str(req_id or "").strip()
-        if not rendered:
-            return
+    def _discard_pending_response_turn(self, req_id: str) -> int:
         with self._turn_lock:
-            self._pending_response_turn_req_ids = deque(
-                candidate
-                for candidate in self._pending_response_turn_req_ids
-                if candidate != rendered
-            )
+            store = self._response_bindings()
+            discarded = store.discard(req_id)
+            self._pending_response_turn_req_ids = store.pending_req_ids
+            return discarded
 
     def _response_output_types(self, response: dict[str, Any]) -> list[str]:
         output_types: list[str] = []
@@ -532,7 +650,9 @@ class RealtimeAgentStateMixin:
                 assistant_item_ids.append(item_id)
         for item_id in assistant_item_ids:
             try:
-                self._send_event({"type": "conversation.item.delete", "item_id": item_id})
+                self._transport_host()._send_event(
+                    {"type": "conversation.item.delete", "item_id": item_id}
+                )
             except Exception:
                 self.logger.exception(
                     "Failed to delete silent assistant item req_id=%s item_id=%s",
@@ -695,50 +815,3 @@ class RealtimeAgentStateMixin:
             if rendered and rendered not in visible_ids:
                 visible_ids.append(rendered)
         return tuple(visible_ids)
-
-    def note_local_voice_command(self, command: str, *, ttl_sec: float = 1.5) -> None:
-        rendered = str(command or "").strip().lower()
-        if not rendered:
-            return
-        expires_at = time.time() + max(0.1, ttl_sec)
-        with self._turn_lock:
-            self._prune_ignored_voice_commands_locked(now_s=time.time())
-            self._ignored_voice_commands.append((rendered, expires_at))
-
-    def _prune_ignored_voice_commands_locked(self, *, now_s: float) -> None:
-        while self._ignored_voice_commands and self._ignored_voice_commands[0][1] <= now_s:
-            self._ignored_voice_commands.popleft()
-
-    def _should_ignore_voice_command(self, command: str) -> bool:
-        rendered = str(command or "").strip().lower()
-        if not rendered:
-            return False
-        now_s = time.time()
-        with self._turn_lock:
-            self._prune_ignored_voice_commands_locked(now_s=now_s)
-            pending = deque()
-            ignored = False
-            while self._ignored_voice_commands:
-                candidate, expires_at = self._ignored_voice_commands.popleft()
-                if not ignored and candidate == rendered and expires_at > now_s:
-                    ignored = True
-                    break
-                pending.append((candidate, expires_at))
-            while pending:
-                self._ignored_voice_commands.appendleft(pending.pop())
-        return ignored
-
-    def _on_voice_command(self, msg: Any) -> None:
-        raw_command = getattr(msg, "data", msg)
-        command = str(raw_command or "").strip().lower()
-        if not command:
-            return
-        if self._should_ignore_voice_command(command):
-            self.logger.debug("Ignoring self-published voice command=%s", command)
-            return
-        if command == "stop":
-            self.interrupt_current_response(reason="voice_command")
-
-    def handle_voice_command(self, command: str) -> None:
-        """Handle a local or bridge-provided voice command."""
-        self._on_voice_command(command)

@@ -3,6 +3,7 @@
 This is the high-level map of the current Argos stack. The deeper component docs are:
 
 - `realtime_turn_flow.md`
+- `realtime_control_refactor_plan.md`
 - `prompting_and_history.md`
 - `robot_tools.md`
 - `attention_gate.md`
@@ -18,6 +19,7 @@ Argos now runs as one persistent OpenAI Realtime session with local control arou
 
 - local mic admission and end-of-speech detection
 - local engagement state machine
+- typed realtime state axes and structured transition logging
 - local interruption and playback tracking
 - local tool execution
 - local event coalescing for face/nav/battery/patrol events
@@ -31,11 +33,19 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `argos_src/agent/factory.py`
   Wires face runtime, nav state, battery cache, display runtime, tools, bridges, coalescer, and engagement state.
 - `argos_src/agent/agent_runtime.py`
-  Owns the websocket session, turn queue, playback, display update worker, history bookkeeping, and tool loop.
-- `argos_src/agent/agent_audio.py`
+  Public composition root for the websocket session, queues, providers, and control modules.
+- `argos_src/agent/control/audio_runtime.py`
   Owns audio stream setup, local capture admission, audio commit, and playback callbacks.
-- `argos_src/agent/orchestrator.py`
-  Contains `EventCoalescer` and `EngagementStateMachine`.
+- `argos_src/agent/control/server_event_runtime.py`
+  Applies Realtime server events to turn, transcription, playback, and tool state.
+- `argos_src/agent/control/state_runtime.py`
+  Owns the remaining history, response binding, and websocket send helper surface.
+- `argos_src/agent/control/robot_arbitration.py`
+  Centralizes patrol-resume and proactive face-attention allow/suppress decisions.
+- `argos_src/agent/control/`
+  Contains `EventCoalescer`, `EngagementStateMachine`, typed state axes,
+  transition observer protocols, state stores, and pure reducers used to make
+  the runtime control plane observable and testable.
 - `argos_src/runtime/audio_admission.py`
   Pure local speech admission policy.
 - `argos_src/display/runtime.py`

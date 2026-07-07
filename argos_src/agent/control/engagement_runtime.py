@@ -1,13 +1,6 @@
-"""Event coalescing and engagement state machine for the Argos realtime agent.
+"""Playback-aware engagement runtime for the realtime agent."""
 
-EventCoalescer: buffers rapid events and flushes them as one combined
-turn payload to the realtime agent queue (debounce for internal,
-immediate for human).
-
-EngagementStateMachine: IDLE / ALERT / ENGAGED / SPEAKING / COOLDOWN —
-formalises interaction flow, controls patrol suppression, playback-aware
-state transitions, and proactive battery-low prompts.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 import enum
@@ -16,223 +9,16 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+from argos_src.agent.control.coalescer import EventCoalescer
+from argos_src.agent.control.observers import safe_transition
+from argos_src.agent.control.reducers.engagement import (
+    EngagementTrigger,
+    decision_has_action,
+    reduce_engagement,
+)
+from argos_src.agent.control.types import StateAxis, StateTransition
+
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Event Coalescer
-# ---------------------------------------------------------------------------
-
-
-class EventCoalescer:
-    """Buffers rapid events and flushes them as one combined message.
-
-    Internal events (face, nav, patrol, battery) start/extend a debounce
-    timer.  Human input flushes immediately, bundling any pending internal
-    events into the same batch.  A max-wait cap prevents indefinite
-    buffering when internal events keep arriving.
-    """
-
-    def __init__(
-        self,
-        agent: Any,
-        engagement: "EngagementStateMachine",
-        debounce_sec: float = 0.4,
-        max_wait_sec: float = 2.0,
-    ):
-        self._agent = agent
-        self._engagement = engagement
-        self._debounce_sec = debounce_sec
-        self._max_wait_sec = max_wait_sec
-        self._buffer: list[tuple[str, dict]] = []
-        self._lock = threading.RLock()
-        self._timer: Optional[threading.Timer] = None
-        self._first_event_time: Optional[float] = None
-
-    # -- public API ----------------------------------------------------------
-
-    def submit(self, text: str, metadata: Optional[dict] = None) -> None:
-        """Submit an event (human or internal) for coalescing."""
-        meta = dict(metadata or {})
-        is_human = not meta.get("internal", False)
-        is_patrol = meta.get("internal_event") == "patrol_continue"
-
-        if is_patrol and self._engagement.should_suppress_patrol():
-            return
-
-        with self._lock:
-            self._buffer.append((text, meta))
-            if self._first_event_time is None:
-                self._first_event_time = time.time()
-
-            if is_human:
-                self._cancel_timer_locked()
-                self._flush_locked()
-            else:
-                elapsed = time.time() - self._first_event_time
-                if elapsed >= self._max_wait_sec:
-                    if self._should_defer_internal_flush_locked():
-                        self._restart_timer_locked()
-                    else:
-                        self._cancel_timer_locked()
-                        self._flush_locked()
-                else:
-                    self._restart_timer_locked()
-
-        # Notify engagement *outside* coalescer lock to avoid ABBA deadlock with the engagement watchdog (which may call force_flush).
-        if is_human:
-            self._engagement.on_human_input(meta.get("req_id"))
-
-    def force_flush(self) -> None:
-        """Flush all buffered events immediately (e.g. on ALERT timeout)."""
-        with self._lock:
-            self._flush_locked()
-
-    def drain_internal_events_for_audio_turn(
-        self,
-        metadata: Optional[dict] = None,
-    ) -> tuple[Optional[str], dict]:
-        """Return any pending internal-event text for a live audio turn."""
-        with self._lock:
-            if not self._buffer:
-                return None, dict(metadata or {})
-
-            events = list(self._buffer)
-            self._buffer.clear()
-            self._first_event_time = None
-            self._cancel_timer_locked()
-
-        events = self._dedup(events)
-        internal = [(text, meta) for text, meta in events if meta.get("internal")]
-        if not internal:
-            return None, dict(metadata or {})
-
-        parts = ["[INTERNAL EVENT]" if len(internal) == 1 else "[PENDING EVENTS]"]
-        for text, _meta in internal:
-            parts.append(f"- {text}")
-        merged_meta = dict(internal[-1][1])
-        merged_meta.update(dict(metadata or {}))
-        return "\n".join(parts), merged_meta
-
-    # -- internals -----------------------------------------------------------
-
-    def _flush_locked(self) -> None:
-        if not self._buffer:
-            return
-        events = list(self._buffer)
-        self._buffer.clear()
-        self._first_event_time = None
-        self._cancel_timer_locked()
-
-        events = self._dedup(events)
-        if not events:
-            return
-
-        internal = [(t, m) for t, m in events if m.get("internal")]
-        human = [(t, m) for t, m in events if not m.get("internal")]
-
-        parts: list[str] = []
-        if internal:
-            parts.append("[INTERNAL EVENT]" if len(internal) == 1 and not human else "[PENDING EVENTS]")
-            for text, _ in internal:
-                parts.append(f"- {text}")
-        if human:
-            parts.append("[HUMAN INPUT]")
-            for text, _ in human:
-                parts.append(text)
-
-        combined = "\n".join(parts)
-        primary_meta = human[-1][1] if human else events[-1][1]
-        self._agent.enqueue_internal_event(combined, metadata=primary_meta)
-
-    def _dedup(self, events: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-        """Deduplicate events within a batch.
-
-        Rules:
-        - Multiple FACE_EVENTs for the same person -> keep latest only.
-        - Multiple NAV_EVENTs -> keep only the final goal_result; drop
-          intermediate waypoint events when a goal_result is present.
-        - PATROL_EVENT suppressed if face or human input in the same batch.
-        """
-        has_human = any(not m.get("internal") for _, m in events)
-        has_face = any(m.get("internal_event") == "face" for _, m in events)
-        has_nav_result = any(
-            m.get("internal_event") == "navigation"
-            and m.get("event_type") == "goal_result"
-            for _, m in events
-        )
-
-        latest_face: dict[str, int] = {}
-        latest_nav_result_idx: Optional[int] = None
-
-        for i, (_text, meta) in enumerate(events):
-            evt = meta.get("internal_event", "")
-            if evt == "face":
-                key = meta.get("person_name", "") or "__unknown__"
-                latest_face[key] = i
-            if evt == "navigation" and meta.get("event_type") == "goal_result":
-                latest_nav_result_idx = i
-
-        result: list[tuple[str, dict]] = []
-        for i, (text, meta) in enumerate(events):
-            evt = meta.get("internal_event", "")
-
-            if evt == "patrol_continue" and (has_face or has_human):
-                continue
-
-            if evt == "face":
-                key = meta.get("person_name", "") or "__unknown__"
-                if latest_face.get(key) != i:
-                    continue
-
-            if evt == "navigation":
-                event_type = meta.get("event_type", "")
-                if event_type == "goal_result" and latest_nav_result_idx != i:
-                    continue
-                if event_type != "goal_result" and has_nav_result:
-                    continue
-
-            result.append((text, meta))
-
-        return result
-
-    def _restart_timer_locked(self) -> None:
-        self._cancel_timer_locked()
-        self._timer = threading.Timer(self._debounce_sec, self._timer_flush)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def _cancel_timer_locked(self) -> None:
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-
-    def _timer_flush(self) -> None:
-        with self._lock:
-            if self._should_defer_internal_flush_locked():
-                self._restart_timer_locked()
-                return
-            self._flush_locked()
-
-    def _should_defer_internal_flush_locked(self) -> bool:
-        """Hold internal-only events while a human utterance is being recorded."""
-        if not self._buffer:
-            return False
-        if any(not meta.get("internal") for _, meta in self._buffer):
-            return False
-        is_recording_active = getattr(self._engagement, "is_recording_active", None)
-        if not callable(is_recording_active):
-            return False
-        try:
-            return bool(is_recording_active())
-        except Exception:
-            logger.exception("Failed to check recording state before flushing events")
-            return False
-
-
-# ---------------------------------------------------------------------------
-# Engagement State Machine
-# ---------------------------------------------------------------------------
 
 
 class EngagementState(enum.Enum):
@@ -269,6 +55,7 @@ class EngagementStateMachine:
         nav_state: Any = None,
         battery_cache: Any = None,
         self_charge_available: bool = True,
+        state_observer: Any = None,
     ):
         self._state = EngagementState.IDLE
         self._lock = threading.RLock()
@@ -281,13 +68,13 @@ class EngagementStateMachine:
         self._nav_state = nav_state
         self._battery_cache = battery_cache
         self._self_charge_available = bool(self_charge_available)
+        self._state_observer = state_observer
         self._current_req_id = ""
         self._awaiting_playback_req_id = ""
         self._awaiting_playback_stream_id = ""
         self._latest_playback_stream_id = ""
         self._awaiting_playback_terminal = False
 
-        # Set by factory after construction (circular refs)
         self._coalescer: Optional[EventCoalescer] = None
         self._battery_low_submit: Optional[Callable[[str, dict], None]] = None
         self._recording_state_provider: Optional[Callable[[], bool]] = None
@@ -298,8 +85,6 @@ class EngagementStateMachine:
             target=self._run_timeout_watchdog, daemon=True
         )
         self._watchdog.start()
-
-    # -- public API ----------------------------------------------------------
 
     @property
     def state(self) -> EngagementState:
@@ -386,15 +171,19 @@ class EngagementStateMachine:
         """Called when a proactive face event claims the robot."""
         should_act = False
         with self._lock:
-            if self._state == EngagementState.IDLE:
+            decision = reduce_engagement(
+                self._state.value,
+                EngagementTrigger.FACE_OR_WAKE,
+            )
+            if decision.changed:
                 self._current_req_id = ""
                 self._clear_playback_tracking_locked()
                 self._set_state_locked(
-                    EngagementState.ALERT,
-                    reason="face_detected",
+                    EngagementState(decision.new_state),
+                    reason=decision.reason,
                     req_id="",
                 )
-                should_act = True
+                should_act = decision_has_action(decision, "cancel_active_navigation")
         if should_act:
             self._publish_voice_cmd("stop")
             self._cancel_active_navigation()
@@ -404,20 +193,17 @@ class EngagementStateMachine:
         should_cancel = False
         req = str(req_id or "").strip()
         with self._lock:
-            if self._state in (
-                EngagementState.IDLE,
-                EngagementState.ALERT,
-                EngagementState.COOLDOWN,
-            ):
-                should_cancel = self._state in (
-                    EngagementState.IDLE,
-                    EngagementState.COOLDOWN,
-                )
+            decision = reduce_engagement(
+                self._state.value,
+                EngagementTrigger.HUMAN_INPUT,
+            )
+            if decision.changed:
+                should_cancel = decision_has_action(decision, "cancel_active_navigation")
                 self._current_req_id = req
                 self._clear_playback_tracking_locked()
                 self._set_state_locked(
-                    EngagementState.ENGAGED,
-                    reason="human_input",
+                    EngagementState(decision.new_state),
+                    reason=decision.reason,
                     req_id=req,
                 )
         if should_cancel:
@@ -445,13 +231,14 @@ class EngagementStateMachine:
             self._current_req_id = req
             if stream:
                 self._latest_playback_stream_id = stream
-            if self._state in (
-                EngagementState.ALERT,
-                EngagementState.ENGAGED,
-            ):
+            decision = reduce_engagement(
+                self._state.value,
+                EngagementTrigger.AGENT_OUTPUT_STARTED,
+            )
+            if decision.changed:
                 self._set_state_locked(
-                    EngagementState.SPEAKING,
-                    reason="agent_output_started",
+                    EngagementState(decision.new_state),
+                    reason=decision.reason,
                     req_id=req,
                 )
             return
@@ -460,6 +247,11 @@ class EngagementStateMachine:
         """Called when the agent finishes processing a message."""
         req = str(req_id or "").strip()
         with self._lock:
+            decision = reduce_engagement(
+                self._state.value,
+                EngagementTrigger.AGENT_DONE,
+                has_reply=has_reply,
+            )
             if has_reply:
                 if self._state not in (
                     EngagementState.ALERT,
@@ -473,25 +265,19 @@ class EngagementStateMachine:
                 self._awaiting_playback_req_id = chosen_req
                 self._awaiting_playback_stream_id = chosen_stream
                 self._awaiting_playback_terminal = True
-                if self._state in (
-                    EngagementState.ALERT,
-                    EngagementState.ENGAGED,
-                ):
+                if decision.changed:
                     self._set_state_locked(
-                        EngagementState.SPEAKING,
-                        reason="agent_done_with_reply",
+                        EngagementState(decision.new_state),
+                        reason=decision.reason,
                         req_id=chosen_req,
                     )
                 return
-            if self._state in (
-                EngagementState.ALERT,
-                EngagementState.ENGAGED,
-            ):
+            if decision.changed:
                 self._current_req_id = req
                 self._clear_playback_tracking_locked()
                 self._set_state_locked(
-                    EngagementState.COOLDOWN,
-                    reason="agent_done",
+                    EngagementState(decision.new_state),
+                    reason=decision.reason,
                     req_id=req,
                 )
 
@@ -524,7 +310,7 @@ class EngagementStateMachine:
                         EngagementState.SPEAKING,
                         reason="playback_started",
                         req_id=req,
-                )
+                    )
                 return
             if event not in ("playback_completed", "playback_stopped"):
                 return
@@ -600,8 +386,6 @@ class EngagementStateMachine:
         self._watchdog_stop.set()
         self._watchdog.join(timeout=2.0)
 
-    # -- internals -----------------------------------------------------------
-
     def _expires_at_for(self, state: EngagementState, entered_at: float) -> Optional[float]:
         if state == EngagementState.ALERT:
             return entered_at + self._alert_timeout
@@ -617,6 +401,8 @@ class EngagementStateMachine:
         req_id: str,
     ) -> None:
         old = self._state
+        if old == new_state:
+            return
         self._state = new_state
         self._last_transition = time.time()
         if new_state == EngagementState.IDLE:
@@ -628,6 +414,17 @@ class EngagementStateMachine:
             new_state.value,
             reason,
             req_id,
+        )
+        safe_transition(
+            self._state_observer,
+            StateTransition(
+                axis=StateAxis.ENGAGEMENT,
+                old_state=old.value,
+                new_state=new_state.value,
+                trigger=reason,
+                req_id=req_id,
+                reason=reason,
+            ),
         )
 
     def _publish_voice_cmd(self, cmd: str) -> None:

@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+import logging
+import threading
+
+from argos_src.agent.control.turn_runner import TurnRunner
+from argos_src.agent.realtime_turns import QueuedTurn, TURN_PHASE_FINALIZED
+
+
+class _Host:
+    def __init__(self) -> None:
+        self.logger = logging.getLogger("test.turn_runner")
+        self._stop_event = threading.Event()
+        self._turn_lock = threading.RLock()
+        self._active_turn = None
+        self._turns_by_req_id = {}
+        self.rotated = []
+        self.text_items = []
+        self.response_creates = []
+        self.voice_refs = []
+        self.preferences = []
+
+    def _clear_playback_tracking_locked(self):
+        return
+
+    def _maybe_rotate_history_for_turn(self, turn):
+        self.rotated.append(turn.req_id)
+
+    def _append_text_message_item(self, turn, text, *, role):
+        self.text_items.append((turn.req_id, text, role))
+
+    def _send_response_create(self, turn):
+        self.response_creates.append(turn.req_id)
+        turn.response_finished.set()
+        turn.playback_finished.set()
+
+    def _is_turn_terminal(self, turn):
+        return turn is None or bool(getattr(turn, "finalized", False))
+
+    def _complete_turn_success(self, turn):
+        turn.finalized = True
+        turn.finalized_reason = "completed"
+        turn.phase = TURN_PHASE_FINALIZED
+
+    def _maybe_capture_voice_reference(self, turn):
+        self.voice_refs.append(turn.req_id)
+
+    def _maybe_note_preference_turn(self, turn):
+        self.preferences.append(turn.req_id)
+
+
+def _turn(req_id: str = "rt-turn") -> QueuedTurn:
+    return QueuedTurn(
+        kind="text",
+        req_id=req_id,
+        speech_end_perf_s=0.0,
+        speech_end_unix_s=0.0,
+        transcript_perf_s=0.0,
+        input_text="SYSTEM_EVENT",
+        source_is_internal=True,
+        pending_internal_text="PENDING_EVENT",
+    )
+
+
+def test_turn_runner_prepares_text_turn_and_finalizes_success() -> None:
+    host = _Host()
+    runner = TurnRunner(host)
+    turn = _turn()
+
+    runner.run(turn)
+
+    assert host.rotated == [turn.req_id]
+    assert host.text_items == [
+        (turn.req_id, "SYSTEM_EVENT", "system"),
+        (turn.req_id, "PENDING_EVENT", "system"),
+    ]
+    assert host.response_creates == [turn.req_id]
+    assert turn.finalized is True
+    assert turn.finalized_reason == "completed"
+    assert host.voice_refs == [turn.req_id]
+    assert host.preferences == [turn.req_id]
+    assert host._active_turn is None
+
+
+def test_turn_runner_clears_active_turn_on_exception() -> None:
+    host = _Host()
+    runner = TurnRunner(host)
+    turn = _turn("rt-error")
+
+    def fail(_turn):
+        raise RuntimeError("boom")
+
+    host._send_response_create = fail
+
+    try:
+        runner.run(turn)
+    except RuntimeError:
+        pass
+
+    assert host._active_turn is None
+    assert host._turns_by_req_id[turn.req_id] is turn

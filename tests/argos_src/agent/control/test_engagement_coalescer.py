@@ -1,10 +1,9 @@
+"""Engagement state machine and internal-event coalescer tests."""
+
 import time
 
-from argos_src.agent.orchestrator import (
-    EngagementState,
-    EngagementStateMachine,
-    EventCoalescer,
-)
+from argos_src.agent.control.coalescer import EventCoalescer
+from argos_src.agent.control.engagement_runtime import EngagementState, EngagementStateMachine
 
 
 class _FakeGoalHandle:
@@ -167,6 +166,89 @@ def test_internal_event_flush_waits_until_recording_stops():
         coalescer._timer_flush()
         assert len(enqueued) == 1
         assert "BATTERY_EVENT" in enqueued[0][0]
+    finally:
+        with coalescer._lock:
+            coalescer._cancel_timer_locked()
+        machine.shutdown()
+
+
+def test_coalescer_dedups_face_and_navigation_events_for_audio_turn():
+    machine, _ = _make_machine()
+    agent = type(
+        "_FakeAgent",
+        (),
+        {"enqueue_internal_event": lambda self, text, metadata: None},
+    )()
+    coalescer = EventCoalescer(
+        agent=agent,
+        engagement=machine,
+        debounce_sec=60.0,
+        max_wait_sec=60.0,
+    )
+    try:
+        coalescer.submit(
+            "FACE_EVENT: Sam appeared.",
+            {"internal": True, "internal_event": "face", "person_name": "Sam"},
+        )
+        coalescer.submit(
+            "FACE_EVENT: Sam is attentive.",
+            {"internal": True, "internal_event": "face", "person_name": "Sam"},
+        )
+        coalescer.submit(
+            "NAV_EVENT: waypoint reached.",
+            {"internal": True, "internal_event": "navigation", "event_type": "waypoint"},
+        )
+        coalescer.submit(
+            "NAV_EVENT: goal reached.",
+            {
+                "internal": True,
+                "internal_event": "navigation",
+                "event_type": "goal_result",
+            },
+        )
+
+        text, metadata = coalescer.drain_internal_events_for_audio_turn({"req_id": "rt-1"})
+
+        assert text is not None
+        assert "Sam is attentive" in text
+        assert "Sam appeared" not in text
+        assert "goal reached" in text
+        assert "waypoint reached" not in text
+        assert metadata["req_id"] == "rt-1"
+    finally:
+        with coalescer._lock:
+            coalescer._cancel_timer_locked()
+        machine.shutdown()
+
+
+def test_coalescer_drops_patrol_when_face_is_in_same_batch():
+    machine, _ = _make_machine()
+    agent = type(
+        "_FakeAgent",
+        (),
+        {"enqueue_internal_event": lambda self, text, metadata: None},
+    )()
+    coalescer = EventCoalescer(
+        agent=agent,
+        engagement=machine,
+        debounce_sec=60.0,
+        max_wait_sec=60.0,
+    )
+    try:
+        coalescer.submit(
+            "PATROL_EVENT: resume patrol.",
+            {"internal": True, "internal_event": "patrol_continue"},
+        )
+        coalescer.submit(
+            "FACE_EVENT: Sam appeared.",
+            {"internal": True, "internal_event": "face", "person_name": "Sam"},
+        )
+
+        text, _metadata = coalescer.drain_internal_events_for_audio_turn({"req_id": "rt-1"})
+
+        assert text is not None
+        assert "FACE_EVENT" in text
+        assert "PATROL_EVENT" not in text
     finally:
         with coalescer._lock:
             coalescer._cancel_timer_locked()

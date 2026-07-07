@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Optional
 
 from argos_src.nav_support.locations import NavigationState
 
-from .orchestrator import EngagementState
+from .control.engagement_runtime import EngagementState
+from .control.robot_arbitration import decide_proactive_face_attention
 
 if TYPE_CHECKING:
     from argos_src.face_recognition.face_recognition_service import FaceRecognitionService
@@ -152,11 +153,13 @@ class FaceEventBridge:
                 recording_active = bool(is_recording_active())
             except Exception:
                 recording_active = False
-        allow_face_attention = (
-            self._engagement.state == EngagementState.IDLE
-            and self._nav_state.allows_proactive_face_attention()
-            and not recording_active
+        face_attention_decision = decide_proactive_face_attention(
+            engagement_state=self._engagement.state,
+            nav_state=self._nav_state,
+            recording_active=recording_active,
         )
+        self._last_face_arbitration_decision = face_attention_decision
+        allow_face_attention = face_attention_decision.allowed
 
         emitted_mixed = False
         if (
@@ -291,6 +294,10 @@ class PatrolLoopBridge:
             time.sleep(self._next_hop_delay_sec)
             patrol_state = self._nav_state.get_patrol()
             if not patrol_state.get("enabled", False):
+                return
+            if self._nav_state.get_active_goal() is not None:
+                return
+            if str(patrol_state.get("awaiting_target", "")).strip() != next_target:
                 return
             self._coalescer.submit(
                 text=(

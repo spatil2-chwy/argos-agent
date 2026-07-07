@@ -163,6 +163,9 @@ logs/
 var/
 data_collection/
 .vscode/
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
 
 !examples/imgs/*.md
 

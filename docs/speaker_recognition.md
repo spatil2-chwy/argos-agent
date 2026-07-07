@@ -2,9 +2,9 @@
 
 Read this with:
 
-- `argos_src/agent/agent_audio.py`
+- `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_runtime.py`
-- `argos_src/agent/agent_tools.py`
+- `argos_src/agent/control/tool_runtime.py`
 - `argos_src/speaker_recognition/service.py`
 - `argos_src/speaker_recognition/policy.py`
 - `argos_src/speaker_recognition/backend.py`
@@ -52,9 +52,9 @@ successful face enrollment
 
 | File | Responsibility |
 |---|---|
-| `argos_src/agent/agent_audio.py` | Captures mic audio, resamples to 16 kHz, buffers turn audio, and triggers speaker resolution at audio commit. |
+| `argos_src/agent/control/audio_runtime.py` | Captures mic audio, resamples to 16 kHz, buffers turn audio, and triggers speaker resolution at audio commit. |
 | `argos_src/agent/agent_runtime.py` | Owns pending voice-enrollment state, audio ownership logs, and post-turn voice enrollment. |
-| `argos_src/agent/agent_tools.py` | Arms pending voice enrollment after `enroll_visible_person` succeeds. |
+| `argos_src/agent/control/tool_runtime.py` | Arms pending voice enrollment after `enroll_visible_person` succeeds. |
 | `argos_src/speaker_recognition/service.py` | Main orchestration layer for query embedding lookup and voice reference storage. |
 | `argos_src/speaker_recognition/policy.py` | Clip stats, minimal safety gates, and owner-resolution rules. |
 | `argos_src/speaker_recognition/backend.py` | SpeechBrain ECAPA backend wrapper. |
@@ -67,7 +67,7 @@ successful face enrollment
 
 ### 1. Audio capture and turn creation
 
-`RealtimeAgentAudioMixin._capture_callback()` resamples the live mic stream to
+`AudioRuntime._capture_callback()` resamples the live mic stream to
 `16 kHz` mono for local VAD and speaker processing.
 
 When local end-of-speech fires, `_commit_audio_turn()`:
@@ -142,7 +142,7 @@ depending on clip quality and face visibility.
 
 ### 1. Enrollment is armed by face registration
 
-When `enroll_visible_person` succeeds, `agent_tools.py` arms a pending voice
+When `enroll_visible_person` succeeds, `ToolRuntime` arms a pending voice
 enrollment target for that `person_id`.
 
 That does not save voice immediately. It only tells the runtime:

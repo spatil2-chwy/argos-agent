@@ -248,7 +248,7 @@ Run focused Argos tests from the repo root:
 python3 -B -m pytest \
   tests/argos_src/provider_api/test_zenoh_provider_client.py \
   tests/argos_src/agent/test_agent_runtime.py \
-  tests/argos_src/agent/test_orchestrator.py \
+  tests/argos_src/agent/control/test_engagement_coalescer.py \
   tests/argos_src/agent/test_bridges.py \
   tests/argos_src/agent/test_factory_gestures.py \
   tests/argos_src/agent/test_gesture_runtime.py \

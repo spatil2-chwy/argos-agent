@@ -40,7 +40,7 @@ Start with the smallest relevant slice:
 
 ```bash
 python3 -B -m pytest tests/argos_src/agent/test_agent_runtime.py
-python3 -B -m pytest tests/argos_src/agent/test_orchestrator.py
+python3 -B -m pytest tests/argos_src/agent/control
 python3 -B -m pytest tests/argos_src/runtime/test_audio_admission.py
 python3 -B -m pytest tests/argos_src/agent/test_agent_events.py
 ```

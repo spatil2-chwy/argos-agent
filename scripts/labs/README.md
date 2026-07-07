@@ -23,6 +23,7 @@ poetry run python -m scripts.labs.enrollment_audio_collection --help
 poetry run python -m scripts.labs.speaker_recognition_lab --help
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
+poetry run python -m scripts.labs.agent_state_machine_lab --help
 ```
 
 ## Person-centered enrollment data collection
@@ -222,6 +223,12 @@ poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --loo
 # If Snowflake stores Latin-script names and multilingual ASR is returning a
 # native-script transcript, force English transcription for this lab run.
 poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --language en
+```
+
+Realtime state machine report from latency logs:
+
+```bash
+poetry run python -m scripts.labs.agent_state_machine_lab --log-path logs/latency.log
 ```
 
 One-off OpenAI speech without starting the realtime agent:

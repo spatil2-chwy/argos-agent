@@ -24,8 +24,8 @@ if "std_msgs" not in sys.modules:
     sys.modules["std_msgs.msg"] = std_msgs_msg_stub
 
 
-from argos_src.agent.agent_preferences import RealtimeAgentPreferenceMixin
-from argos_src.agent.agent_state import RealtimeAgentStateMixin
+from argos_src.agent.control.preference_runtime import PreferenceRuntime
+from argos_src.agent.control.state_runtime import AgentStateRuntime
 from argos_src.agent.preference_segments import _PreferenceSegmentCoordinator
 from argos_src.agent.realtime_turns import (
     FrozenTurnContext,
@@ -34,7 +34,7 @@ from argos_src.agent.realtime_turns import (
 )
 
 
-class FakeRuntime(RealtimeAgentPreferenceMixin, RealtimeAgentStateMixin):
+class FakeRuntime(AgentStateRuntime):
     def __init__(self) -> None:
         self.logger = logging.getLogger("test.owner_scoped_history")
         self._turn_lock = threading.RLock()
@@ -54,6 +54,14 @@ class FakeRuntime(RealtimeAgentPreferenceMixin, RealtimeAgentStateMixin):
         self._last_tool_name = None
         self._last_tool_summary = None
         self._preference_segments = _PreferenceSegmentCoordinator()
+        self.preference_extraction_enabled = False
+        self.preference_extractor = None
+        self._preference_idle_flush_lock = threading.Lock()
+        self._preference_idle_flush_timer = None
+        self._preference_idle_flush_delay_sec = 0.05
+        self._pending_lock = threading.Lock()
+        self._pending_preference_segment_ids = set()
+        self._preference_runtime = PreferenceRuntime(self)
         self.sent_events: list[dict] = []
 
     def _send_event(self, payload: dict) -> None:
@@ -61,6 +69,9 @@ class FakeRuntime(RealtimeAgentPreferenceMixin, RealtimeAgentStateMixin):
 
     def _cancel_preference_idle_flush(self) -> None:
         return
+
+    def _maybe_note_preference_turn(self, turn) -> None:
+        self._preference_runtime.maybe_note_turn(turn)
 
     def flush_preference_segments(self, reason: str = "idle") -> None:
         self.flushed_reason = reason
@@ -231,3 +242,21 @@ def test_preference_extraction_uses_local_transcripts_after_history_deletion() -
     assert segment.turns[0].user_text == "I like jasmine tea."
     assert segment.turns[0].assistant_text == "Got it."
 
+
+def test_owner_change_protects_active_unresolved_function_call_items() -> None:
+    runtime = FakeRuntime()
+    runtime._active_history_owner_key = "owner:A"
+    old_turn = make_turn("old", owner_id="A", finalized=True)
+    register_turn_item(runtime, old_turn, "old-user")
+    active_turn = make_turn("active-tool", owner_id="A", finalized=False)
+    active_turn.function_call_item_ids.add("active-function-call")
+    runtime._turns_by_req_id[active_turn.req_id] = active_turn
+    runtime._register_history_item("active-function-call", owner_req_id=active_turn.req_id)
+    current_turn = make_turn("current", owner_id="B")
+    runtime._turns_by_req_id[current_turn.req_id] = current_turn
+
+    runtime._maybe_rotate_history_for_turn(current_turn)
+
+    assert deleted_item_ids(runtime) == ["old-user"]
+    assert "active-function-call" in runtime._known_history_item_ids
+    assert list(runtime._history_item_order) == ["active-function-call"]
