@@ -21,6 +21,7 @@ import "./styles.css";
 type Summary = {
   row_count: number;
   session_count: number;
+  raw_session_count?: number;
   exchange_count?: number;
   interaction_count: number;
   system_event_count: number;
@@ -32,6 +33,7 @@ type Summary = {
   first_audio_latency_avg_s: number | null;
   first_audio_latency_p50_s: number | null;
   first_audio_latency_p95_s: number | null;
+  first_audio_latency_max_s?: number | null;
   tool_latency_avg_s: number | null;
   latest_session_total_cost_usd: number | null;
 };
@@ -146,6 +148,7 @@ const emptySnapshot: DashboardSnapshot = {
   summary: {
     row_count: 0,
     session_count: 0,
+    raw_session_count: 0,
     exchange_count: 0,
     interaction_count: 0,
     system_event_count: 0,
@@ -157,6 +160,7 @@ const emptySnapshot: DashboardSnapshot = {
     first_audio_latency_avg_s: null,
     first_audio_latency_p50_s: null,
     first_audio_latency_p95_s: null,
+    first_audio_latency_max_s: null,
     tool_latency_avg_s: null,
     latest_session_total_cost_usd: null
   },
@@ -209,6 +213,25 @@ function formatSessionRange(session: Session) {
   return `${start} - ${end}`;
 }
 
+function median(values: number[]) {
+  const clean = [...values].filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!clean.length) return null;
+  const middle = Math.floor(clean.length / 2);
+  if (clean.length % 2) return clean[middle];
+  return (clean[middle - 1] + clean[middle]) / 2;
+}
+
+function latestSessionCost(exchanges: Exchange[]) {
+  const dated = exchanges
+    .map((exchange) => ({
+      ts: exchange.ended_at ?? exchange.started_at ?? "",
+      cost: exchange.costs.session_total_cost_usd
+    }))
+    .filter((item): item is { ts: string; cost: number } => typeof item.cost === "number");
+  dated.sort((a, b) => a.ts.localeCompare(b.ts));
+  return dated.at(-1)?.cost ?? null;
+}
+
 function humanize(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -224,7 +247,9 @@ function compactDetails(details: Record<string, string | number | boolean>, keys
 }
 
 function StatusPill({ status }: { status: string }) {
-  return <span className={`status status-${status}`}>{humanize(status)}</span>;
+  if (status === "complete") return null;
+  const label = status === "active" ? "in progress" : humanize(status);
+  return <span className={`status status-${status}`}>{label}</span>;
 }
 
 function MetricCard({
@@ -293,7 +318,6 @@ function Stage({ stage }: { stage: LifecycleStage }) {
     "audio_speaker_id",
     "owner_id",
     "owner_source",
-    "owner_confidence",
     "speaker_visible",
     "tool",
     "response_status",
@@ -323,36 +347,6 @@ function Stage({ stage }: { stage: LifecycleStage }) {
         ) : null}
       </div>
     </div>
-  );
-}
-
-function StateAxisCard({ group }: { group: StateAxisGroup }) {
-  const latest = [...group.transitions].reverse().find((item) => item.new_state);
-  return (
-    <section className="axis-card">
-      <div className="axis-card-head">
-        <strong>{humanize(group.axis)}</strong>
-        <span>{latest?.new_state ? humanize(latest.new_state) : `${group.transitions.length} transitions`}</span>
-      </div>
-      <div className="axis-events">
-        {group.transitions.slice(-6).map((item, index) => (
-          <div className="axis-event" key={`${item.ts}-${item.trigger}-${index}`}>
-            <span>{formatTime(item.ts)}</span>
-            <b>
-              {humanize(item.old_state ?? "?")} {"->"} {humanize(item.new_state ?? "?")}
-            </b>
-            {item.trigger ? <small>{humanize(item.trigger)}</small> : null}
-          </div>
-        ))}
-        {group.ignored.slice(-3).map((item, index) => (
-          <div className="axis-event ignored" key={`ignored-${item.ts}-${index}`}>
-            <span>{formatTime(item.ts)}</span>
-            <b>{humanize(item.trigger ?? "ignored")}</b>
-            <small>{humanize(item.ignored_reason)}</small>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -410,9 +404,9 @@ function App() {
   const [snapshot, setSnapshot] = React.useState<DashboardSnapshot>(emptySnapshot);
   const [loading, setLoading] = React.useState(false);
   const [apiError, setApiError] = React.useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = React.useState<string | null>(null);
   const [selectedExchangeId, setSelectedExchangeId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
-  const [statusFilter, setStatusFilter] = React.useState("all");
   const [autoRefresh, setAutoRefresh] = React.useState(false);
 
   const loadSnapshot = React.useCallback(async () => {
@@ -424,10 +418,16 @@ function App() {
       const exchanges = body.exchanges ?? body.interactions ?? [];
       setSnapshot({ ...body, exchanges });
       setApiError(null);
+      setSelectedSessionId((current) =>
+        current && body.sessions.some((session) => session.session_id === current)
+          ? current
+          : body.sessions[0]?.session_id ?? null
+      );
       setSelectedExchangeId((current) => current ?? exchanges[0]?.exchange_id ?? null);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "snapshot unavailable");
       setSnapshot({ ...emptySnapshot, generated_at: new Date().toISOString() });
+      setSelectedSessionId(null);
       setSelectedExchangeId(null);
     } finally {
       setLoading(false);
@@ -445,8 +445,12 @@ function App() {
   }, [autoRefresh, loadSnapshot]);
 
   const exchanges = snapshot.exchanges ?? snapshot.interactions ?? [];
-  const filteredExchanges = exchanges.filter((exchange) => {
-    const matchesStatus = statusFilter === "all" || exchange.status === statusFilter;
+  const selectedSession =
+    snapshot.sessions.find((session) => session.session_id === selectedSessionId) ?? snapshot.sessions[0];
+  const sessionExchanges = selectedSession
+    ? exchanges.filter((exchange) => exchange.session_id === selectedSession.session_id)
+    : exchanges;
+  const filteredExchanges = sessionExchanges.filter((exchange) => {
     const haystack = [
       exchange.label,
       exchange.exchange_id,
@@ -459,15 +463,32 @@ function App() {
     ]
       .join(" ")
       .toLowerCase();
-    return matchesStatus && haystack.includes(query.toLowerCase());
+    return haystack.includes(query.toLowerCase());
   });
   const selectedExchange =
     filteredExchanges.find((exchange) => exchange.exchange_id === selectedExchangeId) ??
     filteredExchanges[0] ??
+    sessionExchanges[0] ??
     exchanges[0];
-  const exchangeCount = snapshot.summary.exchange_count ?? snapshot.summary.interaction_count;
-  const selectedCost =
-    selectedExchange?.costs.estimated_cost_usd ?? selectedExchange?.costs.session_total_cost_usd ?? null;
+  const latencyValues = sessionExchanges
+    .map((exchange) => exchange.first_audio_latency_s)
+    .filter((value): value is number => typeof value === "number");
+  const medianFirstAudio = selectedSession
+    ? median(latencyValues)
+    : snapshot.summary.first_audio_latency_p50_s;
+  const slowestFirstAudio = selectedSession
+    ? latencyValues.length
+      ? Math.max(...latencyValues)
+      : null
+    : snapshot.summary.first_audio_latency_max_s ?? snapshot.summary.first_audio_latency_p95_s;
+  const selectedSessionCost = selectedSession
+    ? latestSessionCost(sessionExchanges)
+    : snapshot.summary.latest_session_total_cost_usd;
+  const selectedErrorCount = selectedSession
+    ? sessionExchanges.filter((exchange) => exchange.status === "error").length
+    : snapshot.summary.error_count;
+  const selectedExchangeCost =
+    selectedExchange?.costs.estimated_exchange_cost_usd ?? selectedExchange?.costs.estimated_cost_usd ?? null;
 
   return (
     <main className="app-shell">
@@ -498,27 +519,27 @@ function App() {
 
       <section className="metric-grid">
         <MetricCard icon={<Radio size={20} />} label="Sessions" value={`${snapshot.summary.session_count}`} />
-        <MetricCard icon={<Activity size={20} />} label="Exchanges" value={`${exchangeCount}`} />
+        <MetricCard icon={<Activity size={20} />} label="Exchanges" value={`${sessionExchanges.length}`} />
         <MetricCard
           icon={<AlertTriangle size={20} />}
           label="Errors"
-          value={`${snapshot.summary.error_count}`}
-          tone={snapshot.summary.error_count > 0 ? "warn" : "good"}
+          value={`${selectedErrorCount}`}
+          tone={selectedErrorCount > 0 ? "warn" : "good"}
         />
         <MetricCard
           icon={<Clock3 size={20} />}
-          label="Median First Audio"
-          value={formatNumber(snapshot.summary.first_audio_latency_p50_s, "s")}
+          label="Median First Reply Audio"
+          value={formatNumber(medianFirstAudio, "s")}
         />
         <MetricCard
           icon={<Volume2 size={20} />}
-          label="Slowest First Audio"
-          value={formatNumber(snapshot.summary.first_audio_latency_p95_s, "s")}
+          label="Slowest First Reply Audio"
+          value={formatNumber(slowestFirstAudio, "s")}
         />
         <MetricCard
           icon={<Zap size={20} />}
-          label="Estimated Cost"
-          value={formatCost(snapshot.summary.latest_session_total_cost_usd)}
+          label="Selected Session Cost"
+          value={formatCost(selectedSessionCost)}
         />
       </section>
 
@@ -531,11 +552,12 @@ function App() {
           <div className="session-list">
             {snapshot.sessions.map((session) => (
               <button
-                className="session-row"
+                className={`session-row ${selectedSession?.session_id === session.session_id ? "selected" : ""}`}
                 key={session.session_id}
                 type="button"
                 onClick={() => {
                   const first = exchanges.find((item) => item.session_id === session.session_id);
+                  setSelectedSessionId(session.session_id);
                   setSelectedExchangeId(first?.exchange_id ?? null);
                 }}
               >
@@ -549,18 +571,6 @@ function App() {
           <div className="search-box">
             <Search size={16} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="exchange, owner, tool" />
-          </div>
-          <div className="segmented">
-            {["all", "complete", "active", "error"].map((status) => (
-              <button
-                key={status}
-                className={statusFilter === status ? "active" : ""}
-                type="button"
-                onClick={() => setStatusFilter(status)}
-              >
-                {humanize(status)}
-              </button>
-            ))}
           </div>
           <div className="interaction-list">
             {filteredExchanges.map((exchange) => (
@@ -602,18 +612,6 @@ function App() {
               <Stage stage={stage} key={`${stage.key}-${stage.ts ?? index}`} />
             ))}
             </div>
-            <div className="axis-flow">
-              <div className="axis-flow-head">
-                <strong>State trajectory</strong>
-                <span>{selectedExchange?.state_transitions.length ?? 0} transitions</span>
-              </div>
-              {(selectedExchange?.state_by_axis ?? []).length ? null : (
-                <span className="muted">no state transitions</span>
-              )}
-              {(selectedExchange?.state_by_axis ?? []).map((group) => (
-                <StateAxisCard group={group} key={group.axis} />
-              ))}
-            </div>
           </div>
         </section>
 
@@ -628,7 +626,7 @@ function App() {
                 ["trigger", selectedExchange?.context.trigger],
                 ["admission_reason", selectedExchange?.context.admission_reason],
                 ["first_audio", formatNumber(selectedExchange?.first_audio_latency_s, "s")],
-                ["cost", selectedCost === null ? null : formatCost(Number(selectedCost))],
+                ["exchange_cost", selectedExchangeCost === null ? null : formatCost(Number(selectedExchangeCost))],
                 ["terminal_reason", selectedExchange?.context.terminal_reason],
                 ["tools", Object.keys(selectedExchange?.tools ?? {}).join(", ") || null]
               ]}
@@ -648,7 +646,6 @@ function App() {
                 ["speaker", selectedExchange?.context.audio_speaker_id],
                 ["owner", selectedExchange?.context.owner_id],
                 ["owner_source", selectedExchange?.context.owner_source],
-                ["owner_confidence", selectedExchange?.context.owner_confidence],
                 ["speaker_visible", selectedExchange?.context.speaker_visible]
               ]}
             />

@@ -105,10 +105,11 @@ def _is_human_exchange_row(row: dict[str, str]) -> bool:
     return req_id.startswith(HUMAN_REQ_PREFIX)
 
 
-def _exchange_key(row: dict[str, str]) -> str:
+def _exchange_key(row: dict[str, str], req_exchanges: dict[str, str]) -> str:
     if not _is_human_exchange_row(row):
         return ""
-    return str(row.get("exchange_id") or row.get("req_id") or "").strip()
+    req_id = str(row.get("req_id") or "").strip()
+    return str(row.get("exchange_id") or req_exchanges.get(req_id, "") or req_id).strip()
 
 
 def _status_from_rows(rows: Sequence[dict[str, str]]) -> str:
@@ -256,6 +257,7 @@ class InteractionAccumulator:
         state_by_axis: dict[str, dict[str, Any]] = {}
         tool_calls_by_key: dict[str, dict[str, Any]] = {}
         counted_tool_keys: set[str] = set()
+        estimated_exchange_cost = 0.0
 
         for index, row in enumerate(self.rows):
             label = _event_label(row)
@@ -277,6 +279,8 @@ class InteractionAccumulator:
                 cost = _float(row, cost_key)
                 if cost is not None:
                     costs[cost_key] = cost
+                    if cost_key == "estimated_cost_usd":
+                        estimated_exchange_cost += cost
             for context_key in (
                 "trigger",
                 "admission_reason",
@@ -382,6 +386,9 @@ class InteractionAccumulator:
             if label_index
             else f"{format_time_for_label(self.started_at)} human -> Argos"
         )
+        if estimated_exchange_cost > 0:
+            costs["estimated_exchange_cost_usd"] = estimated_exchange_cost
+
         return {
             "exchange_id": exchange_id,
             "exchange_index": self.exchange_index,
@@ -481,11 +488,20 @@ def build_dashboard_snapshot(
     source: str = str(DEFAULT_LOG_PATH),
 ) -> dict[str, Any]:
     row_list = [row for row in rows if row]
-    req_sessions = {
-        str(row.get("req_id") or ""): _session_id(row)
-        for row in row_list
-        if row.get("req_id") and _session_id(row) != DEFAULT_SESSION_ID
-    }
+    req_sessions: dict[str, str] = {}
+    req_exchanges: dict[str, str] = {}
+    for row in row_list:
+        req_id = str(row.get("req_id") or "").strip()
+        if not req_id:
+            continue
+        run_id = str(row.get("run_id") or "").strip()
+        if run_id:
+            req_sessions[req_id] = run_id
+        elif req_id not in req_sessions and _session_id(row) != DEFAULT_SESSION_ID:
+            req_sessions[req_id] = _session_id(row)
+        exchange_id = str(row.get("exchange_id") or "").strip()
+        if exchange_id:
+            req_exchanges[req_id] = exchange_id
     sessions: dict[str, SessionAccumulator] = {}
     interactions: dict[str, InteractionAccumulator] = {}
     system_events: list[dict[str, Any]] = []
@@ -525,7 +541,7 @@ def build_dashboard_snapshot(
             if latest_total_cost is None or candidate[:2] > latest_total_cost[:2]:
                 latest_total_cost = candidate
 
-        key = _exchange_key(row)
+        key = _exchange_key(row, req_exchanges)
         if key:
             interaction = interactions.setdefault(
                 key,
@@ -578,7 +594,7 @@ def build_dashboard_snapshot(
     ]
     status_counts = Counter(item["status"] for item in interaction_payloads)
 
-    sessions_payload = []
+    all_sessions_payload = []
     for session in sessions.values():
         session_interactions = [
             item for item in interaction_payloads if item["session_id"] == session.session_id
@@ -588,7 +604,7 @@ def build_dashboard_snapshot(
             for item in session_interactions
             if item.get("first_audio_latency_s") is not None
         ]
-        sessions_payload.append(
+        all_sessions_payload.append(
             {
                 "session_id": session.session_id,
                 "label": _date_label(session.started_at),
@@ -601,7 +617,8 @@ def build_dashboard_snapshot(
                 "avg_first_audio_latency_s": mean(latencies) if latencies else None,
             }
         )
-    sessions_payload.sort(key=lambda item: item["started_at"] or "", reverse=True)
+    all_sessions_payload.sort(key=lambda item: item["started_at"] or "", reverse=True)
+    sessions_payload = [item for item in all_sessions_payload if item["exchange_count"] > 0]
 
     return {
         "source": source,
@@ -609,6 +626,7 @@ def build_dashboard_snapshot(
         "summary": {
             "row_count": len(row_list),
             "session_count": len(sessions_payload),
+            "raw_session_count": len(all_sessions_payload),
             "exchange_count": len(interaction_payloads),
             "interaction_count": len(interaction_payloads),
             "system_event_count": len(system_events),
@@ -623,6 +641,7 @@ def build_dashboard_snapshot(
             "first_audio_latency_avg_s": mean(latency_values) if latency_values else None,
             "first_audio_latency_p50_s": _percentile(latency_values, 0.5),
             "first_audio_latency_p95_s": _percentile(latency_values, 0.95),
+            "first_audio_latency_max_s": max(latency_values) if latency_values else None,
             "tool_latency_avg_s": mean(tool_metrics) if tool_metrics else None,
             "latest_session_total_cost_usd": (
                 latest_total_cost[2] if latest_total_cost is not None else None

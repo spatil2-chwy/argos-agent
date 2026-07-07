@@ -76,7 +76,9 @@ Identity and context fields such as `primary_face_person_id`,
 `audio_speaker_id`, `owner_id`, `owner_source`, `owner_confidence`,
 `speaker_visible`, `trigger`, and `admission_reason` are logged with the
 exchange so the dashboard can show why the mic opened and who the model was
-responding to.
+responding to. The dashboard keeps `owner_confidence` in raw diagnostics but
+does not show it in the main people panel because face-resolved owners may have
+`0.000` audio confidence while still being validly resolved from face context.
 
 ## State Transition Markers
 
@@ -98,7 +100,10 @@ Typical fields are:
 - `ignored_reason`
 
 These records are meant for debugging and future evaluation dashboards. They
-complement the latency markers rather than replacing them.
+complement the latency markers rather than replacing them. The main dashboard
+attaches state rows with the same `req_id` to their owning exchange for
+Diagnostics, but it does not show a state trajectory as a first-class operator
+panel.
 
 Robot arbitration transitions currently cover patrol resume suppression/allow
 decisions and proactive face-attention suppression/allow decisions. Common
@@ -238,10 +243,18 @@ It returns:
 
 - session summaries keyed by local `run_id` when available
 - per-exchange lifecycle timelines keyed by `exchange_id`
+- main session cards only for sessions/runs with at least one exchange; the
+  summary also exposes `raw_session_count` for startup/shutdown-only log groups
 - context for trigger, mic admission, primary face, speaker, and resolved owner
 - state transitions, ignored state events, and raw rows as diagnostics
 - latency metrics such as `first_audio_latency_s`
 - tool usage, cost fields, component counts, and detected error markers
+
+The dashboard labels `first_audio_latency_s` as first reply audio: it measures
+from local speech end to the first assistant audio delta. The selected-session
+cost card uses the latest cumulative `session_total_cost_usd` in that selected
+run. Each exchange summary uses `estimated_exchange_cost_usd`, the sum of
+logged `estimated_cost_usd` rows attached to that exchange.
 
 ## What To Look For
 

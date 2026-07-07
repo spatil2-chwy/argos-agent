@@ -50,9 +50,11 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
 
     assert snapshot["source"] == "sample.log"
     assert snapshot["summary"]["session_count"] == 1
+    assert snapshot["summary"]["raw_session_count"] == 1
     assert snapshot["summary"]["exchange_count"] == 1
     assert snapshot["summary"]["interaction_count"] == 1
     assert snapshot["summary"]["first_audio_latency_p50_s"] == 0.32
+    assert snapshot["summary"]["first_audio_latency_max_s"] == 0.32
     assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.003
     assert snapshot["summary"]["state_axis_counts"]["capture"] == 1
     assert snapshot["summary"]["ignored_reason_counts"]["recording_active"] == 1
@@ -62,6 +64,7 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert interaction["req_id"] == "rt-1"
     assert interaction["status"] == "complete"
     assert interaction["first_audio_latency_s"] == 0.32
+    assert interaction["costs"]["estimated_exchange_cost_usd"] == 0.001
     assert interaction["tools"] == {"capture_scene": 1}
     assert interaction["state_by_axis"] == [
         {
@@ -133,6 +136,51 @@ def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
     ]
 
 
+def test_dashboard_snapshot_merges_state_rows_by_request_exchange_mapping() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | "
+            "event=recording_started | run_id=run-live | session_id=sess-live | "
+            "exchange_id=ex-live | exchange_index=1 | turn_kind=human_audio"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:01.000 | component=realtime | event=audio_commit | "
+            "run_id=run-live | session_id=sess-live | exchange_id=ex-live | "
+            "exchange_index=1 | req_id=rt-live | turn_kind=human_audio"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:01.050 | component=state | event=transition | "
+            "req_id=rt-live | axis=engagement | old_state=idle | "
+            "new_state=engaged | trigger=human_input"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:02.000 | component=realtime | event=exchange_complete | "
+            "run_id=run-live | session_id=sess-live | exchange_id=ex-live | "
+            "exchange_index=1 | req_id=rt-live | terminal_status=complete | "
+            "turn_kind=human_audio"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    assert snapshot["summary"]["session_count"] == 1
+    assert snapshot["summary"]["raw_session_count"] == 1
+    assert snapshot["summary"]["exchange_count"] == 1
+    exchange = snapshot["exchanges"][0]
+    assert exchange["exchange_id"] == "ex-live"
+    assert exchange["session_id"] == "run-live"
+    assert exchange["status"] == "complete"
+    assert exchange["state_transitions"] == [
+        {
+            "axis": "engagement",
+            "old_state": "idle",
+            "new_state": "engaged",
+            "trigger": "human_input",
+            "ts": "2026-07-07 10:00:01.050",
+        }
+    ]
+
+
 def test_dashboard_snapshot_attaches_legacy_recording_rows_to_next_audio_turn() -> None:
     rows = [
         _row(
@@ -200,6 +248,27 @@ def test_dashboard_snapshot_reports_latest_cost_not_max_cost() -> None:
     snapshot = build_dashboard_snapshot(rows)
 
     assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.05
+
+
+def test_dashboard_snapshot_counts_only_exchange_sessions_in_primary_list() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=state | event=transition | "
+            "session_id=sess-startup | axis=session | old_state=stopped | "
+            "new_state=ready | trigger=session.updated"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:05.000 | component=realtime | event=audio_commit | "
+            "run_id=run-live | session_id=sess-live | exchange_id=ex-live | "
+            "req_id=rt-live | turn_kind=human_audio"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    assert snapshot["summary"]["session_count"] == 1
+    assert snapshot["summary"]["raw_session_count"] == 2
+    assert [session["session_id"] for session in snapshot["sessions"]] == ["run-live"]
 
 
 def test_read_latency_rows_returns_empty_for_missing_log(tmp_path) -> None:

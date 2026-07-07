@@ -349,6 +349,11 @@ button {
   background: #f1faf8;
 }
 
+.session-row.selected {
+  border-color: #256f75;
+  background: #f1faf8;
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -388,7 +393,7 @@ button {
 
 .flow-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   height: calc(100vh - 232px);
   min-height: 520px;
