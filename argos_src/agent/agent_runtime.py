@@ -177,6 +177,12 @@ class RealtimeRobotAgent:
         self._latency = LatencyLogger("realtime")
         self._tool_latency = LatencyLogger("tool")
         self._state_observer = state_observer or StructuredStateObserver()
+        self._run_id = f"run-{uuid4().hex[:12]}"
+        self._exchange_counter = 0
+        self._current_exchange_id = ""
+        self._current_exchange_index = 0
+        self._current_exchange_trigger = ""
+        self._current_exchange_admission_reason = ""
         self._session_state = SessionState.STOPPED.value
         self._preference_segments = (
             _PreferenceSegmentCoordinator() if preference_extraction_enabled else None
@@ -371,6 +377,86 @@ class RealtimeRobotAgent:
 
     def _is_turn_terminal(self, turn: Optional[QueuedTurn]) -> bool:
         return self._state_controller()._is_turn_terminal(turn)
+
+    def _base_log_fields(self) -> dict[str, Any]:
+        self._ensure_observability_ids()
+        return {
+            "run_id": self._run_id,
+            "openai_session_id": getattr(self, "_session_id", "") or None,
+            "session_id": getattr(self, "_session_id", "") or None,
+        }
+
+    def _ensure_observability_ids(self) -> None:
+        if not hasattr(self, "_run_id"):
+            self._run_id = f"run-{uuid4().hex[:12]}"
+        if not hasattr(self, "_exchange_counter"):
+            self._exchange_counter = 0
+        if not hasattr(self, "_current_exchange_id"):
+            self._current_exchange_id = ""
+        if not hasattr(self, "_current_exchange_index"):
+            self._current_exchange_index = 0
+        if not hasattr(self, "_current_exchange_trigger"):
+            self._current_exchange_trigger = ""
+        if not hasattr(self, "_current_exchange_admission_reason"):
+            self._current_exchange_admission_reason = ""
+
+    def _new_exchange_locked(
+        self,
+        *,
+        trigger: str,
+        admission_reason: str,
+    ) -> tuple[str, int]:
+        self._ensure_observability_ids()
+        self._exchange_counter += 1
+        self._current_exchange_id = f"ex-{uuid4().hex[:12]}"
+        self._current_exchange_index = self._exchange_counter
+        self._current_exchange_trigger = str(trigger or "").strip()
+        self._current_exchange_admission_reason = str(admission_reason or "").strip()
+        return self._current_exchange_id, self._current_exchange_index
+
+    def _current_exchange_fields_locked(self) -> dict[str, Any]:
+        self._ensure_observability_ids()
+        return {
+            **self._base_log_fields(),
+            "exchange_id": self._current_exchange_id or None,
+            "exchange_index": self._current_exchange_index or None,
+            "turn_kind": "human_audio",
+            "trigger": self._current_exchange_trigger or None,
+            "admission_reason": self._current_exchange_admission_reason or None,
+        }
+
+    def _exchange_log_fields(self, turn: QueuedTurn | None = None) -> dict[str, Any]:
+        fields = self._base_log_fields()
+        if turn is None:
+            recording_lock = getattr(self, "_recording_lock", None)
+            if recording_lock is None:
+                fields.update(self._current_exchange_fields_locked())
+                return fields
+            with recording_lock:
+                fields.update(self._current_exchange_fields_locked())
+            return fields
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        fields.update(
+            {
+                "exchange_id": turn.exchange_id or metadata.get("exchange_id") or None,
+                "exchange_index": turn.exchange_index or metadata.get("exchange_index") or None,
+                "turn_kind": (
+                    "internal_text"
+                    if bool(getattr(turn, "source_is_internal", False))
+                    else ("human_audio" if turn.kind == "audio" else "human_text")
+                ),
+                "primary_face_person_id": turn.primary_face_person_id or None,
+                "audio_speaker_id": turn.audio_speaker_id or None,
+                "owner_id": turn.owner_id or None,
+                "owner_source": turn.owner_source or None,
+                "owner_confidence": turn.owner_confidence,
+                "speaker_visible": turn.speaker_visible,
+                "trigger": metadata.get("trigger") or metadata.get("admission_reason") or None,
+                "admission_reason": metadata.get("admission_reason") or None,
+                "pending_internal_events": bool(getattr(turn, "pending_internal_text", None)),
+            }
+        )
+        return fields
 
     def _response_bindings(self) -> PendingResponseBindingStore:
         return self._state_controller()._response_bindings()
@@ -969,6 +1055,10 @@ class RealtimeRobotAgent:
         """Queue a text-only internal or coalesced turn for the response worker."""
         meta = dict(metadata or {})
         req_id = str(meta.get("req_id") or f"evt-{uuid4().hex[:12]}")
+        if not meta.get("exchange_id"):
+            meta["exchange_id"] = req_id
+        if not meta.get("turn_kind"):
+            meta["turn_kind"] = "internal_text" if bool(meta.get("internal", False)) else "human_text"
         context = self._capture_turn_context()
         resolution = None
         if not bool(meta.get("internal", False)):
@@ -990,6 +1080,8 @@ class RealtimeRobotAgent:
             speech_end_unix_s=float(meta.get("speech_end_unix_s") or time.time()),
             transcript_perf_s=float(meta.get("transcript_perf_s") or perf_now()),
             source_is_internal=bool(meta.get("internal", False)),
+            exchange_id=str(meta.get("exchange_id") or ""),
+            exchange_index=int(meta.get("exchange_index") or 0),
             input_text=text,
             user_transcript=(
                 "" if bool(meta.get("internal", False)) else _human_text_from_text_turn(text)
@@ -1366,7 +1458,11 @@ class RealtimeRobotAgent:
         turn.pending_response_requests += 1
         self._set_turn_phase(turn, TURN_PHASE_RESPONSE_REQUESTED)
         self._queue_pending_response_turn(turn.req_id)
-        self._latency.emit(event="response_create", req_id=turn.req_id)
+        self._latency.emit(
+            event="response_create",
+            req_id=turn.req_id,
+            **self._exchange_log_fields(turn),
+        )
         self.logger.info(
             "Queueing response.create req_id=%s pending_response_requests=%s",
             turn.req_id,
@@ -1494,6 +1590,11 @@ class RealtimeRobotAgent:
             event="response_usage",
             req_id=turn.req_id,
             session_id=getattr(self, "_session_id", "") or None,
+            **{
+                key: value
+                for key, value in self._exchange_log_fields(turn).items()
+                if key != "session_id"
+            },
             response_id=response.get("id"),
             model=self.realtime_profile.model,
             input_tokens=input_tokens,
@@ -1686,6 +1787,13 @@ class RealtimeRobotAgent:
             return
         turn.finalized = True
         turn.finalized_reason = "completed"
+        self._latency.emit(
+            event="exchange_complete",
+            req_id=turn.req_id,
+            terminal_status="complete",
+            terminal_reason="completed",
+            **self._exchange_log_fields(turn),
+        )
         self._set_turn_phase(turn, TURN_PHASE_FINALIZED)
         turn.response_finished.set()
         turn.playback_finished.set()
@@ -1709,6 +1817,13 @@ class RealtimeRobotAgent:
         turn.interrupted = turn.interrupted or truncate_playback
         turn.finalized = True
         turn.finalized_reason = reason
+        self._latency.emit(
+            event="exchange_terminal",
+            req_id=turn.req_id,
+            terminal_status="error" if phase == TURN_PHASE_CANCELED else phase,
+            terminal_reason=reason,
+            **self._exchange_log_fields(turn),
+        )
         self._set_turn_phase(turn, phase)
         self.logger.warning(
             "Terminating turn req_id=%s phase=%s reason=%s response_id=%s audio_started=%s pending_tool_calls=%s pending_response_requests=%s",

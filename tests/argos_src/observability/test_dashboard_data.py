@@ -44,6 +44,7 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
 
     assert snapshot["source"] == "sample.log"
     assert snapshot["summary"]["session_count"] == 1
+    assert snapshot["summary"]["exchange_count"] == 1
     assert snapshot["summary"]["interaction_count"] == 1
     assert snapshot["summary"]["first_audio_latency_p50_s"] == 0.32
     assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.003
@@ -51,6 +52,7 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert snapshot["summary"]["ignored_reason_counts"]["recording_active"] == 1
 
     interaction = snapshot["interactions"][0]
+    assert snapshot["exchanges"][0]["exchange_id"] == "rt-1"
     assert interaction["req_id"] == "rt-1"
     assert interaction["status"] == "complete"
     assert interaction["first_audio_latency_s"] == 0.32
@@ -65,6 +67,64 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
         }
     ]
     assert snapshot["system_events"][0]["ignored_reason"] == "recording_active"
+
+
+def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | "
+            "event=audio_commit | req_id=rt-split"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:00.100 | component=realtime | "
+            "event=response_create | req_id=rt-split"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:00.300 | component=realtime | "
+            "event=response_usage | session_id=sess-live | req_id=rt-split"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    assert snapshot["summary"]["exchange_count"] == 1
+    assert len(snapshot["sessions"]) == 1
+    assert snapshot["sessions"][0]["session_id"] == "sess-live"
+    assert snapshot["sessions"][0]["exchange_count"] == 1
+    exchange = snapshot["exchanges"][0]
+    assert exchange["req_id"] == "rt-split"
+    assert exchange["status"] == "complete"
+    assert [stage["key"] for stage in exchange["lifecycle"]] == [
+        "audio_commit",
+        "model_requested",
+        "response_usage",
+    ]
+
+
+def test_dashboard_snapshot_attaches_legacy_recording_rows_to_next_audio_turn() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | "
+            "event=recording_started | admission_reason=wake_word"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:01.000 | component=realtime | event=speech_end"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:01.100 | component=realtime | "
+            "event=audio_commit | req_id=rt-legacy"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    exchange = snapshot["exchanges"][0]
+    assert exchange["req_id"] == "rt-legacy"
+    assert [stage["key"] for stage in exchange["lifecycle"]] == [
+        "recording",
+        "speech_end",
+        "audio_commit",
+    ]
 
 
 def test_dashboard_snapshot_marks_error_interactions() -> None:

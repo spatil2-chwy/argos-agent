@@ -64,6 +64,12 @@ class ToolRuntime:
             event="tool_result",
             req_id=turn.req_id,
             tool=pending.tool_name,
+            call_id=pending.call_id,
+            **(
+                host._exchange_log_fields(turn)
+                if callable(getattr(host, "_exchange_log_fields", None))
+                else {}
+            ),
         )
         host._queue_pending_local_created_item(turn.req_id, "function_call_output")
         host._send_event(

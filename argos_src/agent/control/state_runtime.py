@@ -301,6 +301,10 @@ class AgentStateRuntime:
         old_phase = turn.phase
         turn.phase = phase
         turn.phase_updated_at = time.time()
+        exchange_fields = {}
+        fields_fn = getattr(self, "_exchange_log_fields", None)
+        if callable(fields_fn):
+            exchange_fields = dict(fields_fn(turn))
         safe_transition(
             getattr(self, "_state_observer", None),
             StateTransition(
@@ -315,6 +319,7 @@ class AgentStateRuntime:
                     "pending_response_requests": int(
                         getattr(turn, "pending_response_requests", 0) or 0
                     ),
+                    **exchange_fields,
                 },
             ),
         )

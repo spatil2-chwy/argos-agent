@@ -189,6 +189,11 @@ class ServerEventRuntime:
                 event="transcription_usage",
                 req_id=turn.req_id,
                 session_id=getattr(self, "_session_id", "") or None,
+                **{
+                    key: value
+                    for key, value in self._exchange_log_fields(turn).items()
+                    if key != "session_id"
+                },
                 item_id=item_id or None,
                 model=self.realtime_profile.transcription_model,
                 input_tokens=usage.get("input_tokens"),
@@ -284,6 +289,7 @@ class ServerEventRuntime:
                 "first_audio_latency_s",
                 first_audio_perf - turn.speech_end_perf_s,
                 req_id=turn.req_id,
+                **self._exchange_log_fields(turn),
             )
         self.engagement.on_agent_output_started(
             turn.req_id,
@@ -419,6 +425,13 @@ class ServerEventRuntime:
         turn.pending_tool_calls += 1
         turn.pending_call_ids.add(call_id)
         self._set_turn_phase(turn, TURN_PHASE_WAITING_TOOLS)
+        self._latency.emit(
+            event="tool_call_requested",
+            req_id=turn.req_id,
+            tool=tool_name,
+            call_id=call_id,
+            **self._exchange_log_fields(turn),
+        )
         self._tool_queue.put(
             PendingToolCall(
                 turn_req_id=turn.req_id,
@@ -447,6 +460,13 @@ class ServerEventRuntime:
             self._bind_response_id(turn, response_id)
         status = str(response.get("status", "unknown") or "unknown").strip()
         self._emit_response_usage(turn, response)
+        self._latency.emit(
+            event="response_done",
+            req_id=turn.req_id,
+            response_status=status,
+            response_id=response_id or None,
+            **self._exchange_log_fields(turn),
+        )
         if not turn.assistant_transcript:
             turn.assistant_transcript = self._transcript_from_response(response)
         output_items = response.get("output", []) or []

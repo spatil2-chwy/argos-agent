@@ -43,5 +43,6 @@ def test_dashboard_snapshot_loader_reads_log_file(tmp_path) -> None:
     body = load_dashboard_snapshot(log_path)
 
     assert body["source"] == str(log_path)
+    assert body["summary"]["exchange_count"] == 1
     assert body["summary"]["interaction_count"] == 1
-    assert body["interactions"][0]["status"] == "complete"
+    assert body["exchanges"][0]["status"] == "complete"

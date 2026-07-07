@@ -394,6 +394,88 @@ button {
   padding-right: 4px;
 }
 
+.stage {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid #eef2f6;
+}
+
+.stage:last-child {
+  border-bottom: 0;
+}
+
+.stage-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #c7d7dc;
+  border-radius: 8px;
+  background: #e7f4f2;
+  color: #256f75;
+}
+
+.stage-tool_requested .stage-icon,
+.stage-tool_finished .stage-icon {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #b54708;
+}
+
+.stage-playback_stopped .stage-icon,
+.stage-exchange_terminal .stage-icon {
+  background: #fff1f3;
+  border-color: #fecdd6;
+  color: #c01048;
+}
+
+.stage-body {
+  min-width: 0;
+}
+
+.stage-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stage-title strong {
+  color: #18202b;
+  font-size: 0.96rem;
+}
+
+.stage-title span {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 0.8rem;
+}
+
+.stage-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.stage-details span {
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid #d9e0e8;
+  border-radius: 6px;
+  background: #fbfcfe;
+  color: #475467;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.stage-details b {
+  color: #18202b;
+  font-weight: 760;
+}
+
 .empty-state {
   display: grid;
   min-height: 260px;
@@ -522,6 +604,60 @@ button {
 
 .inspector .panel {
   padding: 14px;
+}
+
+.diagnostic-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #18202b;
+  font-size: 0.96rem;
+  font-weight: 760;
+  list-style: none;
+}
+
+.diagnostic-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnostic-panel[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.diagnostic-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #eef2f6;
+}
+
+.diagnostic-section h3 {
+  margin: 0 0 8px;
+  color: #475467;
+  font-size: 0.82rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.raw-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef2f6;
+  color: #475467;
+  font-size: 0.78rem;
+}
+
+.raw-row b {
+  color: #18202b;
+}
+
+.raw-row span {
+  padding: 2px 6px;
+  border: 1px solid #d9e0e8;
+  border-radius: 6px;
+  background: #fbfcfe;
 }
 
 .bar-list {

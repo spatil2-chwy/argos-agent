@@ -40,15 +40,43 @@ Typical human turn flow:
 
 | component | event / metric | meaning |
 |---|---|---|
-| `realtime` | `event=recording_started` | local admission opened and the runtime started buffering speech |
+| `realtime` | `event=recording_started` | local admission opened, an `exchange_id` was assigned, and the runtime started buffering speech |
 | `realtime` | `event=speech_end` | local end-of-speech detection fired |
 | `realtime` | `event=audio_commit` | mic audio was committed into the Realtime session |
+| `realtime` | `event=exchange_context` | face, speaker, owner, and pending internal-event context captured for the exchange |
 | `realtime` | `event=response_create` | the model response was explicitly requested |
 | `realtime` | `metric=first_audio_latency_s` | speech end to first playback audio delta |
+| `realtime` | `event=tool_call_requested` | the model requested a tool call |
+| `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
+| `realtime` | `event=response_done` | the Realtime response stream reached `response.done` |
 | `realtime` | `event=transcription_usage` | input transcription token usage and estimated transcription cost for the turn |
 | `realtime` | `event=response_usage` | final token/caching usage from `response.done`, including modality token counts and estimated response cost |
+| `realtime` | `event=playback_completed` | local speaker playback drained for the exchange |
+| `realtime` | `event=exchange_complete` | the exchange reached a clean terminal state |
 
 This is the main felt-latency path now.
+
+Operator-facing dashboard views treat a human exchange as:
+
+```text
+recording_started -> speech_end -> audio_commit -> response_create
+-> first_audio_latency_s -> optional tools -> response_done
+-> playback_completed -> exchange_complete
+```
+
+The stable join keys are:
+
+- `run_id`: local Argos process run shown as an operator session.
+- `exchange_id`: one human speech input through one robot/model response.
+- `exchange_index`: exchange number within the local run.
+- `req_id`: Realtime request/turn id, kept for diagnostics.
+- `openai_session_id`: raw OpenAI Realtime session id, kept for diagnostics.
+
+Identity and context fields such as `primary_face_person_id`,
+`audio_speaker_id`, `owner_id`, `owner_source`, `owner_confidence`,
+`speaker_visible`, `trigger`, and `admission_reason` are logged with the
+exchange so the dashboard can show why the mic opened and who the model was
+responding to.
 
 ## State Transition Markers
 
@@ -85,6 +113,7 @@ Tool-related signals still matter:
 | component | event / metric | meaning |
 |---|---|---|
 | `action` | `metric=tool_dispatch_s` | speech end to first robot command dispatch for action-style tools |
+| `realtime` | `event=tool_call_requested` | model requested a tool call, including the tool name and call id |
 | `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
 | `tool` | `event=memory_query_start` | a Tailwag memory query tool started; logs tool name, query kind, and person id but not memory text |
 | `tool` | `metric=memory_query_s` | Tailwag memory query duration and result count |
@@ -207,9 +236,10 @@ GET /api/snapshot
 
 It returns:
 
-- session summaries
-- per-interaction timelines keyed by `req_id`
-- state transitions and ignored state events
+- session summaries keyed by local `run_id` when available
+- per-exchange lifecycle timelines keyed by `exchange_id`
+- context for trigger, mic admission, primary face, speaker, and resolved owner
+- state transitions, ignored state events, and raw rows as diagnostics
 - latency metrics such as `first_audio_latency_s`
 - tool usage, cost fields, component counts, and detected error markers
 

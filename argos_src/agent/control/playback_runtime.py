@@ -10,6 +10,13 @@ from argos_src.agent.control.observers import safe_transition
 from argos_src.agent.control.types import PlaybackState, StateAxis, StateTransition
 
 
+def _exchange_fields(host: Any, turn: QueuedTurn) -> dict[str, Any]:
+    fields_fn = getattr(host, "_exchange_log_fields", None)
+    if callable(fields_fn):
+        return dict(fields_fn(turn))
+    return {}
+
+
 class PlaybackRuntime:
     """Coordinate local playback completion, stall recovery, and interruption."""
 
@@ -75,6 +82,14 @@ class PlaybackRuntime:
             turn.req_id,
             stream_id=rendered_stream_id,
         )
+        latency = getattr(host, "_latency", None)
+        if latency is not None:
+            latency.emit(
+                event="playback_completed",
+                req_id=turn.req_id,
+                stream_id=rendered_stream_id,
+                **_exchange_fields(host, turn),
+            )
         self.transition(
             PlaybackState.COMPLETED,
             trigger="playback_completed",
@@ -103,6 +118,15 @@ class PlaybackRuntime:
             turn.req_id,
             stream_id=turn.response_id,
         )
+        latency = getattr(host, "_latency", None)
+        if latency is not None:
+            latency.emit(
+                event="playback_stopped",
+                req_id=turn.req_id,
+                stream_id=turn.response_id,
+                terminal_reason=reason,
+                **_exchange_fields(host, turn),
+            )
         self.transition(
             PlaybackState.FORCE_COMPLETED,
             trigger="playback_force_complete",

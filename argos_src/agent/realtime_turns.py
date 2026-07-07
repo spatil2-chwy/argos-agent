@@ -67,6 +67,8 @@ class QueuedTurn:
     owner_confidence: float = 0.0
     speaker_visible: bool = False
     source_is_internal: bool = False
+    exchange_id: str = ""
+    exchange_index: int = 0
     input_text: str = ""
     pending_internal_text: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)

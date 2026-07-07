@@ -1,7 +1,12 @@
-# Argos Observability Dashboard
+# Argos Exchange Dashboard
 
 FastAPI serves the dashboard API and the built Vite app. Vite runs separately
 during frontend development and proxies `/api` to FastAPI.
+
+The primary dashboard unit is an exchange: one admitted human speech input,
+its committed Realtime turn, the model response, optional tool calls, playback,
+and terminal status. Raw state-axis and component-count rows are still available
+under Diagnostics, but they are not the default operator view.
 
 ```bash
 source setup_shell.sh

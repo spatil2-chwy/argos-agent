@@ -58,6 +58,13 @@ class AudioRuntime:
         if old_state == new_state:
             return
         self._capture_state = new_state
+        exchange_fields = {}
+        fields_fn = getattr(self, "_exchange_log_fields", None)
+        if callable(fields_fn):
+            try:
+                exchange_fields = dict(fields_fn())
+            except Exception:
+                exchange_fields = {}
         safe_transition(
             getattr(self, "_state_observer", None),
             StateTransition(
@@ -67,6 +74,7 @@ class AudioRuntime:
                 trigger=trigger,
                 req_id=req_id,
                 reason=reason,
+                fields=exchange_fields,
             ),
         )
 
@@ -385,6 +393,15 @@ class AudioRuntime:
         wake_detected: bool = False,
     ) -> None:
         self._recording_active = True
+        trigger = "wake_word" if wake_detected else (admission_reason or "admission_open")
+        exchange_id = ""
+        exchange_index = 0
+        new_exchange = getattr(self, "_new_exchange_locked", None)
+        if callable(new_exchange):
+            exchange_id, exchange_index = new_exchange(
+                trigger=trigger,
+                admission_reason=admission_reason or "unknown",
+            )
         self._set_capture_state(
             CaptureState.RECORDING,
             trigger="recording_started",
@@ -415,7 +432,19 @@ class AudioRuntime:
             self._current_primary_face_person_id,
             ",".join(self._current_visible_face_person_ids) or "<none>",
         )
-        self._latency.emit(event="recording_started")
+        self._latency.emit(
+            event="recording_started",
+            exchange_id=exchange_id or None,
+            exchange_index=exchange_index or None,
+            turn_kind="human_audio",
+            trigger=trigger,
+            admission_reason=admission_reason or "unknown",
+            interaction_state=interaction_state or "unknown",
+            wake_detected=bool(wake_detected),
+            primary_face_person_id=self._current_primary_face_person_id,
+            visible_face_person_ids=",".join(self._current_visible_face_person_ids) or None,
+            **self._base_log_fields(),
+        )
 
     def _finalize_recording_locked(self, *, now_s: float) -> None:
         self._recording_active = False
@@ -436,7 +465,12 @@ class AudioRuntime:
             display_mode("thinking")
         speech_end_perf_s = perf_now()
         speech_end_unix_s = now_s
-        self._latency.emit(event="speech_end", speech_end_unix_s=speech_end_unix_s)
+        self._latency.emit(
+            event="speech_end",
+            speech_end_unix_s=speech_end_unix_s,
+            capture_vad_positive_blocks=capture_vad_positive_blocks,
+            **self._exchange_log_fields(),
+        )
         threading.Thread(
             target=self._commit_audio_turn,
             args=(
@@ -475,7 +509,8 @@ class AudioRuntime:
             display_mode("thinking")
         transcript_perf_s = perf_now()
         req_id = f"rt-{uuid4().hex[:12]}"
-        self._latency.emit(event="audio_commit", req_id=req_id)
+        exchange_fields = self._exchange_log_fields()
+        self._latency.emit(event="audio_commit", req_id=req_id, **exchange_fields)
         self._set_capture_state(
             CaptureState.COMMITTED,
             trigger="audio_commit",
@@ -485,6 +520,11 @@ class AudioRuntime:
             internal_text, merged_meta = self.coalescer.drain_internal_events_for_audio_turn(
                 {
                     "req_id": req_id,
+                    "exchange_id": exchange_fields.get("exchange_id"),
+                    "exchange_index": exchange_fields.get("exchange_index"),
+                    "turn_kind": "human_audio",
+                    "trigger": exchange_fields.get("trigger"),
+                    "admission_reason": exchange_fields.get("admission_reason"),
                     "capture_vad_positive_blocks": int(capture_vad_positive_blocks),
                     "speech_end_perf_s": speech_end_perf_s,
                     "speech_end_unix_s": speech_end_unix_s,
@@ -494,6 +534,11 @@ class AudioRuntime:
         else:
             internal_text, merged_meta = None, {
                 "req_id": req_id,
+                "exchange_id": exchange_fields.get("exchange_id"),
+                "exchange_index": exchange_fields.get("exchange_index"),
+                "turn_kind": "human_audio",
+                "trigger": exchange_fields.get("trigger"),
+                "admission_reason": exchange_fields.get("admission_reason"),
                 "capture_vad_positive_blocks": int(capture_vad_positive_blocks),
                 "speech_end_perf_s": speech_end_perf_s,
                 "speech_end_unix_s": speech_end_unix_s,
@@ -538,6 +583,8 @@ class AudioRuntime:
             speech_end_perf_s=speech_end_perf_s,
             speech_end_unix_s=speech_end_unix_s,
             transcript_perf_s=transcript_perf_s,
+            exchange_id=str(exchange_fields.get("exchange_id") or ""),
+            exchange_index=int(exchange_fields.get("exchange_index") or 0),
             primary_face_person_id=primary_face_person_id,
             audio_speaker_id=resolution.audio_speaker_id,
             owner_id=resolution.owner_id,
@@ -562,6 +609,15 @@ class AudioRuntime:
             phase="initial",
             primary_face_person_id=primary_face_person_id,
             result=resolution,
+        )
+        self._latency.emit(
+            event="exchange_context",
+            req_id=req_id,
+            capture_vad_positive_blocks=capture_vad_positive_blocks,
+            audio_duration_s=round(len(audio_pcm16) / float(VAD_SAMPLE_RATE * 2), 3)
+            if audio_pcm16
+            else 0.0,
+            **self._exchange_log_fields(turn),
         )
         owner_turn_controller = getattr(self, "owner_turn_controller", None)
         if owner_turn_controller is not None:
