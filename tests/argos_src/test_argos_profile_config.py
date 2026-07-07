@@ -60,8 +60,8 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
             "name": "manifest-profile",
             "resources": {
                 "primary_robot": "base",
-                "face_camera": "realsense_001",
-                "scene_camera": "realsense_001",
+                "face_camera": "arducam_001",
+                "scene_camera": "arducam_001",
             },
             "tools": {
                 "enabled_tool_ids": [
@@ -83,7 +83,7 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
     assert profile.manifest_id == "puffle"
     assert profile.manifest is not None
     assert profile.resources.primary_robot == "base"
-    assert profile.resources.face_camera == "realsense_001"
+    assert profile.resources.face_camera == "arducam_001"
     assert profile.resources.interaction_display == "screen_001"
     assert profile.display.enabled is True
     assert profile.robot_family == "unitree_go2"
@@ -109,8 +109,8 @@ def test_manifest_profile_rejects_missing_tool_capability():
                 "name": "manifest-missing-capability",
                 "manifest": "puffle",
                 "resources": {
-                    "primary_robot": "realsense_001",
-                    "scene_camera": "realsense_001",
+                    "primary_robot": "arducam_001",
+                    "scene_camera": "arducam_001",
                 },
                 "tools": {
                     "enabled_tool_ids": ["posture.stand"],

@@ -62,19 +62,21 @@ identity_store:
   db_path: var/identity/identity.sqlite3
 
 slack_memory:
-  enabled: true
+  enabled: false
   start_with_agent: false
   bot_token_env: SLACK_BOT_TOKEN
   poll_interval_sec: 1800.0
-  lookback_minutes: 120
+  state_path: .tailwag/slack-state.json
+  backfill_hours: 2.0
+  force_backfill: false
+  active_thread_hours: 24.0
+  history_limit: 50
+  reply_limit: 200
+  extract_memory: true
+  include_email: true
   channels:
     - name: robotics_internal_team
       channel_id: C0896C8CE83
-      site_code: BOS3
-      person_memory_enabled: true
-      site_memory_enabled: true
-      include_threads: true
-      max_messages_per_window: 50
 
 face_recognition:
   enabled: true
