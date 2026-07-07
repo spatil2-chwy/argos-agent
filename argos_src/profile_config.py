@@ -426,7 +426,7 @@ class ScenarioProfile:
             output_device="pipewire",
             noise_reduction="near_field",
             language=None,
-            vad_threshold=0.8,
+            vad_threshold=0.5,
             silence_grace_period=0.3,
             wake_word="hey puffle",
             wake_word_model="hey puffle",
@@ -1691,7 +1691,7 @@ def _parse_realtime(
     vad_threshold = _pop_float(
         data,
         "vad_threshold",
-        default=0.8,
+        default=0.5,
     )
     silence_grace_period = _pop_float(
         data,
