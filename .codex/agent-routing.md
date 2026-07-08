@@ -81,6 +81,7 @@ Read-only agents must report the proposed learning update instead of editing fil
 | Module boundaries, folder structure, naming, file size, coupling, and refactor shape | `repo-structure-auditor` | read-only | `safe-refactor-workflow` |
 | Tests should be selected, run, diagnosed, or fixed in parallel | `test-runner` | workspace-write | Any workflow |
 | Public behavior, setup, operator flow, architecture, safety, identity, provider, or memory docs may drift | `docs-sync-auditor` | read-only | Any workflow |
+| Realtime state axes, reducers, engagement flow, turn/playback lifecycle, or coalescer diagrams may drift | `state-machine-diagrammer` | workspace-write | `realtime-change-workflow` or `docs-sync-auditor` |
 | Latency logs, realtime markers, cost telemetry, bring-up failures | `observability-debugger` | read-only by default | `debug-bringup-workflow` |
 | Dashboard UI/API, latency-log indexing, dashboard build, observability dashboard docs | `observability-dashboard-maintainer` | read-only | `safe-refactor-workflow` |
 | HTML deck, demo briefing, roadmap deck, weekly status presentation, or stakeholder review package | `presentation-creator` | workspace-write | `argos-html-presentation-workflow` |
