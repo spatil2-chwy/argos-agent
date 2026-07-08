@@ -34,6 +34,12 @@ only when the current depth-gated scene has exactly one usable recognized face.
 If no recognized face, an unknown face, or multiple usable faces are present, it
 is `None`.
 
+The face loop also records recognition evidence for the strongest visible face
+attempt: match status/reason, candidate person/name, similarity score,
+threshold, runner-up score, margin, and margin threshold. That evidence is
+diagnostic only; it explains why face identity did or did not contribute to the
+turn owner, but it does not loosen the strict `primary_face_person_id` policy.
+
 The final spoken-turn owner is resolved later by speaker recognition in `argos_src/speaker_recognition/policy.py`, using:
 
 - `primary_face_person_id` from the camera scene

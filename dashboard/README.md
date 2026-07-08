@@ -1,4 +1,4 @@
-# Argos Exchange Dashboard
+# Tailwag Observability Dashboard
 
 FastAPI serves the dashboard API and the built Vite app. Vite runs separately
 during frontend development and proxies `/api` to FastAPI.
@@ -8,15 +8,27 @@ its committed Realtime turn, the model response, optional tool calls, playback,
 and terminal status. Raw state-axis and component-count rows are still available
 under Diagnostics, but they are not the default operator view.
 
+Exchanges are nested under conversation segments. A segment is a consecutive
+run of human exchanges with the same resolved owner key, either
+`owner:<person_id>` or `anonymous`. This matches the owner-scoped Realtime
+history boundary: same owner keeps context, owner handoff clears older
+conversation items before the next response.
+
 The primary session list includes only operator runs that contain at least one
 exchange. Startup/shutdown-only OpenAI session rows remain in the raw log and
 API summary as `raw_session_count`, but they do not create main dashboard
 session cards.
 
-Headline exchange, error, first-reply-audio, and cost metrics are scoped to the
-selected session. The cost card is the selected session's latest cumulative
-`session_total_cost_usd`; the exchange summary shows that exchange's summed
-logged `estimated_cost_usd` rows.
+Headline exchange, error, first-reply-audio, and selected-session cost metrics
+are scoped to the selected session. The selected-session cost card is the
+session's latest cumulative `session_total_cost_usd`; the cost-to-date card sums
+the latest cumulative cost for every exchange-bearing session in the loaded log.
+The exchange summary shows that exchange's summed logged `estimated_cost_usd`
+rows.
+
+`first_audio_latency_s` is shown as first reply audio: local speech end to the
+first assistant audio delta. It measures felt silence, so tool/action-heavy
+turns can legitimately be much slower than ordinary replies.
 
 ```bash
 source setup_shell.sh

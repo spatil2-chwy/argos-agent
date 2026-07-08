@@ -43,6 +43,10 @@ def read_latency_rows(path: str | Path = DEFAULT_LOG_PATH) -> list[dict[str, str
 def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(value, fmt)
@@ -81,6 +85,20 @@ def _session_key(row: dict[str, str], req_sessions: dict[str, str]) -> str:
 
 def _openai_session_id(row: dict[str, str]) -> str:
     return row.get("openai_session_id") or row.get("session_id") or row.get("session") or ""
+
+
+def _owner_key(owner_id: Any) -> str:
+    rendered = str(owner_id or "").strip()
+    if rendered:
+        return f"owner:{rendered}"
+    return "anonymous"
+
+
+def _owner_label(owner_id: Any) -> str:
+    rendered = str(owner_id or "").strip()
+    if rendered:
+        return rendered
+    return "Unknown speaker"
 
 
 def _turn_kind(row: dict[str, str]) -> str:
@@ -152,6 +170,29 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "owner_id",
         "owner_source",
         "owner_confidence",
+        "old_owner_key",
+        "new_owner_key",
+        "deleted_items",
+        "protected_items",
+        "history_action",
+        "memory_segment_id",
+        "memory_person_id",
+        "memory_turn_count",
+        "memory_flush_reason",
+        "memory_extraction_enabled",
+        "memory_extraction_scheduled",
+        "audio_score",
+        "audio_runner_up_score",
+        "audio_score_margin",
+        "face_match_status",
+        "face_match_reason",
+        "face_match_name",
+        "face_match_person_id",
+        "face_score",
+        "face_score_threshold",
+        "face_runner_up_score",
+        "face_score_margin",
+        "face_margin_threshold",
         "speaker_visible",
         "tool",
         "call_id",
@@ -161,6 +202,7 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "response_status",
         "terminal_status",
         "terminal_reason",
+        "pending_internal_events",
         "capture_vad_positive_blocks",
         "audio_duration_s",
         "estimated_cost_usd",
@@ -187,8 +229,10 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "speech_end": ("speech_end", "Speech ended"),
         "audio_commit": ("audio_commit", "Audio committed"),
         "exchange_context": ("identity", "Speaker and owner resolved"),
+        "owner_handoff": ("owner_handoff", "Owner handoff"),
+        "memory_segment_flushed": ("memory_flushed", "Memory segment flushed"),
         "response_create": ("model_requested", "Model requested"),
-        "first_audio_latency_s": ("first_audio", "First audio"),
+        "first_audio_latency_s": ("first_audio", "First reply audio"),
         "tool_call_requested": ("tool_requested", "Tool requested"),
         "tool_result": ("tool_finished", "Tool finished"),
         "response_done": ("response_done", "Response complete"),
@@ -291,6 +335,18 @@ class InteractionAccumulator:
                 "owner_id",
                 "owner_source",
                 "owner_confidence",
+                "audio_score",
+                "audio_runner_up_score",
+                "audio_score_margin",
+                "face_match_status",
+                "face_match_reason",
+                "face_match_name",
+                "face_match_person_id",
+                "face_score",
+                "face_score_threshold",
+                "face_runner_up_score",
+                "face_score_margin",
+                "face_margin_threshold",
                 "speaker_visible",
                 "turn_kind",
                 "terminal_status",
@@ -463,6 +519,133 @@ class SessionAccumulator:
             self.ended_at = ts
 
 
+def _conversation_segments_for_interactions(
+    interaction_payloads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive consecutive owner-scoped conversation segments per session."""
+
+    by_session: dict[str, list[dict[str, Any]]] = {}
+    for item in interaction_payloads:
+        by_session.setdefault(str(item.get("session_id") or DEFAULT_SESSION_ID), []).append(item)
+
+    segments: list[dict[str, Any]] = []
+    for session_id, session_items in by_session.items():
+        ordered = sorted(
+            session_items,
+            key=lambda item: (
+                str(item.get("started_at") or ""),
+                int(item.get("exchange_index") or 0),
+                str(item.get("req_id") or ""),
+            ),
+        )
+        active: dict[str, Any] | None = None
+        previous_owner_key = ""
+        segment_index = 0
+        for item in ordered:
+            context = item.get("context") if isinstance(item.get("context"), dict) else {}
+            owner_id = context.get("owner_id") if context is not None else ""
+            owner_key = _owner_key(owner_id)
+            owner_source = str((context or {}).get("owner_source") or "unknown")
+            if active is None or active["owner_key"] != owner_key:
+                if active is not None:
+                    _finalize_conversation_segment(active)
+                    segments.append(active)
+                    previous_owner_key = str(active["owner_key"])
+                segment_index += 1
+                active = {
+                    "segment_id": f"{session_id}:conversation:{segment_index}",
+                    "session_id": session_id,
+                    "segment_index": segment_index,
+                    "owner_key": owner_key,
+                    "owner_id": str(owner_id or ""),
+                    "owner_label": _owner_label(owner_id),
+                    "started_at": item.get("started_at"),
+                    "ended_at": item.get("ended_at"),
+                    "duration_s": None,
+                    "exchange_count": 0,
+                    "exchange_ids": [],
+                    "exchange_indexes": [],
+                    "first_exchange_id": "",
+                    "latest_exchange_id": "",
+                    "status": "unknown",
+                    "status_counts": Counter(),
+                    "owner_source_counts": Counter(),
+                    "owner_sources": [],
+                    "avg_first_audio_latency_s": None,
+                    "total_exchange_cost_usd": None,
+                    "handoff_from_owner_key": previous_owner_key,
+                    "handoff_to_owner_key": owner_key,
+                    "boundary_reason": "session_start" if not previous_owner_key else "owner_handoff",
+                    "_latencies": [],
+                    "_costs": [],
+                }
+
+            if active is None:
+                continue
+            exchange_id = str(item.get("exchange_id") or item.get("req_id") or "")
+            active["exchange_count"] += 1
+            active["exchange_ids"].append(exchange_id)
+            exchange_index = item.get("exchange_index")
+            if exchange_index:
+                active["exchange_indexes"].append(exchange_index)
+            if not active["first_exchange_id"]:
+                active["first_exchange_id"] = exchange_id
+            active["latest_exchange_id"] = exchange_id
+            if item.get("started_at") and (
+                not active["started_at"] or str(item["started_at"]) < str(active["started_at"])
+            ):
+                active["started_at"] = item["started_at"]
+            if item.get("ended_at") and (
+                not active["ended_at"] or str(item["ended_at"]) > str(active["ended_at"])
+            ):
+                active["ended_at"] = item["ended_at"]
+            active["status_counts"][str(item.get("status") or "unknown")] += 1
+            if owner_source:
+                active["owner_source_counts"][owner_source] += 1
+            latency = item.get("first_audio_latency_s")
+            if isinstance(latency, (int, float)):
+                active["_latencies"].append(float(latency))
+            costs = item.get("costs") if isinstance(item.get("costs"), dict) else {}
+            exchange_cost = None
+            if isinstance(costs, dict):
+                exchange_cost = costs.get("estimated_exchange_cost_usd", costs.get("estimated_cost_usd"))
+            if isinstance(exchange_cost, (int, float)):
+                active["_costs"].append(float(exchange_cost))
+
+            item["conversation_segment_id"] = active["segment_id"]
+            item["conversation_segment_index"] = active["exchange_count"]
+            item["owner_key"] = owner_key
+
+        if active is not None:
+            _finalize_conversation_segment(active)
+            segments.append(active)
+
+    segments.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+    return segments
+
+
+def _finalize_conversation_segment(segment: dict[str, Any]) -> None:
+    started = _parse_ts(str(segment.get("started_at") or ""))
+    ended = _parse_ts(str(segment.get("ended_at") or ""))
+    if started is not None and ended is not None:
+        segment["duration_s"] = max((ended - started).total_seconds(), 0.0)
+    status_counts = segment.pop("status_counts")
+    source_counts = segment.pop("owner_source_counts")
+    latencies = segment.pop("_latencies")
+    costs = segment.pop("_costs")
+    segment["status_counts"] = dict(status_counts)
+    segment["owner_source_counts"] = dict(source_counts)
+    segment["owner_sources"] = [source for source, _ in source_counts.most_common()]
+    if status_counts.get("error", 0):
+        segment["status"] = "error"
+    elif status_counts.get("active", 0):
+        segment["status"] = "active"
+    elif status_counts:
+        segment["status"] = status_counts.most_common(1)[0][0]
+    segment["avg_first_audio_latency_s"] = mean(latencies) if latencies else None
+    segment["total_exchange_cost_usd"] = sum(costs) if costs else None
+
+
 def format_time_for_label(value: datetime | None) -> str:
     if value is None:
         return "Unknown time"
@@ -529,6 +712,7 @@ def build_dashboard_snapshot(
                 {
                     "row_index": row_index,
                     "ts": row.get("ts"),
+                    "session_id": session_id,
                     "component": row.get("component", "unknown"),
                     "label": label,
                     "req_id": row.get("req_id"),
@@ -581,6 +765,7 @@ def build_dashboard_snapshot(
         key=lambda item: (item["started_at"] or "", item["req_id"]),
         reverse=True,
     )
+    conversation_segments = _conversation_segments_for_interactions(interaction_payloads)
     latency_values = [
         item["first_audio_latency_s"]
         for item in interaction_payloads
@@ -593,6 +778,15 @@ def build_dashboard_snapshot(
         if metric_name in item["metrics"]
     ]
     status_counts = Counter(item["status"] for item in interaction_payloads)
+    latest_cost_by_session: dict[str, tuple[str, float]] = {}
+    for item in interaction_payloads:
+        session_total = item["costs"].get("session_total_cost_usd")
+        if session_total is None:
+            continue
+        ended_at = str(item.get("ended_at") or item.get("started_at") or "")
+        current = latest_cost_by_session.get(item["session_id"])
+        if current is None or ended_at >= current[0]:
+            latest_cost_by_session[item["session_id"]] = (ended_at, float(session_total))
 
     all_sessions_payload = []
     for session in sessions.values():
@@ -604,6 +798,12 @@ def build_dashboard_snapshot(
             for item in session_interactions
             if item.get("first_audio_latency_s") is not None
         ]
+        latest_session_cost = latest_cost_by_session.get(session.session_id)
+        standalone_session_errors = sum(
+            1
+            for row in error_rows
+            if row.get("session_id") == session.session_id and row.get("req_id") is None
+        )
         all_sessions_payload.append(
             {
                 "session_id": session.session_id,
@@ -613,8 +813,14 @@ def build_dashboard_snapshot(
                 "row_count": len(session.rows),
                 "exchange_count": len(session_interactions),
                 "interaction_count": len(session_interactions),
-                "error_count": sum(1 for item in session_interactions if item["status"] == "error"),
+                "error_count": (
+                    sum(1 for item in session_interactions if item["status"] == "error")
+                    + standalone_session_errors
+                ),
                 "avg_first_audio_latency_s": mean(latencies) if latencies else None,
+                "session_total_cost_usd": (
+                    latest_session_cost[1] if latest_session_cost is not None else None
+                ),
             }
         )
     all_sessions_payload.sort(key=lambda item: item["started_at"] or "", reverse=True)
@@ -629,6 +835,7 @@ def build_dashboard_snapshot(
             "raw_session_count": len(all_sessions_payload),
             "exchange_count": len(interaction_payloads),
             "interaction_count": len(interaction_payloads),
+            "conversation_segment_count": len(conversation_segments),
             "system_event_count": len(system_events),
             "error_count": (
                 status_counts.get("error", 0)
@@ -643,11 +850,17 @@ def build_dashboard_snapshot(
             "first_audio_latency_p95_s": _percentile(latency_values, 0.95),
             "first_audio_latency_max_s": max(latency_values) if latency_values else None,
             "tool_latency_avg_s": mean(tool_metrics) if tool_metrics else None,
+            "total_logged_cost_usd": (
+                sum(cost for _, cost in latest_cost_by_session.values())
+                if latest_cost_by_session
+                else None
+            ),
             "latest_session_total_cost_usd": (
                 latest_total_cost[2] if latest_total_cost is not None else None
             ),
         },
         "sessions": sessions_payload,
+        "conversation_segments": conversation_segments,
         "exchanges": interaction_payloads,
         "interactions": interaction_payloads,
         "system_events": system_events[-200:],

@@ -648,6 +648,9 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
     assert analysis.attention_target is not None
     assert analysis.attention_target.person_id == "person-1"
     assert persons[0].interaction_count == 3
+    assert persons[0].recognition_status == "accepted"
+    assert persons[0].recognition_reason == "matched"
+    assert persons[0].recognition_threshold >= 0.0
 
     persons, _, _, _ = module.FaceRecognitionService._build_scene_state(
         service,
@@ -678,6 +681,47 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
 
     assert update_calls == ["person-1", "person-1"]
     assert persons[0].interaction_count == 4
+
+
+def test_best_face_match_evidence_prefers_highest_similarity(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+
+    evidence = module.FaceRecognitionService._best_face_match_evidence(
+        [
+            {
+                "bbox": {"w": 80, "h": 80},
+                "recognition": {
+                    "status": "rejected",
+                    "reason": "below_threshold",
+                    "name": "Alex",
+                    "person_id": "person-alex",
+                    "similarity": 0.42,
+                    "threshold": 0.6,
+                    "runner_up_similarity": 0.31,
+                    "margin": 0.11,
+                    "margin_threshold": 0.2,
+                },
+            },
+            {
+                "bbox": {"w": 40, "h": 40},
+                "recognition": {
+                    "status": "accepted",
+                    "reason": "matched",
+                    "name": "Blair",
+                    "person_id": "person-blair",
+                    "similarity": 0.82,
+                    "threshold": 0.6,
+                    "runner_up_similarity": 0.2,
+                    "margin": 0.62,
+                    "margin_threshold": 0.2,
+                },
+            },
+        ]
+    )
+
+    assert evidence["person_id"] == "person-blair"
+    assert evidence["status"] == "accepted"
+    assert evidence["similarity"] == 0.82
 
 
 def test_build_scene_state_records_encounter_once_per_presence_episode(monkeypatch):

@@ -40,6 +40,16 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
             "session_id=s-1 | req_id=rt-1"
         ),
         _row(
+            "ts=2026-07-07 10:00:00.700 | component=realtime | event=exchange_context | "
+            "audio_score=0.620 | audio_runner_up_score=0.210 | audio_score_margin=0.410 | "
+            "face_match_status=rejected | face_match_reason=below_threshold | "
+            "face_match_name=Alice | face_match_person_id=person-1 | "
+            "face_score=0.420 | face_score_threshold=0.600 | "
+            "face_runner_up_score=0.310 | face_score_margin=0.110 | "
+            "face_margin_threshold=0.200 | "
+            "owner_source=audio | session_id=s-1 | req_id=rt-1"
+        ),
+        _row(
             "ts=2026-07-07 10:00:01.000 | component=state | event=ignored | "
             "session_id=s-1 | axis=coalescer | trigger=timer_flush | "
             "ignored_reason=recording_active"
@@ -53,18 +63,30 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert snapshot["summary"]["raw_session_count"] == 1
     assert snapshot["summary"]["exchange_count"] == 1
     assert snapshot["summary"]["interaction_count"] == 1
+    assert snapshot["summary"]["conversation_segment_count"] == 1
     assert snapshot["summary"]["first_audio_latency_p50_s"] == 0.32
     assert snapshot["summary"]["first_audio_latency_max_s"] == 0.32
     assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.003
+    assert snapshot["summary"]["total_logged_cost_usd"] == 0.003
     assert snapshot["summary"]["state_axis_counts"]["capture"] == 1
     assert snapshot["summary"]["ignored_reason_counts"]["recording_active"] == 1
 
     interaction = snapshot["interactions"][0]
     assert snapshot["exchanges"][0]["exchange_id"] == "rt-1"
+    assert interaction["conversation_segment_id"] == "s-1:conversation:1"
+    assert interaction["owner_key"] == "anonymous"
     assert interaction["req_id"] == "rt-1"
     assert interaction["status"] == "complete"
     assert interaction["first_audio_latency_s"] == 0.32
     assert interaction["costs"]["estimated_exchange_cost_usd"] == 0.001
+    identity_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "identity")
+    assert identity_stage["details"]["audio_score"] == "0.620"
+    assert identity_stage["details"]["audio_runner_up_score"] == "0.210"
+    assert identity_stage["details"]["audio_score_margin"] == "0.410"
+    assert identity_stage["details"]["face_match_status"] == "rejected"
+    assert identity_stage["details"]["face_match_reason"] == "below_threshold"
+    assert identity_stage["details"]["face_score"] == "0.420"
+    assert identity_stage["details"]["face_score_margin"] == "0.110"
     assert interaction["tools"] == {"capture_scene": 1}
     assert interaction["state_by_axis"] == [
         {
@@ -104,6 +126,56 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert snapshot["system_events"][0]["ignored_reason"] == "recording_active"
 
 
+def test_dashboard_snapshot_groups_consecutive_exchanges_by_owner_segment() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | event=exchange_context | "
+            "run_id=run-live | exchange_id=ex-1 | exchange_index=1 | req_id=rt-1 | "
+            "turn_kind=human_audio | owner_id=person-a | owner_source=face"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:00.200 | component=realtime | metric=first_audio_latency_s | "
+            "duration_s=0.200 | run_id=run-live | exchange_id=ex-1 | exchange_index=1 | "
+            "req_id=rt-1 | turn_kind=human_audio"
+        ),
+        _row(
+            "ts=2026-07-07 10:01:00.000 | component=realtime | event=exchange_context | "
+            "run_id=run-live | exchange_id=ex-2 | exchange_index=2 | req_id=rt-2 | "
+            "turn_kind=human_audio | owner_id=person-a | owner_source=audio"
+        ),
+        _row(
+            "ts=2026-07-07 10:02:00.000 | component=realtime | event=exchange_context | "
+            "run_id=run-live | exchange_id=ex-3 | exchange_index=3 | req_id=rt-3 | "
+            "turn_kind=human_audio | owner_source=unknown"
+        ),
+        _row(
+            "ts=2026-07-07 10:03:00.000 | component=realtime | event=exchange_context | "
+            "run_id=run-live | exchange_id=ex-4 | exchange_index=4 | req_id=rt-4 | "
+            "turn_kind=human_audio | owner_id=person-b | owner_source=audio"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    assert snapshot["summary"]["conversation_segment_count"] == 3
+    segments = sorted(
+        snapshot["conversation_segments"],
+        key=lambda segment: segment["segment_index"],
+    )
+    assert [
+        (segment["owner_key"], segment["exchange_ids"], segment["boundary_reason"])
+        for segment in segments
+    ] == [
+        ("owner:person-a", ["ex-1", "ex-2"], "session_start"),
+        ("anonymous", ["ex-3"], "owner_handoff"),
+        ("owner:person-b", ["ex-4"], "owner_handoff"),
+    ]
+    assert segments[0]["owner_source_counts"] == {"face": 1, "audio": 1}
+    assert segments[0]["avg_first_audio_latency_s"] == 0.2
+    exchanges = sorted(snapshot["exchanges"], key=lambda exchange: exchange["exchange_index"])
+    assert [exchange["conversation_segment_index"] for exchange in exchanges] == [1, 2, 1, 1]
+
+
 def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
     rows = [
         _row(
@@ -126,6 +198,7 @@ def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
     assert len(snapshot["sessions"]) == 1
     assert snapshot["sessions"][0]["session_id"] == "sess-live"
     assert snapshot["sessions"][0]["exchange_count"] == 1
+    assert snapshot["sessions"][0]["session_total_cost_usd"] is None
     exchange = snapshot["exchanges"][0]
     assert exchange["req_id"] == "rt-split"
     assert exchange["status"] == "complete"
@@ -227,6 +300,7 @@ def test_dashboard_snapshot_marks_error_interactions() -> None:
 
     assert snapshot["interactions"][0]["status"] == "error"
     assert snapshot["summary"]["error_count"] == 2
+    assert snapshot["sessions"][0]["error_count"] == 2
     assert [error["label"] for error in snapshot["errors"]] == [
         "response_failed",
         "websocket_error",
@@ -248,6 +322,36 @@ def test_dashboard_snapshot_reports_latest_cost_not_max_cost() -> None:
     snapshot = build_dashboard_snapshot(rows)
 
     assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.05
+
+
+def test_dashboard_snapshot_sums_latest_session_costs_for_cost_to_date() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | event=response_usage | "
+            "run_id=run-a | session_id=s-a | exchange_id=ex-a | req_id=rt-a | "
+            "turn_kind=human_audio | session_total_cost_usd=0.10000000"
+        ),
+        _row(
+            "ts=2026-07-07 10:01:00.000 | component=realtime | event=response_usage | "
+            "run_id=run-a | session_id=s-a | exchange_id=ex-a2 | req_id=rt-a2 | "
+            "turn_kind=human_audio | session_total_cost_usd=0.15000000"
+        ),
+        _row(
+            "ts=2026-07-07 10:05:00.000 | component=realtime | event=response_usage | "
+            "run_id=run-b | session_id=s-b | exchange_id=ex-b | req_id=rt-b | "
+            "turn_kind=human_audio | session_total_cost_usd=0.05000000"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    assert snapshot["summary"]["latest_session_total_cost_usd"] == 0.05
+    assert snapshot["summary"]["total_logged_cost_usd"] == 0.2
+    costs_by_session = {
+        session["session_id"]: session["session_total_cost_usd"]
+        for session in snapshot["sessions"]
+    }
+    assert costs_by_session == {"run-a": 0.15, "run-b": 0.05}
 
 
 def test_dashboard_snapshot_counts_only_exchange_sessions_in_primary_list() -> None:

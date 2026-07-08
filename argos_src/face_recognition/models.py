@@ -20,6 +20,12 @@ class PersonContext:
     confidence: float
     bbox_area: int
     timestamp: float
+    recognition_status: str = ""
+    recognition_reason: str = ""
+    recognition_threshold: float = 0.0
+    runner_up_confidence: float = 0.0
+    confidence_margin: float = 0.0
+    margin_threshold: float = 0.0
     depth_m: float | None = None
     bearing_rad: float | None = None
     face_center_x_px: float | None = None
@@ -92,6 +98,15 @@ class FacePresenceSnapshot:
     primary_attention_name: str
     primary_attention_person_id: str
     attention_confidence: float
+    face_match_status: str
+    face_match_reason: str
+    face_match_name: str
+    face_match_person_id: str
+    face_score: float
+    face_score_threshold: float
+    face_runner_up_score: float
+    face_score_margin: float
+    face_margin_threshold: float
     nearest_recognized_name: str
     social_scene: SocialSceneContext
     updated_at: float
@@ -123,6 +138,15 @@ def empty_presence_snapshot(
         primary_attention_name="",
         primary_attention_person_id="",
         attention_confidence=0.0,
+        face_match_status="",
+        face_match_reason="",
+        face_match_name="",
+        face_match_person_id="",
+        face_score=0.0,
+        face_score_threshold=0.0,
+        face_runner_up_score=0.0,
+        face_score_margin=0.0,
+        face_margin_threshold=0.0,
         nearest_recognized_name="",
         social_scene=SocialSceneContext(
             has_unrecognized_people=False,

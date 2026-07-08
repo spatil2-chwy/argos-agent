@@ -106,6 +106,7 @@ class FacePresenceCache:
         attention_target: AttentionTarget | None,
         primary_attention_target: AttentionTarget | None = None,
         social_scene: SocialSceneContext,
+        face_match_evidence: dict[str, Any] | None = None,
         now: float,
     ) -> FacePresenceSnapshot:
         """Replace cached persons and recompute the exported presence snapshot."""
@@ -138,6 +139,7 @@ class FacePresenceCache:
             attention_confidence = max(
                 [float(person.attention_confidence) for person in attentive_persons] + [0.0]
             )
+        face_evidence = dict(face_match_evidence or {})
         status = (
             "recognized"
             if recognized_count > 0
@@ -171,6 +173,19 @@ class FacePresenceCache:
             primary_attention_name=primary_attention_name,
             primary_attention_person_id=primary_attention_person_id,
             attention_confidence=attention_confidence,
+            face_match_status=str(face_evidence.get("status") or ""),
+            face_match_reason=str(face_evidence.get("reason") or ""),
+            face_match_name=str(face_evidence.get("name") or ""),
+            face_match_person_id=str(face_evidence.get("person_id") or ""),
+            face_score=float(face_evidence.get("similarity", 0.0) or 0.0),
+            face_score_threshold=float(face_evidence.get("threshold", 0.0) or 0.0),
+            face_runner_up_score=float(
+                face_evidence.get("runner_up_similarity", 0.0) or 0.0
+            ),
+            face_score_margin=float(face_evidence.get("margin", 0.0) or 0.0),
+            face_margin_threshold=float(
+                face_evidence.get("margin_threshold", 0.0) or 0.0
+            ),
             nearest_recognized_name=social_scene.nearest_recognized_name or "",
             social_scene=social_scene,
             updated_at=now,

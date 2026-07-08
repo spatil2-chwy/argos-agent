@@ -427,6 +427,10 @@ class AudioRuntime:
         self._cancel_preference_idle_flush()
         self._current_primary_face_person_id = self._get_current_primary_face_person_id()
         self._current_visible_face_person_ids = self._get_current_visible_face_person_ids()
+        face_evidence_getter = getattr(self, "_get_current_face_evidence_fields", None)
+        self._current_face_evidence_fields = (
+            dict(face_evidence_getter() or {}) if callable(face_evidence_getter) else {}
+        )
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
@@ -458,6 +462,7 @@ class AudioRuntime:
             wake_detected=bool(wake_detected),
             primary_face_person_id=self._current_primary_face_person_id,
             visible_face_person_ids=",".join(self._current_visible_face_person_ids) or None,
+            **dict(self._current_face_evidence_fields or {}),
             **self._base_log_fields(),
         )
 
@@ -467,9 +472,11 @@ class AudioRuntime:
         self._recording_started_at = 0.0
         primary_face_person_id = self._current_primary_face_person_id
         visible_face_person_ids = self._current_visible_face_person_ids
+        face_evidence_fields = dict(getattr(self, "_current_face_evidence_fields", {}) or {})
         capture_vad_positive_blocks = int(self._current_turn_vad_positive_blocks)
         self._current_primary_face_person_id = None
         self._current_visible_face_person_ids = ()
+        self._current_face_evidence_fields = {}
         audio_pcm16 = b"".join(self._current_turn_audio_chunks)
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
@@ -491,6 +498,7 @@ class AudioRuntime:
             args=(
                 primary_face_person_id,
                 visible_face_person_ids,
+                face_evidence_fields,
                 audio_pcm16,
                 capture_vad_positive_blocks,
                 speech_end_perf_s,
@@ -503,6 +511,7 @@ class AudioRuntime:
         self,
         primary_face_person_id: Optional[str],
         visible_face_person_ids: tuple[str, ...],
+        face_evidence_fields: dict[str, Any],
         audio_pcm16: bytes,
         capture_vad_positive_blocks: int,
         speech_end_perf_s: float,
@@ -544,6 +553,7 @@ class AudioRuntime:
                     "speech_end_perf_s": speech_end_perf_s,
                     "speech_end_unix_s": speech_end_unix_s,
                     "transcript_perf_s": transcript_perf_s,
+                    **dict(face_evidence_fields or {}),
                 }
             )
         else:
@@ -558,6 +568,7 @@ class AudioRuntime:
                 "speech_end_perf_s": speech_end_perf_s,
                 "speech_end_unix_s": speech_end_unix_s,
                 "transcript_perf_s": transcript_perf_s,
+                **dict(face_evidence_fields or {}),
             }
         # Speaker recognition now uses the raw 16 kHz turn audio. The eval repo
         # showed raw ECAPA embeddings with per-person centroids outperforming
@@ -591,6 +602,13 @@ class AudioRuntime:
                     primary_face_person_id=primary_face_person_id,
                     visible_face_person_ids=visible_face_person_ids,
                 )
+        merged_meta.update(
+            {
+                "audio_score": round(float(resolution.top_score), 3),
+                "audio_runner_up_score": round(float(resolution.runner_up_score), 3),
+                "audio_score_margin": round(float(resolution.margin), 3),
+            }
+        )
 
         turn = QueuedTurn(
             kind="audio",

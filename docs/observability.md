@@ -44,6 +44,7 @@ Typical human turn flow:
 | `realtime` | `event=speech_end` | local end-of-speech detection fired |
 | `realtime` | `event=audio_commit` | mic audio was committed into the Realtime session |
 | `realtime` | `event=exchange_context` | face, speaker, owner, and pending internal-event context captured for the exchange |
+| `realtime` | `event=owner_handoff` | resolved owner key changed and prior Realtime history was cleared |
 | `realtime` | `event=response_create` | the model response was explicitly requested |
 | `realtime` | `metric=first_audio_latency_s` | speech end to first playback audio delta |
 | `realtime` | `event=tool_call_requested` | the model requested a tool call |
@@ -53,6 +54,7 @@ Typical human turn flow:
 | `realtime` | `event=response_usage` | final token/caching usage from `response.done`, including modality token counts and estimated response cost |
 | `realtime` | `event=playback_completed` | local speaker playback drained for the exchange |
 | `realtime` | `event=exchange_complete` | the exchange reached a clean terminal state |
+| `realtime` | `event=memory_segment_flushed` | a speaker-owned transcript segment closed for Tailwag episode ingestion |
 
 This is the main felt-latency path now.
 
@@ -74,11 +76,40 @@ The stable join keys are:
 
 Identity and context fields such as `primary_face_person_id`,
 `audio_speaker_id`, `owner_id`, `owner_source`, `owner_confidence`,
-`speaker_visible`, `trigger`, and `admission_reason` are logged with the
-exchange so the dashboard can show why the mic opened and who the model was
-responding to. The dashboard keeps `owner_confidence` in raw diagnostics but
-does not show it in the main people panel because face-resolved owners may have
-`0.000` audio confidence while still being validly resolved from face context.
+`audio_score`, `audio_runner_up_score`, `audio_score_margin`,
+`face_match_status`, `face_match_reason`, `face_score`,
+`face_score_threshold`, `face_runner_up_score`, `face_score_margin`,
+`face_margin_threshold`, `speaker_visible`, `trigger`, and
+`admission_reason` are logged with the exchange so the dashboard can show why
+the mic opened and who the model was responding to. The face evidence is frozen
+from the face-presence snapshot when recording starts, so it can explain both
+successful face ownership and failed visible-face matches such as
+`below_threshold` or `margin_too_small`. The dashboard keeps `owner_confidence`
+in raw diagnostics but does not show it in the main people panel because
+face-resolved owners may have `0.000` audio confidence while still being validly
+resolved from face context.
+
+## Conversation Segments
+
+The dashboard derives conversation segments from consecutive human exchanges in
+the same run that share the same history owner key:
+
+- `owner:<person_id>` for recognized owners
+- `anonymous` when no owner is safely resolved
+
+This mirrors owner-scoped Realtime history. Consecutive exchanges with the same
+owner key keep the model-visible conversation context. When the key changes,
+the runtime emits `owner_handoff` and deletes older Realtime conversation items
+while protecting current in-flight items. The dashboard nests exchanges under
+these conversation segments so an operator can see when Argos was carrying one
+person's context versus when it reset for a new or unknown speaker.
+
+Memory extraction has a related but separate signal. Completed attributed turns
+are buffered into speaker-owned segments and flushed on speaker handoff,
+unattributed speech, idle timeout, or shutdown. `memory_segment_flushed` means
+Argos closed that local transcript segment and, when configured, scheduled
+Tailwag ingestion. It does not mean Tailwag has definitely written durable
+memory.
 
 ## State Transition Markers
 
@@ -242,6 +273,8 @@ GET /api/snapshot
 It returns:
 
 - session summaries keyed by local `run_id` when available
+- conversation segments inferred from consecutive exchanges with the same
+  `owner_id` or anonymous owner key
 - per-exchange lifecycle timelines keyed by `exchange_id`
 - main session cards only for sessions/runs with at least one exchange; the
   summary also exposes `raw_session_count` for startup/shutdown-only log groups
@@ -251,10 +284,22 @@ It returns:
 - tool usage, cost fields, component counts, and detected error markers
 
 The dashboard labels `first_audio_latency_s` as first reply audio: it measures
-from local speech end to the first assistant audio delta. The selected-session
-cost card uses the latest cumulative `session_total_cost_usd` in that selected
-run. Each exchange summary uses `estimated_exchange_cost_usd`, the sum of
-logged `estimated_cost_usd` rows attached to that exchange.
+from local speech end to the first assistant audio delta. Tool/action-heavy
+turns can legitimately make this large because the metric measures felt silence,
+not only model generation time. The selected-session cost card uses the latest
+cumulative `session_total_cost_usd` in that selected run. The cost-to-date card
+sums the latest cumulative cost for each exchange-bearing session in the loaded
+log. Each exchange summary uses `estimated_exchange_cost_usd`, the sum of logged
+`estimated_cost_usd` rows attached to that exchange.
+
+The operator timeline intentionally shows stage-specific chips rather than all
+available fields on every row. For example, trigger/admission evidence appears
+on recording start, VAD count on speech end, owner and audio-score evidence on
+the identity stage, and token/cost/cache evidence on usage.
+
+Dashboard exchange error counts come from terminal error states and log labels
+or ignored reasons containing error-like words such as `error`, `failed`,
+`failure`, `exception`, `timeout`, or `cancel`.
 
 ## What To Look For
 

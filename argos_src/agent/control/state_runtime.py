@@ -515,6 +515,27 @@ class AgentStateRuntime:
         self._active_history_owner_key = new_owner_key
         self._last_tool_name = None
         self._last_tool_summary = None
+        if old_owner_key:
+            latency = getattr(self, "_latency", None)
+            emit = getattr(latency, "emit", None)
+            if callable(emit):
+                log_fields: dict[str, Any] = {}
+                exchange_log_fields = getattr(self, "_exchange_log_fields", None)
+                if callable(exchange_log_fields):
+                    try:
+                        log_fields.update(exchange_log_fields(turn))
+                    except Exception:
+                        log_fields = {}
+                emit(
+                    event="owner_handoff",
+                    req_id=getattr(turn, "req_id", None),
+                    old_owner_key=old_owner_key,
+                    new_owner_key=new_owner_key,
+                    deleted_items=deleted_count,
+                    protected_items=len(protected_item_ids),
+                    history_action="cleared",
+                    **log_fields,
+                )
         self.logger.info(
             "Rotated realtime history old_owner_key=%s new_owner_key=%s "
             "deleted_items=%s protected_items=%s",
@@ -646,3 +667,33 @@ class AgentStateRuntime:
             if rendered and rendered not in visible_ids:
                 visible_ids.append(rendered)
         return tuple(visible_ids)
+
+    def _get_current_face_evidence_fields(self) -> dict[str, Any]:
+        if self.face_service is None:
+            return {}
+        try:
+            getter = getattr(self.face_service, "get_presence_snapshot", None)
+            if not callable(getter):
+                return {}
+            snapshot = dict(getter() or {})
+        except Exception:
+            return {}
+        if not str(snapshot.get("face_match_status") or "").strip():
+            return {}
+
+        fields: dict[str, Any] = {}
+        for key in (
+            "face_match_status",
+            "face_match_reason",
+            "face_match_name",
+            "face_match_person_id",
+            "face_score",
+            "face_score_threshold",
+            "face_runner_up_score",
+            "face_score_margin",
+            "face_margin_threshold",
+        ):
+            value = snapshot.get(key)
+            if value not in (None, ""):
+                fields[key] = value
+        return fields

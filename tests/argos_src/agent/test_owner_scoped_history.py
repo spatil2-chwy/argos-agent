@@ -78,6 +78,14 @@ class FakeRuntime(AgentStateRuntime):
         self._preference_segments.flush_active()
 
 
+class FakeLatency:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def emit(self, **fields) -> None:
+        self.events.append(fields)
+
+
 def make_turn(
     req_id: str,
     *,
@@ -136,6 +144,7 @@ def test_same_owner_does_not_delete_history_or_clear_tool_summary() -> None:
 
 def test_owner_change_deletes_old_items_and_protects_current_audio_item() -> None:
     runtime = FakeRuntime()
+    runtime._latency = FakeLatency()
     runtime._active_history_owner_key = "owner:A"
     runtime._last_tool_name = "navigate_to_location"
     runtime._last_tool_summary = "navigate_to_location: success"
@@ -154,6 +163,17 @@ def test_owner_change_deletes_old_items_and_protects_current_audio_item() -> Non
     assert runtime._active_history_owner_key == "owner:B"
     assert runtime._last_tool_name is None
     assert runtime._last_tool_summary is None
+    assert runtime._latency.events == [
+        {
+            "event": "owner_handoff",
+            "req_id": "current",
+            "old_owner_key": "owner:A",
+            "new_owner_key": "owner:B",
+            "deleted_items": 2,
+            "protected_items": 1,
+            "history_action": "cleared",
+        }
+    ]
 
 
 def test_owner_change_protects_newest_unbound_audio_item() -> None:
@@ -241,6 +261,33 @@ def test_preference_extraction_uses_local_transcripts_after_history_deletion() -
     assert segment.person_id == "A"
     assert segment.turns[0].user_text == "I like jasmine tea."
     assert segment.turns[0].assistant_text == "Got it."
+
+
+def test_preference_segment_handoff_emits_memory_flush_event() -> None:
+    runtime = FakeRuntime()
+    runtime._latency = FakeLatency()
+    first_turn = make_turn("rt-a", owner_id="A", finalized=True)
+    first_turn.user_transcript = "I like green tea."
+    first_turn.assistant_transcript = "Noted."
+    second_turn = make_turn("rt-b", owner_id="B", finalized=True)
+    second_turn.user_transcript = "I prefer coffee."
+    second_turn.assistant_transcript = "Got it."
+
+    runtime._maybe_note_preference_turn(first_turn)
+    runtime._maybe_note_preference_turn(second_turn)
+
+    assert runtime._latency.events == [
+        {
+            "event": "memory_segment_flushed",
+            "req_id": "rt-a",
+            "memory_segment_id": "rt-a",
+            "memory_person_id": "A",
+            "memory_turn_count": 1,
+            "memory_flush_reason": "speaker_handoff",
+            "memory_extraction_enabled": False,
+            "memory_extraction_scheduled": False,
+        }
+    ]
 
 
 def test_owner_change_protects_active_unresolved_function_call_items() -> None:

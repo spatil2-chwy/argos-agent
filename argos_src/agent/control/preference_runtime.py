@@ -76,6 +76,7 @@ class PreferenceRuntime:
             )
         )
         if completed_segment is not None:
+            self._emit_memory_segment_flushed(completed_segment, reason="speaker_handoff")
             self.schedule_segment_extraction(
                 completed_segment,
                 reason="speaker_handoff",
@@ -101,7 +102,30 @@ class PreferenceRuntime:
                 if callable(finish_episode):
                     finish_episode(reason=reason)
             return
+        self._emit_memory_segment_flushed(completed_segment, reason=reason)
         self.schedule_segment_extraction(completed_segment, reason=reason)
+
+    def _emit_memory_segment_flushed(self, segment: Any, *, reason: str) -> None:
+        host = self._host
+        latency = getattr(host, "_latency", None)
+        emit = getattr(latency, "emit", None)
+        if not callable(emit):
+            return
+        turns = tuple(getattr(segment, "turns", ()) or ())
+        last_turn_id = str(getattr(turns[-1], "turn_id", "") or "") if turns else ""
+        emit(
+            event="memory_segment_flushed",
+            req_id=last_turn_id or None,
+            memory_segment_id=getattr(segment, "segment_id", None),
+            memory_person_id=getattr(segment, "person_id", None),
+            memory_turn_count=len(turns),
+            memory_flush_reason=reason,
+            memory_extraction_enabled=bool(getattr(host, "preference_extraction_enabled", False)),
+            memory_extraction_scheduled=bool(
+                getattr(host, "preference_extraction_enabled", False)
+                and getattr(host, "preference_extractor", None) is not None
+            ),
+        )
 
     def schedule_idle_flush(self) -> None:
         host = self._host

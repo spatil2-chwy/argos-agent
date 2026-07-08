@@ -578,6 +578,7 @@ def _make_agent():
     agent.preference_extractor = None
     agent._session_id = ""
     agent._session_estimated_cost_usd = 0.0
+    agent._current_face_evidence_fields = {}
     agent._ws = object()
     agent._ws_lock = threading.Lock()
     agent.coalescer = None
@@ -634,6 +635,24 @@ def test_build_turn_instructions_includes_current_office_location_block():
     instructions = agent._build_turn_instructions(_make_turn("rt-office"))
 
     assert "[CURRENT OFFICE LOCATION] BOS1" in instructions
+
+
+def test_exchange_log_fields_include_speaker_resolution_scores():
+    agent = _make_agent()
+    turn = _make_turn(
+        "rt-score",
+        metadata={
+            "audio_score": 0.62,
+            "audio_runner_up_score": 0.21,
+            "audio_score_margin": 0.41,
+        },
+    )
+
+    fields = agent._exchange_log_fields(turn)
+
+    assert fields["audio_score"] == 0.62
+    assert fields["audio_runner_up_score"] == 0.21
+    assert fields["audio_score_margin"] == 0.41
 
 
 def test_build_turn_instructions_includes_memory_context_blocks():
@@ -825,6 +844,34 @@ def test_recording_hooks_update_gesture_runtime():
         time.sleep(0.01)
 
     assert agent.gesture_runtime.recording_active == [True, False]
+
+
+def test_recording_started_freezes_face_match_evidence():
+    agent = _make_agent()
+    agent.face_service = _FakeFaceService(
+        persons=[SimpleNamespace(person_id="person-1", visible=True)],
+        snapshot={
+            "face_match_status": "rejected",
+            "face_match_reason": "below_threshold",
+            "face_match_name": "Alice",
+            "face_match_person_id": "person-1",
+            "face_score": 0.42,
+            "face_score_threshold": 0.6,
+            "face_runner_up_score": 0.31,
+            "face_score_margin": 0.11,
+            "face_margin_threshold": 0.2,
+        },
+    )
+
+    agent._start_recording_locked(now_s=10.0)
+
+    started = next(
+        event for event in agent._latency.events if event.get("event") == "recording_started"
+    )
+    assert started["face_match_status"] == "rejected"
+    assert started["face_match_reason"] == "below_threshold"
+    assert started["face_score"] == 0.42
+    assert agent._current_face_evidence_fields["face_score_margin"] == 0.11
 
 
 def test_recording_display_moves_from_recording_to_thinking():

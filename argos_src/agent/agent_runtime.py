@@ -185,6 +185,7 @@ class RealtimeRobotAgent:
         self._current_exchange_index = 0
         self._current_exchange_trigger = ""
         self._current_exchange_admission_reason = ""
+        self._current_face_evidence_fields: dict[str, Any] = {}
         self._session_state = SessionState.STOPPED.value
         self._preference_segments = (
             _PreferenceSegmentCoordinator() if preference_extraction_enabled else None
@@ -407,6 +408,8 @@ class RealtimeRobotAgent:
             self._current_exchange_trigger = ""
         if not hasattr(self, "_current_exchange_admission_reason"):
             self._current_exchange_admission_reason = ""
+        if not hasattr(self, "_current_face_evidence_fields"):
+            self._current_face_evidence_fields = {}
 
     def _new_exchange_locked(
         self,
@@ -431,6 +434,7 @@ class RealtimeRobotAgent:
             "turn_kind": "human_audio",
             "trigger": self._current_exchange_trigger or None,
             "admission_reason": self._current_exchange_admission_reason or None,
+            **dict(self._current_face_evidence_fields or {}),
         }
 
     def _exchange_log_fields(self, turn: QueuedTurn | None = None) -> dict[str, Any]:
@@ -459,6 +463,18 @@ class RealtimeRobotAgent:
                 "owner_source": turn.owner_source or None,
                 "owner_confidence": turn.owner_confidence,
                 "speaker_visible": turn.speaker_visible,
+                "audio_score": metadata.get("audio_score"),
+                "audio_runner_up_score": metadata.get("audio_runner_up_score"),
+                "audio_score_margin": metadata.get("audio_score_margin"),
+                "face_match_status": metadata.get("face_match_status"),
+                "face_match_reason": metadata.get("face_match_reason"),
+                "face_match_name": metadata.get("face_match_name"),
+                "face_match_person_id": metadata.get("face_match_person_id"),
+                "face_score": metadata.get("face_score"),
+                "face_score_threshold": metadata.get("face_score_threshold"),
+                "face_runner_up_score": metadata.get("face_runner_up_score"),
+                "face_score_margin": metadata.get("face_score_margin"),
+                "face_margin_threshold": metadata.get("face_margin_threshold"),
                 "trigger": metadata.get("trigger") or metadata.get("admission_reason") or None,
                 "admission_reason": metadata.get("admission_reason") or None,
                 "pending_internal_events": bool(getattr(turn, "pending_internal_text", None)),
@@ -616,6 +632,9 @@ class RealtimeRobotAgent:
     def _get_current_primary_face_person_id(self) -> Optional[str]:
         return self._state_controller()._get_current_primary_face_person_id()
 
+    def _get_current_face_evidence_fields(self) -> dict[str, Any]:
+        return self._state_controller()._get_current_face_evidence_fields()
+
     def _get_current_visible_face_person_ids(self) -> tuple[str, ...]:
         return self._state_controller()._get_current_visible_face_person_ids()
 
@@ -735,10 +754,12 @@ class RealtimeRobotAgent:
         capture_vad_positive_blocks: int,
         speech_end_perf_s: float,
         speech_end_unix_s: float,
+        face_evidence_fields: dict[str, Any] | None = None,
     ) -> None:
         self._audio_controller()._commit_audio_turn(
             primary_face_person_id,
             visible_face_person_ids,
+            dict(face_evidence_fields or {}),
             audio_pcm16,
             capture_vad_positive_blocks,
             speech_end_perf_s,
