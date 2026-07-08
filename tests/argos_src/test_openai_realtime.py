@@ -12,15 +12,15 @@ from argos_src.openai_realtime import (
 
 
 def test_realtime_websocket_uses_ga_url_and_no_beta_header() -> None:
-    assert realtime_websocket_url("gpt-realtime-2.1-mini") == (
-        "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1-mini"
+    assert realtime_websocket_url("gpt-realtime-2.1") == (
+        "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1"
     )
     assert realtime_auth_headers("sk-test") == ["Authorization: Bearer sk-test"]
 
 
 def test_realtime_audio_session_payload_uses_ga_shape() -> None:
     profile = SimpleNamespace(
-        model="gpt-realtime-2.1-mini",
+        model="gpt-realtime-2.1",
         input_sample_rate=24000,
         output_sample_rate=24000,
         noise_reduction="near_field",
@@ -37,7 +37,7 @@ def test_realtime_audio_session_payload_uses_ga_shape() -> None:
     )
 
     assert payload["type"] == "realtime"
-    assert payload["model"] == "gpt-realtime-2.1-mini"
+    assert payload["model"] == "gpt-realtime-2.1"
     assert payload["output_modalities"] == ["audio"]
     assert payload["audio"]["input"] == {
         "format": {"type": "audio/pcm", "rate": 24000},
@@ -56,7 +56,7 @@ def test_realtime_audio_session_payload_uses_ga_shape() -> None:
 
 
 def test_realtime_text_payloads_use_output_modalities() -> None:
-    profile = SimpleNamespace(model="gpt-realtime-2.1-mini")
+    profile = SimpleNamespace(model="gpt-realtime-2.1")
 
     session = realtime_text_session_payload(
         profile=profile,

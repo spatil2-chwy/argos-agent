@@ -144,7 +144,7 @@ speaker_recognition:
 
 realtime:
   prompt_file: personality_test_prompt.md
-  model: gpt-realtime-2.1-mini
+  model: gpt-realtime-2.1
   voice: cedar
   audio_output_speed: 1.0
   transcription_model: gpt-4o-mini-transcribe
