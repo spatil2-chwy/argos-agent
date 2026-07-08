@@ -418,7 +418,7 @@ class ScenarioProfile:
     realtime: RealtimeProfile = field(
         default_factory=lambda: RealtimeProfile(
             prompt_file=None,
-            model="gpt-realtime-2.1",
+            model="gpt-realtime-1.5",
             voice="cedar",
             audio_output_speed=0.9,
             transcription_model="gpt-4o-mini-transcribe",
@@ -1660,7 +1660,7 @@ def _parse_realtime(
     _reject_unknown(admission_data, "realtime.admission")
 
     prompt_file = _pop_optional_str(data, "prompt_file", default=None)
-    model = _pop_optional_str(data, "model", default="gpt-realtime-2.1") or "gpt-realtime-2.1"
+    model = _pop_optional_str(data, "model", default="gpt-realtime-1.5") or "gpt-realtime-1.5"
     voice = _pop_optional_str(data, "voice", default="cedar") or "cedar"
     audio_output_speed = _pop_float(data, "audio_output_speed", default=0.9)
     transcription_model = _pop_optional_str(

@@ -145,7 +145,7 @@ speaker_recognition:
 
 realtime:
   prompt_file: navigation_prompt.md
-  model: gpt-realtime-2.1
+  model: gpt-realtime-1.5
   voice: cedar
   audio_output_speed: 1.0
   transcription_model: gpt-4o-mini-transcribe

@@ -509,7 +509,7 @@ def _make_agent():
     agent.logger = logging.getLogger("test.argos.agent_runtime")
     agent.realtime_profile = SimpleNamespace(
         prompt_file="static_interaction_prompt.md",
-        model="gpt-realtime-2.1",
+        model="gpt-realtime-1.5",
         input_sample_rate=24000,
         output_sample_rate=24000,
         silence_grace_period=0.1,
@@ -1434,9 +1434,9 @@ def test_response_done_logs_cache_usage_details():
     assert usage_event["input_audio_tokens"] == 10
     assert usage_event["output_text_tokens"] == 8
     assert usage_event["output_audio_tokens"] == 32
-    assert usage_event["estimated_cost_usd"] == 0.002608
+    assert usage_event["estimated_cost_usd"] == 0.002544
     assert usage_event["estimated_cached_savings_usd"] == 0.000712
-    assert usage_event["session_total_cost_usd"] == 0.002608
+    assert usage_event["session_total_cost_usd"] == 0.002544
 
 
 def test_incomplete_response_with_audio_finishes_playback_instead_of_canceling():
@@ -1921,7 +1921,7 @@ def test_configure_session_uses_realtime_ga_shape():
     update_event = next(evt for evt in agent._sent_events if evt["type"] == "session.update")
     session = update_event["session"]
     assert session["type"] == "realtime"
-    assert session["model"] == "gpt-realtime-2.1"
+    assert session["model"] == "gpt-realtime-1.5"
     assert session["output_modalities"] == ["audio"]
     assert session["audio"]["input"]["format"] == {
         "type": "audio/pcm",
