@@ -235,6 +235,8 @@ class FaceRecognitionService:
         self._recognition_stability = RecognitionStabilityWindow(
             recognition_stability_settings
         )
+        self._unknown_stability_frames = 0
+        self._attentive_unknown_stability_frames = 0
         self._presence_subscribers: list[Callable[[dict[str, Any]], None]] = []
         self._presence_subscribers_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
@@ -308,8 +310,38 @@ class FaceRecognitionService:
         stability = getattr(self, "_recognition_stability", None)
         if stability is not None:
             stability.reset()
+        self._reset_unknown_stability()
         self._notify_presence_subscribers(self.get_presence_snapshot())
         return True
+
+    def _reset_unknown_stability(self) -> None:
+        self._unknown_stability_frames = 0
+        self._attentive_unknown_stability_frames = 0
+
+    def _update_unknown_stability(
+        self,
+        *,
+        unknown_count: int,
+        attentive_unknown_count: int,
+    ) -> tuple[int, int]:
+        if int(unknown_count or 0) > 0:
+            self._unknown_stability_frames = int(
+                getattr(self, "_unknown_stability_frames", 0) or 0
+            ) + 1
+        else:
+            self._unknown_stability_frames = 0
+
+        if int(attentive_unknown_count or 0) > 0:
+            self._attentive_unknown_stability_frames = int(
+                getattr(self, "_attentive_unknown_stability_frames", 0) or 0
+            ) + 1
+        else:
+            self._attentive_unknown_stability_frames = 0
+
+        return (
+            self._unknown_stability_frames,
+            self._attentive_unknown_stability_frames,
+        )
 
     # ------------------------------------------------------------------
     # Image capture
@@ -2010,6 +2042,7 @@ class FaceRecognitionService:
         prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
         if not detected_faces:
+            self._reset_unknown_stability()
             publish_started = perf_now()
             self._publish_live_image_frame(image)
             publish_s = perf_now() - publish_started
@@ -2046,6 +2079,12 @@ class FaceRecognitionService:
             image_shape=image.shape,
             now=now,
         )
+        unknown_stability_frames, attentive_unknown_stability_frames = (
+            self._update_unknown_stability(
+                unknown_count=unknown_count,
+                attentive_unknown_count=analysis.attentive_unknown_count,
+            )
+        )
         scene_s = perf_now() - scene_started
         publish_started = perf_now()
         self._publish_live_image_frame(image, faces=detected_faces)
@@ -2057,6 +2096,8 @@ class FaceRecognitionService:
             faces_detected=len(detected_faces),
             unknown_count=unknown_count,
             attentive_unknown_count=analysis.attentive_unknown_count,
+            unknown_stability_frames=unknown_stability_frames,
+            attentive_unknown_stability_frames=attentive_unknown_stability_frames,
             attention_target=analysis.attention_target,
             primary_attention_target=analysis.primary_attention_target,
             face_match_evidence=self._best_face_match_evidence(detected_faces),

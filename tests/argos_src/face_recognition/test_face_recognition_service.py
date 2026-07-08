@@ -270,6 +270,27 @@ def test_stable_scene_ambiguous_miss_does_not_create_extra_faces(monkeypatch):
     assert analysis.attentive_unknown_count == 1
 
 
+def test_unknown_stability_tracks_consecutive_unknown_frames(monkeypatch):
+    module = _load_face_service_module(monkeypatch)
+    service = object.__new__(module.FaceRecognitionService)
+
+    assert module.FaceRecognitionService._update_unknown_stability(
+        service,
+        unknown_count=1,
+        attentive_unknown_count=1,
+    ) == (1, 1)
+    assert module.FaceRecognitionService._update_unknown_stability(
+        service,
+        unknown_count=1,
+        attentive_unknown_count=0,
+    ) == (2, 0)
+    assert module.FaceRecognitionService._update_unknown_stability(
+        service,
+        unknown_count=0,
+        attentive_unknown_count=0,
+    ) == (0, 0)
+
+
 def test_face_presence_subscriber_receives_updates(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)

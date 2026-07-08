@@ -103,6 +103,8 @@ class FacePresenceCache:
         faces_detected: int,
         unknown_count: int,
         attentive_unknown_count: int = 0,
+        unknown_stability_frames: int = 0,
+        attentive_unknown_stability_frames: int = 0,
         attention_target: AttentionTarget | None,
         primary_attention_target: AttentionTarget | None = None,
         social_scene: SocialSceneContext,
@@ -185,6 +187,11 @@ class FacePresenceCache:
             face_score_margin=float(face_evidence.get("margin", 0.0) or 0.0),
             face_margin_threshold=float(
                 face_evidence.get("margin_threshold", 0.0) or 0.0
+            ),
+            unknown_stability_frames=max(0, int(unknown_stability_frames or 0)),
+            attentive_unknown_stability_frames=max(
+                0,
+                int(attentive_unknown_stability_frames or 0),
             ),
             nearest_recognized_name=social_scene.nearest_recognized_name or "",
             social_scene=social_scene,

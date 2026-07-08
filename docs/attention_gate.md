@@ -126,6 +126,8 @@ The presence snapshot also carries counts and primary-attention metadata:
 attention_count
 attentive_recognized_count
 attentive_unknown_count
+unknown_stability_frames
+attentive_unknown_stability_frames
 primary_attention_kind
 primary_attention_name
 primary_attention_person_id

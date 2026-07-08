@@ -118,6 +118,67 @@ def test_face_bridge_requires_attention_when_configured(monkeypatch):
     assert wake_calls == ["wake"]
 
 
+def test_face_bridge_waits_for_unknown_stability_before_greeting(monkeypatch):
+    bridges_module = _load_bridges_module(monkeypatch)
+    submitted = []
+    wake_calls = []
+
+    bridge = object.__new__(bridges_module.FaceEventBridge)
+    bridge._coalescer = types.SimpleNamespace(
+        submit=lambda text, metadata: submitted.append((text, metadata))
+    )
+    bridge._engagement = types.SimpleNamespace(
+        state=bridges_module.EngagementMode.IDLE,
+        on_face_or_wake=lambda: wake_calls.append("wake"),
+        is_recording_active=lambda: False,
+    )
+    bridge._nav_state = types.SimpleNamespace(
+        get_active_goal=lambda: None,
+        allows_proactive_face_attention=lambda: True,
+    )
+    bridge._recognized_greet_enabled = True
+    bridge._unknown_greet_enabled = True
+    bridge._require_attention = True
+    bridge._recognized_greet_cooldown_sec = 45.0
+    bridge._unknown_greet_cooldown_sec = 30.0
+    bridge._last_unknown_greet_s = 0.0
+    bridge._recognized_last_greet_s = {}
+    bridge._previous_ids = set()
+    bridge._previous_unknown_count = 0
+    bridge._previous_unknown_greet_ready = False
+    bridge._unknown_greet_stability_frames = 3
+
+    for stability_frames, now in ((1, 100.0), (2, 101.0)):
+        bridges_module.FaceEventBridge._maybe_enqueue_face_events(
+            bridge,
+            snapshot={
+                "attentive_unknown_count": 1,
+                "attentive_unknown_stability_frames": stability_frames,
+                "has_attentive_mixed_scene": False,
+            },
+            persons=[],
+            now=now,
+        )
+
+    assert submitted == []
+    assert wake_calls == []
+
+    bridges_module.FaceEventBridge._maybe_enqueue_face_events(
+        bridge,
+        snapshot={
+            "attentive_unknown_count": 1,
+            "attentive_unknown_stability_frames": 3,
+            "has_attentive_mixed_scene": False,
+        },
+        persons=[],
+        now=102.0,
+    )
+
+    assert len(submitted) == 1
+    assert submitted[0][1]["face_status"] == "unknown"
+    assert wake_calls == ["wake"]
+
+
 def test_patrol_bridge_drops_delayed_hop_when_active_goal_appears(monkeypatch):
     bridges_module = _load_bridges_module(monkeypatch)
     submitted = []

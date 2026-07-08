@@ -339,6 +339,17 @@ Recognition supports multiple faces:
 - unrecognized usable faces increment `unknown_count`
 - `primary_face_person_id` is set only for exactly one usable recognized face
 
+The presence snapshot also tracks consecutive processed face-loop frames with
+unknown faces:
+
+- `unknown_stability_frames`
+- `attentive_unknown_stability_frames`
+
+These counters reset when unknown faces are no longer visible. Proactive unknown
+or mixed face greetings wait until the relevant counter reaches
+`recognition_stability.window_frames`, so a known person who briefly misses the
+recognition threshold is not immediately greeted as unknown.
+
 `scene_analysis.py` keeps ownership strict:
 
 - exactly one usable recognized face -> `primary_face_person_id`

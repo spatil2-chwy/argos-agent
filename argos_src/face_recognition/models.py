@@ -107,6 +107,8 @@ class FacePresenceSnapshot:
     face_runner_up_score: float
     face_score_margin: float
     face_margin_threshold: float
+    unknown_stability_frames: int
+    attentive_unknown_stability_frames: int
     nearest_recognized_name: str
     social_scene: SocialSceneContext
     updated_at: float
@@ -147,6 +149,8 @@ def empty_presence_snapshot(
         face_runner_up_score=0.0,
         face_score_margin=0.0,
         face_margin_threshold=0.0,
+        unknown_stability_frames=0,
+        attentive_unknown_stability_frames=0,
         nearest_recognized_name="",
         social_scene=SocialSceneContext(
             has_unrecognized_people=False,

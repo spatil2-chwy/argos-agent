@@ -140,6 +140,8 @@ def test_presence_snapshot_includes_face_match_evidence():
         persons=[],
         faces_detected=1,
         unknown_count=1,
+        unknown_stability_frames=2,
+        attentive_unknown_stability_frames=1,
         attention_target=None,
         primary_attention_target=None,
         face_match_evidence={
@@ -168,3 +170,5 @@ def test_presence_snapshot_includes_face_match_evidence():
     assert snapshot["face_runner_up_score"] == 0.31
     assert snapshot["face_score_margin"] == 0.11
     assert snapshot["face_margin_threshold"] == 0.2
+    assert snapshot["unknown_stability_frames"] == 2
+    assert snapshot["attentive_unknown_stability_frames"] == 1
