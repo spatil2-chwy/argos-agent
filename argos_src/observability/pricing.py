@@ -20,16 +20,27 @@ class ModelRates:
     image: TokenRates = TokenRates()
 
 
-GPT_REALTIME_RATES = ModelRates(
+GPT_REALTIME_1_5_RATES = ModelRates(
     text=TokenRates(input_per_million=4.0, cached_input_per_million=0.4, output_per_million=16.0),
     audio=TokenRates(input_per_million=32.0, cached_input_per_million=0.4, output_per_million=64.0),
     image=TokenRates(input_per_million=5.0, cached_input_per_million=0.5, output_per_million=0.0),
 )
 
-GPT_REALTIME_2_RATES = ModelRates(
+GPT_REALTIME_2_1_RATES = ModelRates(
     text=TokenRates(input_per_million=4.0, cached_input_per_million=0.4, output_per_million=24.0),
     audio=TokenRates(input_per_million=32.0, cached_input_per_million=0.4, output_per_million=64.0),
     image=TokenRates(input_per_million=5.0, cached_input_per_million=0.5, output_per_million=0.0),
+)
+
+GPT_REALTIME_2_1_MINI_RATES = ModelRates(
+    text=TokenRates(input_per_million=0.6, cached_input_per_million=0.06, output_per_million=2.4),
+    audio=TokenRates(input_per_million=10.0, cached_input_per_million=0.3, output_per_million=20.0),
+    image=TokenRates(input_per_million=0.8, cached_input_per_million=0.08, output_per_million=0.0),
+)
+
+GPT_4O_TRANSCRIBE_RATES = ModelRates(
+    text=TokenRates(output_per_million=10.0),
+    audio=TokenRates(input_per_million=2.5),
 )
 
 GPT_4O_MINI_TRANSCRIBE_RATES = ModelRates(
@@ -39,6 +50,24 @@ GPT_4O_MINI_TRANSCRIBE_RATES = ModelRates(
 
 GPT_4_1_MINI_RATES = ModelRates(
     text=TokenRates(input_per_million=0.4, cached_input_per_million=0.1, output_per_million=1.6),
+)
+
+MODEL_RATES_BY_PREFIX: tuple[tuple[str, ModelRates], ...] = tuple(
+    sorted(
+        {
+            "gpt-realtime-2.1-mini": GPT_REALTIME_2_1_MINI_RATES,
+            "gpt-realtime-mini": GPT_REALTIME_2_1_MINI_RATES,
+            "gpt-realtime-2.1": GPT_REALTIME_2_1_RATES,
+            "gpt-realtime-2": GPT_REALTIME_2_1_RATES,
+            "gpt-realtime-1.5": GPT_REALTIME_1_5_RATES,
+            "gpt-realtime": GPT_REALTIME_2_1_RATES,
+            "gpt-4o-mini-transcribe": GPT_4O_MINI_TRANSCRIBE_RATES,
+            "gpt-4o-transcribe": GPT_4O_TRANSCRIBE_RATES,
+            "gpt-4.1-mini": GPT_4_1_MINI_RATES,
+        }.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
 )
 
 
@@ -69,14 +98,9 @@ def resolve_model_rates(model_name: Optional[str]) -> Optional[ModelRates]:
     model = str(model_name or "").strip().lower()
     if not model:
         return None
-    if model.startswith("gpt-realtime-2"):
-        return GPT_REALTIME_2_RATES
-    if model.startswith("gpt-realtime-1.5") or model == "gpt-realtime":
-        return GPT_REALTIME_RATES
-    if model.startswith("gpt-4o-mini-transcribe"):
-        return GPT_4O_MINI_TRANSCRIBE_RATES
-    if model.startswith("gpt-4.1-mini"):
-        return GPT_4_1_MINI_RATES
+    for prefix, rates in MODEL_RATES_BY_PREFIX:
+        if model == prefix or model.startswith(f"{prefix}-"):
+            return rates
     return None
 
 

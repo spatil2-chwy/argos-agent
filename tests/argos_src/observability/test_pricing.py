@@ -33,6 +33,72 @@ def test_estimate_realtime_response_cost_uses_modality_specific_rates():
     assert fields["estimated_cached_savings_usd"] == 0.000712
 
 
+def test_estimate_realtime_response_cost_uses_mini_rates_before_full_realtime_rates():
+    fields = estimate_realtime_response_cost(
+        {
+            "input_tokens": 200,
+            "output_tokens": 40,
+            "input_token_details": {
+                "text_tokens": 190,
+                "audio_tokens": 10,
+                "cached_tokens": 120,
+                "cached_tokens_details": {
+                    "text_tokens": 110,
+                    "audio_tokens": 10,
+                },
+            },
+            "output_token_details": {
+                "text_tokens": 8,
+                "audio_tokens": 32,
+            },
+        },
+        model_name="gpt-realtime-2.1-mini",
+    )
+
+    assert fields["estimated_cost_usd"] == 0.0007168
+    assert fields["estimated_cached_savings_usd"] == 0.0001564
+
+
+def test_estimate_realtime_response_cost_uses_full_realtime_2_1_rates():
+    fields = estimate_realtime_response_cost(
+        {
+            "input_tokens": 200,
+            "output_tokens": 40,
+            "input_token_details": {
+                "text_tokens": 190,
+                "audio_tokens": 10,
+                "cached_tokens": 120,
+                "cached_tokens_details": {
+                    "text_tokens": 110,
+                    "audio_tokens": 10,
+                },
+            },
+            "output_token_details": {
+                "text_tokens": 8,
+                "audio_tokens": 32,
+            },
+        },
+        model_name="gpt-realtime-2.1",
+    )
+
+    assert fields["estimated_cost_usd"] == 0.002608
+    assert fields["estimated_cached_savings_usd"] == 0.000712
+
+
+def test_estimate_realtime_response_cost_resolves_versioned_mini_alias():
+    fields = estimate_realtime_response_cost(
+        {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "input_token_details": {"text_tokens": 10},
+            "output_token_details": {"text_tokens": 5},
+        },
+        model_name="gpt-realtime-mini-2025-12-15",
+    )
+
+    assert fields["estimated_cost_usd"] == 0.000018
+
+
 def test_estimate_transcription_cost_uses_audio_input_and_text_output():
     fields = estimate_transcription_cost(
         {
@@ -47,6 +113,20 @@ def test_estimate_transcription_cost_uses_audio_input_and_text_output():
     assert fields["input_audio_tokens"] == 120
     assert fields["output_text_tokens"] == 20
     assert fields["estimated_cost_usd"] == 0.00025
+
+
+def test_estimate_transcription_cost_supports_full_transcribe_model():
+    fields = estimate_transcription_cost(
+        {
+            "input_tokens": 120,
+            "output_tokens": 20,
+            "input_token_details": {"audio_tokens": 120},
+            "output_token_details": {"text_tokens": 20},
+        },
+        model_name="gpt-4o-transcribe",
+    )
+
+    assert fields["estimated_cost_usd"] == 0.0005
 
 
 def test_estimate_text_generation_cost_uses_cached_input_rate():
