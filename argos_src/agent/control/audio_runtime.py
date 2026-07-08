@@ -1,4 +1,4 @@
-"""Audio capture, commit, and playback helpers for the Argos agent runtime."""
+"""Audio capture, commit, and playback controller for the realtime runtime."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from uuid import uuid4
 import numpy as np
 import sounddevice as sd
 
-from argos_src.agent.realtime_turns import AUDIO_CHANNELS, QueuedTurn
+from argos_src.agent.realtime_turns import AUDIO_CHANNELS, TURN_PHASE_QUEUED, QueuedTurn
+from argos_src.agent.control.observers import safe_transition
+from argos_src.agent.control.types import CaptureState, StateAxis, StateTransition
 from argos_src.observability.observability import perf_now
 from argos_src.runtime.audio_admission import resolve_record_admission
 from argos_src.speaker_recognition.policy import clip_stats
@@ -23,10 +25,59 @@ AUDIO_DTYPE = "int16"
 VAD_SAMPLE_RATE = 16000
 PLAYBACK_ECHO_SUPPRESSION_SEC = 0.8
 RECORDING_PREROLL_SEC = 0.35
-RECORDING_START_CONFIRMATION_BLOCKS = 2
+RECORDING_START_CONFIRMATION_BLOCKS = 1
 
 
-class RealtimeAgentAudioMixin:
+class AudioRuntime:
+    """Own live capture/playback callbacks while preserving host turn semantics."""
+
+    def __init__(self, host: Any) -> None:
+        object.__setattr__(self, "_host", host)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._host, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_host":
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._host, name, value)
+
+    def _set_capture_state(
+        self,
+        state: CaptureState | str,
+        *,
+        trigger: str,
+        req_id: str = "",
+        reason: str = "",
+    ) -> None:
+        new_state = state.value if isinstance(state, CaptureState) else str(state)
+        old_state = str(
+            getattr(self, "_capture_state", CaptureState.ADMISSION_CLOSED.value) or ""
+        )
+        if old_state == new_state:
+            return
+        self._capture_state = new_state
+        exchange_fields = {}
+        fields_fn = getattr(self, "_exchange_log_fields", None)
+        if callable(fields_fn):
+            try:
+                exchange_fields = dict(fields_fn())
+            except Exception:
+                exchange_fields = {}
+        safe_transition(
+            getattr(self, "_state_observer", None),
+            StateTransition(
+                axis=StateAxis.CAPTURE,
+                old_state=old_state,
+                new_state=new_state,
+                trigger=trigger,
+                req_id=req_id,
+                reason=reason,
+                fields=exchange_fields,
+            ),
+        )
+
     def _ensure_preroll_buffer_locked(self) -> deque[tuple[float, bytes, bytes]]:
         buffer = getattr(self, "_recording_preroll_chunks", None)
         if buffer is None:
@@ -268,6 +319,11 @@ class RealtimeAgentAudioMixin:
                 )
                 self._wake_window_until = wake_until
                 if allowed:
+                    self._set_capture_state(
+                        CaptureState.ADMISSION_OPEN,
+                        trigger="admission_open",
+                        reason=admission_reason or "allowed",
+                    )
                     display_mode = getattr(self, "_set_display_mode_async", None)
                     display_state_still_current = True
                     if interaction_state in {"alert", "cooldown"}:
@@ -278,6 +334,11 @@ class RealtimeAgentAudioMixin:
                     if callable(display_mode) and display_state_still_current:
                         display_mode("alert")
                 else:
+                    self._set_capture_state(
+                        CaptureState.ADMISSION_CLOSED,
+                        trigger="admission_closed",
+                        reason=admission_reason or "blocked",
+                    )
                     clear_passive_alert = getattr(
                         self,
                         "_clear_passive_alert_display_if_needed",
@@ -309,6 +370,11 @@ class RealtimeAgentAudioMixin:
                         self._current_turn_vad_positive_blocks = confirmed_voice_blocks
                         self._last_voice_at = now
                     else:
+                        self._set_capture_state(
+                            CaptureState.CANDIDATE_VOICE,
+                            trigger="candidate_voice",
+                            reason=admission_reason or "voice_detected",
+                        )
                         self._remember_preroll_chunk_locked(
                             now_s=now,
                             raw_chunk=raw_chunk,
@@ -342,11 +408,29 @@ class RealtimeAgentAudioMixin:
         wake_detected: bool = False,
     ) -> None:
         self._recording_active = True
+        trigger = "wake_word" if wake_detected else (admission_reason or "admission_open")
+        exchange_id = ""
+        exchange_index = 0
+        new_exchange = getattr(self, "_new_exchange_locked", None)
+        if callable(new_exchange):
+            exchange_id, exchange_index = new_exchange(
+                trigger=trigger,
+                admission_reason=admission_reason or "unknown",
+            )
+        self._set_capture_state(
+            CaptureState.RECORDING,
+            trigger="recording_started",
+            reason=admission_reason or "unknown",
+        )
         self._recording_started_at = now_s
         self._last_voice_at = now_s
         self._cancel_preference_idle_flush()
         self._current_primary_face_person_id = self._get_current_primary_face_person_id()
         self._current_visible_face_person_ids = self._get_current_visible_face_person_ids()
+        face_evidence_getter = getattr(self, "_get_current_face_evidence_fields", None)
+        self._current_face_evidence_fields = (
+            dict(face_evidence_getter() or {}) if callable(face_evidence_getter) else {}
+        )
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
@@ -367,16 +451,32 @@ class RealtimeAgentAudioMixin:
             self._current_primary_face_person_id,
             ",".join(self._current_visible_face_person_ids) or "<none>",
         )
-        self._latency.emit(event="recording_started")
+        self._latency.emit(
+            event="recording_started",
+            exchange_id=exchange_id or None,
+            exchange_index=exchange_index or None,
+            turn_kind="human_audio",
+            trigger=trigger,
+            admission_reason=admission_reason or "unknown",
+            interaction_state=interaction_state or "unknown",
+            wake_detected=bool(wake_detected),
+            primary_face_person_id=self._current_primary_face_person_id,
+            visible_face_person_ids=",".join(self._current_visible_face_person_ids) or None,
+            **dict(self._current_face_evidence_fields or {}),
+            **self._base_log_fields(),
+        )
 
     def _finalize_recording_locked(self, *, now_s: float) -> None:
         self._recording_active = False
+        self._set_capture_state(CaptureState.FINALIZING, trigger="speech_end")
         self._recording_started_at = 0.0
         primary_face_person_id = self._current_primary_face_person_id
         visible_face_person_ids = self._current_visible_face_person_ids
+        face_evidence_fields = dict(getattr(self, "_current_face_evidence_fields", {}) or {})
         capture_vad_positive_blocks = int(self._current_turn_vad_positive_blocks)
         self._current_primary_face_person_id = None
         self._current_visible_face_person_ids = ()
+        self._current_face_evidence_fields = {}
         audio_pcm16 = b"".join(self._current_turn_audio_chunks)
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
@@ -387,12 +487,18 @@ class RealtimeAgentAudioMixin:
             display_mode("thinking")
         speech_end_perf_s = perf_now()
         speech_end_unix_s = now_s
-        self._latency.emit(event="speech_end", speech_end_unix_s=speech_end_unix_s)
+        self._latency.emit(
+            event="speech_end",
+            speech_end_unix_s=speech_end_unix_s,
+            capture_vad_positive_blocks=capture_vad_positive_blocks,
+            **self._exchange_log_fields(),
+        )
         threading.Thread(
             target=self._commit_audio_turn,
             args=(
                 primary_face_person_id,
                 visible_face_person_ids,
+                face_evidence_fields,
                 audio_pcm16,
                 capture_vad_positive_blocks,
                 speech_end_perf_s,
@@ -405,40 +511,64 @@ class RealtimeAgentAudioMixin:
         self,
         primary_face_person_id: Optional[str],
         visible_face_person_ids: tuple[str, ...],
+        face_evidence_fields: dict[str, Any],
         audio_pcm16: bytes,
         capture_vad_positive_blocks: int,
         speech_end_perf_s: float,
         speech_end_unix_s: float,
     ) -> None:
+        self._set_capture_state(CaptureState.COMMITTING, trigger="audio_commit_start")
         try:
             self._audio_send_queue.join()
             self._send_event({"type": "input_audio_buffer.commit"})
         except Exception:
             self.logger.exception("Failed to commit input audio buffer")
+            self._set_capture_state(
+                CaptureState.ADMISSION_CLOSED,
+                trigger="audio_commit_failed",
+            )
             return
         display_mode = getattr(self, "_set_display_mode_async", None)
         if callable(display_mode):
             display_mode("thinking")
         transcript_perf_s = perf_now()
         req_id = f"rt-{uuid4().hex[:12]}"
-        self._latency.emit(event="audio_commit", req_id=req_id)
+        exchange_fields = self._exchange_log_fields()
+        self._latency.emit(event="audio_commit", req_id=req_id, **exchange_fields)
+        self._set_capture_state(
+            CaptureState.COMMITTED,
+            trigger="audio_commit",
+            req_id=req_id,
+        )
         if self.coalescer is not None:
             internal_text, merged_meta = self.coalescer.drain_internal_events_for_audio_turn(
                 {
                     "req_id": req_id,
+                    "exchange_id": exchange_fields.get("exchange_id"),
+                    "exchange_index": exchange_fields.get("exchange_index"),
+                    "turn_kind": "human_audio",
+                    "trigger": exchange_fields.get("trigger"),
+                    "admission_reason": exchange_fields.get("admission_reason"),
                     "capture_vad_positive_blocks": int(capture_vad_positive_blocks),
                     "speech_end_perf_s": speech_end_perf_s,
                     "speech_end_unix_s": speech_end_unix_s,
                     "transcript_perf_s": transcript_perf_s,
+                    **dict(face_evidence_fields or {}),
                 }
             )
         else:
             internal_text, merged_meta = None, {
                 "req_id": req_id,
+                "exchange_id": exchange_fields.get("exchange_id"),
+                "exchange_index": exchange_fields.get("exchange_index"),
+                "turn_kind": "human_audio",
+                "trigger": exchange_fields.get("trigger"),
+                "admission_reason": exchange_fields.get("admission_reason"),
                 "capture_vad_positive_blocks": int(capture_vad_positive_blocks),
                 "speech_end_perf_s": speech_end_perf_s,
                 "speech_end_unix_s": speech_end_unix_s,
                 "transcript_perf_s": transcript_perf_s,
+                **dict(face_evidence_fields or {}),
             }
         # Speaker recognition now uses the raw 16 kHz turn audio. The eval repo
         # showed raw ECAPA embeddings with per-person centroids outperforming
@@ -472,6 +602,13 @@ class RealtimeAgentAudioMixin:
                     primary_face_person_id=primary_face_person_id,
                     visible_face_person_ids=visible_face_person_ids,
                 )
+        merged_meta.update(
+            {
+                "audio_score": round(float(resolution.top_score), 3),
+                "audio_runner_up_score": round(float(resolution.runner_up_score), 3),
+                "audio_score_margin": round(float(resolution.margin), 3),
+            }
+        )
 
         turn = QueuedTurn(
             kind="audio",
@@ -479,6 +616,8 @@ class RealtimeAgentAudioMixin:
             speech_end_perf_s=speech_end_perf_s,
             speech_end_unix_s=speech_end_unix_s,
             transcript_perf_s=transcript_perf_s,
+            exchange_id=str(exchange_fields.get("exchange_id") or ""),
+            exchange_index=int(exchange_fields.get("exchange_index") or 0),
             primary_face_person_id=primary_face_person_id,
             audio_speaker_id=resolution.audio_speaker_id,
             owner_id=resolution.owner_id,
@@ -504,6 +643,15 @@ class RealtimeAgentAudioMixin:
             primary_face_person_id=primary_face_person_id,
             result=resolution,
         )
+        self._latency.emit(
+            event="exchange_context",
+            req_id=req_id,
+            capture_vad_positive_blocks=capture_vad_positive_blocks,
+            audio_duration_s=round(len(audio_pcm16) / float(VAD_SAMPLE_RATE * 2), 3)
+            if audio_pcm16
+            else 0.0,
+            **self._exchange_log_fields(turn),
+        )
         owner_turn_controller = getattr(self, "owner_turn_controller", None)
         if owner_turn_controller is not None:
             try:
@@ -520,6 +668,7 @@ class RealtimeAgentAudioMixin:
         self._register_pending_audio_turn(turn)
         self.engagement.on_human_input(req_id)
         self._last_external_input_s = time.time()
+        self._set_turn_phase(turn, TURN_PHASE_QUEUED, trigger="enqueue_audio_turn")
         self._turn_queue.put(turn)
 
     def _playback_callback(

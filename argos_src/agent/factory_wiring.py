@@ -7,6 +7,11 @@ import threading
 import time
 from typing import Any, Callable
 
+from argos_src.agent.control.robot_arbitration import (
+    decide_idle_patrol_resume,
+    emit_robot_arbitration,
+)
+from argos_src.agent.control.types import RobotArbitrationState
 from argos_src.provider_api.errors import is_provider_error
 
 logger = logging.getLogger(__name__)
@@ -50,16 +55,31 @@ class FactoryRuntimeWireup:
             display_mode = getattr(agent, "_set_display_mode_async", None)
             if callable(display_mode):
                 display_mode("idle", force=True)
-        if self._nav_state is None or self._coalescer is None:
+        try:
+            decision = decide_idle_patrol_resume(
+                nav_state=self._nav_state,
+                coalescer=self._coalescer,
+                battery_cache=self._battery_cache,
+            )
+        except Exception:
+            logger.exception("Failed to check robot arbitration before patrol resume")
+            emit_robot_arbitration(
+                agent,
+                RobotArbitrationState.PATROL_SUPPRESSED,
+                trigger="idle_entered",
+                reason="arbitration_failed",
+            )
             return
-        patrol = self._nav_state.get_patrol()
-        if not patrol.get("enabled", False):
+        emit_robot_arbitration(
+            agent,
+            decision.state,
+            trigger="idle_entered",
+            reason=decision.reason,
+            fields=decision.fields,
+        )
+        if not decision.allowed:
             return
-        if self._nav_state.get_active_goal() is not None:
-            return
-        target = str(patrol.get("awaiting_target", "")).strip()
-        if not target:
-            return
+        target = str(decision.fields.get("target_label", "") or "").strip()
         self._coalescer.submit(
             text=(
                 "PATROL_EVENT: interaction ended, resuming patrol. "

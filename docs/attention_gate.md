@@ -9,7 +9,7 @@ Read this with:
 - `argos_src/face_recognition/face_recognition_service.py`
 - `argos_src/face_recognition/presence_cache.py`
 - `argos_src/runtime/audio_admission.py`
-- `argos_src/agent/agent_audio.py`
+- `argos_src/agent/control/audio_runtime.py`
 - `config/profiles/static_interaction.yaml`
 
 ## What It Is
@@ -126,6 +126,8 @@ The presence snapshot also carries counts and primary-attention metadata:
 attention_count
 attentive_recognized_count
 attentive_unknown_count
+unknown_stability_frames
+attentive_unknown_stability_frames
 primary_attention_kind
 primary_attention_name
 primary_attention_person_id

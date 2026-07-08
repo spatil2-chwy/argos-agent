@@ -81,7 +81,9 @@ Read-only agents must report the proposed learning update instead of editing fil
 | Module boundaries, folder structure, naming, file size, coupling, and refactor shape | `repo-structure-auditor` | read-only | `safe-refactor-workflow` |
 | Tests should be selected, run, diagnosed, or fixed in parallel | `test-runner` | workspace-write | Any workflow |
 | Public behavior, setup, operator flow, architecture, safety, identity, provider, or memory docs may drift | `docs-sync-auditor` | read-only | Any workflow |
+| Realtime state axes, reducers, engagement flow, turn/playback lifecycle, or coalescer diagrams may drift | `state-machine-diagrammer` | workspace-write | `realtime-change-workflow` or `docs-sync-auditor` |
 | Latency logs, realtime markers, cost telemetry, bring-up failures | `observability-debugger` | read-only by default | `debug-bringup-workflow` |
+| Dashboard UI/API, latency-log indexing, dashboard build, observability dashboard docs | `observability-dashboard-maintainer` | read-only | `safe-refactor-workflow` |
 | HTML deck, demo briefing, roadmap deck, weekly status presentation, or stakeholder review package | `presentation-creator` | workspace-write | `argos-html-presentation-workflow` |
 | Presentation artifact needs QA, claim checking, browser/layout review, or source alignment | `presentation-reviewer` | read-only | `argos-presentation-review-workflow` |
 | VBR-style written review, deck-to-DOCX conversion, or 2-3 page source-backed stakeholder write-up | `vbr-docx-writer` | workspace-write | `argos-html-presentation-workflow` when starting from an Argos deck |
@@ -96,6 +98,7 @@ Read-only agents must report the proposed learning update instead of editing fil
 - Structure/naming/modularity review: `repo-structure-auditor`, optionally `change-reviewer` if a diff already exists.
 - Bring-up/debug session: `observability-debugger`, optionally `provider-contract-guardian` if resources or transports are involved.
 - Documentation update: `docs-sync-auditor`, optionally the domain auditor for the subsystem being documented.
+- Observability dashboard update: `observability-dashboard-maintainer`, optionally `observability-debugger` when live logs or latency diagnosis are involved.
 - Weekly change presentation: main thread owns synthesis and gathers `git log`/diff/source artifacts; optionally use `docs-sync-auditor` for source-backed theme extraction or doc drift, then `presentation-creator` builds the deck and `presentation-reviewer` checks claims and layout.
 - VBR DOCX from an existing deck: main thread or `vbr-docx-writer` turns the deck into a concise write-up with tables/figures, then optionally use `docs-sync-auditor` or `presentation-reviewer` for source-backed claim and layout review.
 - Final pre-handoff check for risky work: relevant domain auditor, `test-runner`, `docs-sync-auditor`, and `change-reviewer`.

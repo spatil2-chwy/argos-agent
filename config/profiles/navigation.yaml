@@ -85,8 +85,8 @@ face_recognition:
   recognition_threshold: 0.6
   recognition_margin_threshold: 0.20
   recognition_stability:
-    window_frames: 5
-    min_hits: 2
+    window_frames: 3
+    min_hits: 1
   live_image_enabled: false
   owner_turn:
     enabled: true
@@ -152,7 +152,7 @@ realtime:
   input_device: pipewire
   output_device: pipewire
   noise_reduction: near_field
-  vad_threshold: 0.8
+  vad_threshold: 0.5
   silence_grace_period: 1.0
   wake_word: hey puffle
   wake_threshold: 0.5

@@ -36,8 +36,10 @@ from argos_src.tools import (
 )
 
 from .bridges import FaceEventBridge, PatrolLoopBridge
+from .control.coalescer import EventCoalescer
+from .control.engagement_runtime import EngagementStateMachine
 from .factory_wiring import FactoryRuntimeWireup
-from .orchestrator import EngagementStateMachine, EventCoalescer
+from argos_src.observability.state_observer import StructuredStateObserver
 from .startup import derive_initial_robot_posture, prepare_robot_for_agent_session
 
 
@@ -461,6 +463,7 @@ def create_agent(
     resolved_prompt_file = resolve_prompt_file(scenario_profile.realtime.prompt_file)
     base_system_prompt = load_system_prompt(resolved_prompt_file)
 
+    state_observer = StructuredStateObserver()
     engagement = EngagementStateMachine(
         voice_cmd_publisher=wiring.publish_voice_cmd,
         alert_timeout_sec=scenario_profile.engagement.alert_timeout_sec,
@@ -470,6 +473,7 @@ def create_agent(
         nav_state=nav_state,
         battery_cache=battery_cache,
         self_charge_available=self_charge_available,
+        state_observer=state_observer,
     )
     gesture_runtime = _create_gesture_runtime(
         scenario_profile=scenario_profile,
@@ -503,6 +507,7 @@ def create_agent(
         initial_robot_posture=initial_robot_posture,
         stand_tool_name=_stand_tool_name(robot_family),
         supports_navigation=navigation_enabled,
+        state_observer=state_observer,
     )
     if (
         scenario_profile.face_recognition.enabled
@@ -556,6 +561,7 @@ def create_agent(
         engagement=engagement,
         debounce_sec=scenario_profile.engagement.coalescer_debounce_sec,
         max_wait_sec=scenario_profile.engagement.coalescer_max_wait_sec,
+        state_observer=state_observer,
     )
     agent.coalescer = coalescer
     wiring.bind_coalescer(coalescer)

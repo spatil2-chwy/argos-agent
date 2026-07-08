@@ -1,0 +1,179 @@
+"""Frozen person, face, and memory context for realtime turns."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import time
+from typing import Any, Optional
+
+from argos_src.agent.realtime_turns import FrozenTurnContext
+from argos_src.face_recognition.models import PersonContext
+from argos_src.identity.prompting import format_identity_profile_lines
+
+
+class TurnContextRuntime:
+    """Build prompt-facing human context snapshots for a turn."""
+
+    def __init__(self, host: Any) -> None:
+        self._host = host
+
+    def enrich_person_context_with_memory(self, person: PersonContext) -> PersonContext:
+        host = self._host
+        compiler = getattr(host, "memory_context_compiler", None)
+        if compiler is None:
+            return person
+        person_id = str(getattr(person, "person_id", "") or "").strip()
+        if not person_id:
+            return person
+        try:
+            context = compiler.person_context(
+                person_id,
+                fallback_profile_lines=tuple(
+                    getattr(person, "memory_profile_lines", ()) or ()
+                ),
+                fallback_followup_lines=tuple(
+                    getattr(person, "potential_followups", ()) or ()
+                ),
+            )
+        except Exception:
+            host.logger.exception("Failed to compile memory context for %s", person_id)
+            return person
+        person.memory_profile_lines = tuple(context.profile_lines or ())
+        person.potential_followups = tuple(context.followup_lines or ())
+        if context.preferred_language:
+            person.preferred_language = context.preferred_language
+        return person
+
+    def compile_memory_context_blocks(
+        self,
+        current_person_id: Optional[str],
+    ) -> tuple[str, ...]:
+        host = self._host
+        compiler = getattr(host, "memory_context_compiler", None)
+        if compiler is None:
+            return ()
+        site_code = str(getattr(host, "_current_office_location", "") or "").strip()
+        if not site_code:
+            return ()
+        try:
+            return tuple(
+                compiler.site_blocks(
+                    site_code,
+                    current_person_id=str(current_person_id or "").strip() or None,
+                )
+            )
+        except Exception:
+            host.logger.exception("Failed to compile site memory context")
+            return ()
+
+    def identity_person(self, person_id: Optional[str]) -> PersonContext | None:
+        host = self._host
+        rendered = str(person_id or "").strip()
+        identity_store = getattr(host, "identity_store", None)
+        if not rendered or identity_store is None:
+            return None
+        try:
+            record = identity_store.get_person(rendered)
+            if record is None:
+                return None
+            metadata = dict(record.get("metadata") or {})
+            person = PersonContext(
+                person_id=rendered,
+                name=str(record.get("name") or metadata.get("name") or rendered),
+                interaction_count=int(metadata.get("interaction_count", 0) or 0),
+                confidence=1.0,
+                bbox_area=0,
+                timestamp=time.time(),
+                directory_profile_lines=format_identity_profile_lines(metadata),
+                memory_profile_lines=(),
+                preferred_language="",
+                potential_followups=(),
+                visible=False,
+            )
+            return self.enrich_person_context_with_memory(person)
+        except Exception:
+            host.logger.exception("Failed to build identity context for %s", rendered)
+            return None
+
+    def capture_turn_context(
+        self,
+        *,
+        primary_face_person_id: Optional[str] = None,
+        audio_speaker_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        owner_source: str = "unknown",
+        owner_confidence: float = 0.0,
+        speaker_visible: bool = False,
+    ) -> FrozenTurnContext:
+        host = self._host
+        memory_context_blocks = self.compile_memory_context_blocks(owner_id)
+        if host.face_service is None:
+            person = self.identity_person(owner_id)
+            return FrozenTurnContext(
+                persons=[person] if person is not None else [],
+                primary_face_person_id=primary_face_person_id,
+                audio_speaker_id=audio_speaker_id,
+                owner_id=owner_id,
+                owner_source=owner_source,
+                owner_confidence=owner_confidence,
+                speaker_visible=speaker_visible,
+                memory_context_blocks=memory_context_blocks,
+            )
+        try:
+            persons = deepcopy(host.face_service.get_cached_persons())
+            owner_context_id = str(owner_id or "").strip()
+            if owner_context_id:
+                persons = [
+                    self.enrich_person_context_with_memory(person)
+                    if str(getattr(person, "person_id", "") or "").strip()
+                    == owner_context_id
+                    else person
+                    for person in persons
+                ]
+            face_snapshot = deepcopy(host.face_service.get_presence_snapshot())
+            if owner_context_id and not any(
+                str(getattr(person, "person_id", "") or "").strip()
+                == owner_context_id
+                for person in persons
+            ):
+                person = self.identity_person(owner_context_id)
+                if person is not None:
+                    persons.append(person)
+            if primary_face_person_id is None:
+                attention_getter = getattr(
+                    host.face_service,
+                    "get_primary_attention_person_id",
+                    None,
+                )
+                if callable(attention_getter):
+                    primary_face_person_id = attention_getter()
+                if primary_face_person_id is None:
+                    getter = getattr(host.face_service, "get_primary_face_person_id", None)
+                    if callable(getter):
+                        primary_face_person_id = getter()
+                    else:
+                        primary_face_person_id = (
+                            host.face_service.get_attention_target_person_id()
+                        )
+            return FrozenTurnContext(
+                persons=persons,
+                face_snapshot=face_snapshot,
+                primary_face_person_id=primary_face_person_id,
+                audio_speaker_id=audio_speaker_id,
+                owner_id=owner_id,
+                owner_source=owner_source,
+                owner_confidence=owner_confidence,
+                speaker_visible=speaker_visible,
+                memory_context_blocks=memory_context_blocks,
+            )
+        except Exception:
+            host.logger.exception("Failed to capture turn context snapshot")
+            return FrozenTurnContext(
+                primary_face_person_id=primary_face_person_id,
+                audio_speaker_id=audio_speaker_id,
+                owner_id=owner_id,
+                owner_source=owner_source,
+                owner_confidence=owner_confidence,
+                speaker_visible=speaker_visible,
+                memory_context_blocks=memory_context_blocks,
+            )

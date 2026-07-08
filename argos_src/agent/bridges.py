@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Optional
 
 from argos_src.nav_support.locations import NavigationState
 
-from .orchestrator import EngagementState
+from .control.robot_arbitration import decide_proactive_face_attention
+from .control.types import EngagementMode
 
 if TYPE_CHECKING:
     from argos_src.face_recognition.face_recognition_service import FaceRecognitionService
@@ -72,6 +73,10 @@ class FaceEventBridge:
         self._previous_status = "none"
         self._previous_ids: set[str] = set()
         self._previous_unknown_count = 0
+        self._previous_unknown_greet_ready = False
+        self._unknown_greet_stability_frames = (
+            self._resolve_unknown_greet_stability_frames(face_service)
+        )
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -119,6 +124,17 @@ class FaceEventBridge:
         )
         self._engagement.on_face_or_wake()
 
+    @staticmethod
+    def _resolve_unknown_greet_stability_frames(
+        face_service: FaceRecognitionService,
+    ) -> int:
+        stability = getattr(face_service, "_recognition_stability", None)
+        settings = getattr(stability, "settings", None)
+        try:
+            return max(1, int(getattr(settings, "window_frames", 1) or 1))
+        except (TypeError, ValueError):
+            return 1
+
     def _maybe_enqueue_face_events(
         self,
         *,
@@ -129,6 +145,9 @@ class FaceEventBridge:
         require_attention = bool(getattr(self, "_require_attention", False))
         if require_attention:
             unknown_count = int(snapshot.get("attentive_unknown_count", 0) or 0)
+            unknown_stability_frames = int(
+                snapshot.get("attentive_unknown_stability_frames", 0) or 0
+            )
             has_mixed_scene = bool(snapshot.get("has_attentive_mixed_scene", False))
             nearest_recognized_name = str(
                 snapshot.get("primary_attention_name")
@@ -140,6 +159,9 @@ class FaceEventBridge:
             ]
         else:
             unknown_count = int(snapshot.get("unknown_count", 0) or 0)
+            unknown_stability_frames = int(
+                snapshot.get("unknown_stability_frames", 0) or 0
+            )
             has_mixed_scene = bool(snapshot.get("has_mixed_scene", False))
             nearest_recognized_name = str(snapshot.get("nearest_recognized_name", "") or "").strip()
             event_persons = list(persons)
@@ -152,10 +174,25 @@ class FaceEventBridge:
                 recording_active = bool(is_recording_active())
             except Exception:
                 recording_active = False
-        allow_face_attention = (
-            self._engagement.state == EngagementState.IDLE
-            and self._nav_state.allows_proactive_face_attention()
-            and not recording_active
+        face_attention_decision = decide_proactive_face_attention(
+            engagement_state=self._engagement.state,
+            nav_state=self._nav_state,
+            recording_active=recording_active,
+        )
+        self._last_face_arbitration_decision = face_attention_decision
+        allow_face_attention = face_attention_decision.allowed
+        required_unknown_stability_frames = max(
+            1,
+            int(getattr(self, "_unknown_greet_stability_frames", 1) or 1),
+        )
+        if unknown_count > 0 and unknown_stability_frames <= 0:
+            unknown_stability_frames = required_unknown_stability_frames
+        unknown_greet_ready = (
+            unknown_count > 0
+            and unknown_stability_frames >= required_unknown_stability_frames
+        )
+        previous_unknown_greet_ready = bool(
+            getattr(self, "_previous_unknown_greet_ready", False)
         )
 
         emitted_mixed = False
@@ -164,8 +201,8 @@ class FaceEventBridge:
             and allow_face_attention
             and self._recognized_greet_enabled
             and self._unknown_greet_enabled
-            and (unknown_count > 0)
-            and ((self._previous_unknown_count == 0) or bool(new_ids))
+            and unknown_greet_ready
+            and ((not previous_unknown_greet_ready) or bool(new_ids))
             and (
                 now - self._last_unknown_greet_s
                 >= self._unknown_greet_cooldown_sec
@@ -199,8 +236,8 @@ class FaceEventBridge:
         if (
             not emitted_mixed
             and self._unknown_greet_enabled
-            and unknown_count > 0
-            and self._previous_unknown_count == 0
+            and unknown_greet_ready
+            and not previous_unknown_greet_ready
             and allow_face_attention
         ):
             if (
@@ -233,6 +270,7 @@ class FaceEventBridge:
 
         self._previous_ids = ids_now
         self._previous_unknown_count = unknown_count
+        self._previous_unknown_greet_ready = unknown_greet_ready
 
     def _run(self) -> None:
         while not self._stop.wait(FACE_EVENT_POLL_SEC):
@@ -291,6 +329,10 @@ class PatrolLoopBridge:
             time.sleep(self._next_hop_delay_sec)
             patrol_state = self._nav_state.get_patrol()
             if not patrol_state.get("enabled", False):
+                return
+            if self._nav_state.get_active_goal() is not None:
+                return
+            if str(patrol_state.get("awaiting_target", "")).strip() != next_target:
                 return
             self._coalescer.submit(
                 text=(

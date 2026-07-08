@@ -1,23 +1,47 @@
-"""Tool execution helpers for the Argos agent runtime."""
+"""Tool execution runtime for Realtime function calls."""
 
 from __future__ import annotations
 
 import json
 from typing import Any, Optional
 
-from argos_src.agent.realtime_turns import PendingToolCall, QueuedTurn
-from argos_src.agent.runtime_context import parse_tool_output, summarize_tool_payload
-from argos_src.observability.observability import (
-    clear_request_context,
-    set_request_context,
+from argos_src.agent.realtime_turns import (
+    PendingToolCall,
+    QueuedTurn,
+    TURN_PHASE_REQUESTING_FOLLOWUP,
 )
+from argos_src.agent.runtime_context import parse_tool_output, summarize_tool_payload
+from argos_src.observability.observability import clear_request_context, set_request_context
+
+TOOL_LOG_PREVIEW_LIMIT = 900
 
 
-class RealtimeAgentToolsMixin:
-    def _execute_tool_call(self, pending: PendingToolCall) -> None:
-        turn = self._turns_by_req_id.get(pending.turn_req_id)
-        tool = self._tool_registry.get(pending.tool_name)
-        if turn is None or tool is None or self._is_turn_terminal(turn):
+def log_preview(value: object, *, limit: int = TOOL_LOG_PREVIEW_LIMIT) -> str:
+    """Render a bounded single-line value for pipe-separated latency logs."""
+    if isinstance(value, str):
+        rendered = value
+    else:
+        try:
+            rendered = json.dumps(value, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            rendered = str(value)
+    rendered = " ".join(rendered.replace("|", "/").split())
+    if len(rendered) <= limit:
+        return rendered
+    return rendered[: max(limit - 3, 0)] + "..."
+
+
+class ToolRuntime:
+    """Execute model-requested tools and insert their outputs into the session."""
+
+    def __init__(self, host: Any) -> None:
+        self._host = host
+
+    def execute(self, pending: PendingToolCall) -> None:
+        host = self._host
+        turn = host._turns_by_req_id.get(pending.turn_req_id)
+        tool = host._tool_registry.get(pending.tool_name)
+        if turn is None or tool is None or host._is_turn_terminal(turn):
             return
 
         try:
@@ -37,9 +61,9 @@ class RealtimeAgentToolsMixin:
                 transcript_perf_s=turn.transcript_perf_s,
             )
             try:
-                result = self._invoke_tool(tool, arguments)
+                result = self.invoke_tool(tool, arguments)
             except Exception as exc:
-                self.logger.exception(
+                host.logger.exception(
                     "Tool execution failed req_id=%s tool=%s",
                     turn.req_id,
                     pending.tool_name,
@@ -48,42 +72,58 @@ class RealtimeAgentToolsMixin:
             finally:
                 clear_request_context()
 
-        content, artifact = self._split_tool_result(result)
-        self._maybe_handle_tool_side_effects(pending.tool_name, content)
+        content, artifact = self.split_tool_result(result)
+        self.maybe_handle_side_effects(pending.tool_name, content)
         posture, summary = summarize_tool_payload(pending.tool_name, content)
-        self._last_tool_name = pending.tool_name
+        host._last_tool_name = pending.tool_name
         if posture:
-            self._robot_posture = posture
+            host._robot_posture = posture
         if summary:
-            self._last_tool_summary = summary
+            host._last_tool_summary = summary
 
-        self._tool_latency.emit(
+        host._tool_latency.emit(
             event="tool_result",
             req_id=turn.req_id,
             tool=pending.tool_name,
+            call_id=pending.call_id,
+            tool_success=parse_tool_output(content).get("success"),
+            tool_result_preview=log_preview(content),
+            **(
+                host._exchange_log_fields(turn)
+                if callable(getattr(host, "_exchange_log_fields", None))
+                else {}
+            ),
         )
-        self._queue_pending_local_created_item(turn.req_id, "function_call_output")
-        self._send_event(
+        host._queue_pending_local_created_item(turn.req_id, "function_call_output")
+        host._send_event(
             {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "function_call_output",
                     "call_id": pending.call_id,
-                    "output": self._stringify_tool_output(content),
+                    "output": host._stringify_tool_output(content),
                 },
             }
         )
-        self._maybe_append_tool_artifact_message(turn, pending.tool_name, artifact)
+        self.maybe_append_artifact_message(turn, pending.tool_name, artifact)
         turn.pending_tool_calls = max(0, turn.pending_tool_calls - 1)
         turn.pending_call_ids.discard(pending.call_id)
         if pending.function_item_id:
             turn.function_call_item_ids.add(pending.function_item_id)
-        if self._is_turn_terminal(turn):
+        if host._is_turn_terminal(turn):
             return
         if turn.pending_tool_calls == 0:
-            self._send_response_create(turn)
+            set_phase = getattr(host, "_set_turn_phase", None)
+            if callable(set_phase):
+                set_phase(
+                    turn,
+                    TURN_PHASE_REQUESTING_FOLLOWUP,
+                    trigger="tool_results_complete",
+                )
+            host._send_response_create(turn)
 
-    def _invoke_tool(self, tool: Any, arguments: dict[str, Any]) -> object:
+    @staticmethod
+    def invoke_tool(tool: Any, arguments: dict[str, Any]) -> object:
         if hasattr(tool, "invoke"):
             return tool.invoke(arguments)
         run_fn = getattr(tool, "_run", None)
@@ -94,12 +134,13 @@ class RealtimeAgentToolsMixin:
             return func(**arguments)
         raise RuntimeError(f"Tool '{getattr(tool, 'name', tool)}' is not invokable")
 
-    def _split_tool_result(self, result: object) -> tuple[object, Optional[dict[str, Any]]]:
+    @staticmethod
+    def split_tool_result(result: object) -> tuple[object, Optional[dict[str, Any]]]:
         if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
             return result[0], result[1]
         return result, None
 
-    def _maybe_append_tool_artifact_message(
+    def maybe_append_artifact_message(
         self,
         turn: QueuedTurn,
         tool_name: str,
@@ -125,8 +166,8 @@ class RealtimeAgentToolsMixin:
             content.append({"type": "input_image", "image_url": rendered})
         if len(content) == 1:
             return
-        self._queue_pending_local_created_item(turn.req_id, "message", "user")
-        self._send_event(
+        self._host._queue_pending_local_created_item(turn.req_id, "message", "user")
+        self._host._send_event(
             {
                 "type": "conversation.item.create",
                 "item": {
@@ -137,7 +178,8 @@ class RealtimeAgentToolsMixin:
             }
         )
 
-    def _build_tool_schema(self, tool: Any) -> dict[str, Any]:
+    @staticmethod
+    def build_schema(tool: Any) -> dict[str, Any]:
         schema_source = getattr(tool, "args_schema", None)
         parameters: dict[str, Any] = {"type": "object", "properties": {}}
         if schema_source is not None:
@@ -156,7 +198,7 @@ class RealtimeAgentToolsMixin:
             "parameters": parameters,
         }
 
-    def _maybe_handle_tool_side_effects(self, tool_name: str, content: object) -> None:
+    def maybe_handle_side_effects(self, tool_name: str, content: object) -> None:
         if str(tool_name or "").strip() != "enroll_visible_person":
             return
         payload = parse_tool_output(content)
@@ -165,6 +207,6 @@ class RealtimeAgentToolsMixin:
         person_id = str(payload.get("person_id", "") or "").strip()
         if not person_id:
             return
-        arm_fn = getattr(self, "_arm_pending_voice_enrollment", None)
+        arm_fn = getattr(self._host, "_arm_pending_voice_enrollment", None)
         if callable(arm_fn):
             arm_fn(person_id)

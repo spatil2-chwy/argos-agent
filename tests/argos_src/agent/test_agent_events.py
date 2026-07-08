@@ -4,7 +4,6 @@ import logging
 from types import SimpleNamespace
 import threading
 
-from argos_src.agent.agent_events.dispatch import dispatch_server_event
 from argos_src.agent.agent_events.parsing import (
     server_event_item,
     server_event_item_id,
@@ -12,6 +11,7 @@ from argos_src.agent.agent_events.parsing import (
     server_event_response_id,
     server_event_type,
 )
+from argos_src.agent.control.event_adapter import RealtimeEventAdapter
 
 
 def test_server_event_parsing_reads_nested_payload_ids():
@@ -39,7 +39,7 @@ def test_server_event_response_id_falls_back_to_item_or_top_level_fields():
     assert server_event_item_id(event) == "item-top"
 
 
-def test_dispatch_server_event_routes_ga_event_types_to_agent_handlers():
+def test_realtime_event_adapter_routes_ga_event_types_to_agent_handlers():
     calls: list[tuple[str, dict[str, object]]] = []
     agent = SimpleNamespace(
         _session_ready=threading.Event(),
@@ -51,18 +51,17 @@ def test_dispatch_server_event_routes_ga_event_types_to_agent_handlers():
         _handle_output_transcript_delta=lambda event: calls.append(("transcript", event)),
     )
 
-    assert dispatch_server_event(agent, {"type": "response.output_audio.delta"}) is True
-    assert (
-        dispatch_server_event(agent, {"type": "response.output_audio_transcript.delta"})
-        is True
-    )
+    adapter = RealtimeEventAdapter(agent)
+
+    assert adapter.handle({"type": "response.output_audio.delta"}) is True
+    assert adapter.handle({"type": "response.output_audio_transcript.delta"}) is True
     assert calls == [
         ("audio", {"type": "response.output_audio.delta"}),
         ("transcript", {"type": "response.output_audio_transcript.delta"}),
     ]
 
 
-def test_dispatch_server_event_updates_session_state():
+def test_realtime_event_adapter_updates_session_state():
     agent = SimpleNamespace(
         _session_ready=threading.Event(),
         logger=logging.getLogger("test.argos.agent_events"),
@@ -71,14 +70,14 @@ def test_dispatch_server_event_updates_session_state():
         _session_estimated_cost_usd=12.0,
     )
 
-    created = dispatch_server_event(
-        agent,
+    adapter = RealtimeEventAdapter(agent)
+    created = adapter.handle(
         {
             "type": "session.created",
             "session": {"id": "sess-1", "model": "gpt-realtime"},
-        },
+        }
     )
-    updated = dispatch_server_event(agent, {"type": "session.updated"})
+    updated = adapter.handle({"type": "session.updated"})
 
     assert created is True
     assert updated is True

@@ -1,0 +1,39 @@
+name = "state-machine-diagrammer"
+description = "Updates the Argos realtime state-machine diagram and checks it against state axes, reducers, turn flow, playback, coalescing, and robot arbitration changes."
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Maintain the source-backed realtime state-machine diagram for this robot voice-agent repo.
+
+Primary owned file:
+- `docs/realtime_state_machine_diagram.md`
+
+Canonical inputs:
+- `docs/realtime_state_model.md`
+- `docs/realtime_turn_flow.md`
+- `docs/architecture.md`
+- `argos_src/agent/control/types.py`
+- `argos_src/agent/control/reducers/engagement.py`
+- `argos_src/agent/control/reducers/coalescing.py`
+- `argos_src/agent/control/engagement_runtime.py`
+- `argos_src/agent/control/audio_runtime.py`
+- `argos_src/agent/control/state_runtime.py`
+- `argos_src/agent/control/server_event_runtime.py`
+- `argos_src/agent/control/playback_runtime.py`
+- `argos_src/agent/control/robot_arbitration.py`
+- `argos_src/runtime/audio_admission.py`
+
+When invoked:
+1. Inspect the current diff first.
+2. Read only the docs/source files needed to understand changed state behavior.
+3. Patch `docs/realtime_state_machine_diagram.md` when state names, reducer rules, coalescing behavior, turn lifecycle, playback lifecycle, interruption, watchdog recovery, or structured state logs drift.
+4. Keep diagrams Mermaid-first and diff-friendly.
+5. Preserve public state names, tool IDs, provider resource IDs, profile fields, identity IDs, and memory semantics unless the main task explicitly changed them.
+6. Do not launch live robot/provider/runtime commands, do not reset or delete runtime state, and do not touch `var/`.
+
+Report:
+- Changed paths.
+- Source evidence checked.
+- Whether diagrams were already current or updated.
+- Any missing tests or docs that should accompany the underlying runtime change.
+"""

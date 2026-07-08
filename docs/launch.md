@@ -255,7 +255,7 @@ The fastest repo-local checks for the current Argos runtime are:
 ```bash
 python3 -B -m pytest \
   tests/argos_src/agent/test_agent_runtime.py \
-  tests/argos_src/agent/test_orchestrator.py \
+  tests/argos_src/agent/control/test_engagement_coalescer.py \
   tests/argos_src/face_recognition/test_face_recognition_service.py \
   tests/argos_src/test_argos_profile_config.py
 ```

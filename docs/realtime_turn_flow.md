@@ -3,9 +3,9 @@
 Read this with:
 
 - `argos_src/agent/agent_runtime.py`
-- `argos_src/agent/agent_audio.py`
+- `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_events/`
-- `argos_src/agent/orchestrator.py`
+- `argos_src/agent/control/`
 - `argos_src/runtime/audio_admission.py`
 - `argos_src/display/runtime.py`
 - `argos_src/agent/factory.py`
@@ -43,16 +43,20 @@ Realtime API response stream
 The Realtime API is stateful, but the robot still owns turn boundaries, audio
 admission, engagement state, display state, interruption, and history trimming.
 
+For the typed state axes used by tests and structured logs, see
+`docs/realtime_state_model.md`.
+
 ## Main Components
 
 | Component | Responsibility |
 |---|---|
-| `RealtimeRobotAgent` | Owns the websocket, mic capture, playback, turn queue, tool queue, and history bookkeeping. |
-| `RealtimeAgentAudioMixin` | Owns audio stream setup, local admission-driven capture, audio commit, and playback progress callbacks. |
-| `agent/agent_events/` | Shared parsing and dispatch helpers for OpenAI Realtime server payloads. |
+| `RealtimeRobotAgent` | Public composition root for websocket lifecycle, queues, and runtime controllers. |
+| `AudioRuntime` | Owns audio stream setup, local admission-driven capture, audio commit, and playback progress callbacks. |
+| `agent/agent_events/` | Shared parsing helpers for OpenAI Realtime server payloads. |
 | `DisplayRuntime` | Optional interaction display facade for Puffle's screen. |
 | `EngagementStateMachine` | Tracks `idle -> alert -> engaged -> speaking -> cooldown` and decides when patrol or navigation should be suppressed or resumed. |
 | `EventCoalescer` | Debounces rapid internal events, merges them, and flushes them into turns. Human-triggered text flushes immediately. |
+| `agent/control/` | Defines typed state axes, transition observers, and pure reducers used by the runtime control plane. |
 | `FacePresenceGate` | Lightweight local cache of face-presence snapshots for audio admission. |
 | `FaceEventBridge` | Polls face recognition, publishes presence, and emits proactive face events only when the robot is truly idle. |
 | `PatrolLoopBridge` | Schedules the next patrol hop after successful navigation. |
@@ -176,7 +180,7 @@ When admission is open and voice is detected:
 - the runtime sends `input_audio_buffer.clear`
 - raw PCM chunks start flowing into `_audio_send_queue`
 - a small pre-roll window is prepended so the first syllable is less likely to be clipped
-- passive starts require two consecutive VAD-positive chunks; wake-word starts open immediately
+- passive and wake-word starts open on the first VAD-positive chunk
 - `_audio_sender_loop()` converts each chunk to base64 and sends `input_audio_buffer.append`
 
 Recording gesture updates are dispatched through a serial background worker.
@@ -326,7 +330,7 @@ This keeps the model from seeing a noisy stream of low-value internal chatter.
 
 ## Engagement State Machine
 
-The engagement states are:
+The engagement states are still:
 
 | State | Meaning | Typical entry |
 |---|---|---|
@@ -404,6 +408,9 @@ The engagement machine also decides whether navigation should be interrupted or 
 - a resolved-owner audio turn can request a short owner-turn motion toward the speaker; tool calls cancel that request
 
 So "engagement state" is not just UX state. It is also a local arbitration layer between conversation and navigation.
+The broader realtime runtime is modeled through separate capture, turn,
+playback, transcription, session, and robot-arbitration axes. That avoids
+overloading `engaged` or `speaking` with ASR/model/TTS substates.
 
 ## Interruption Path
 

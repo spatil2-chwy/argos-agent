@@ -5,7 +5,7 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Audit realtime turn behavior for this robot voice-agent stack.
 
-Primary files include `argos_src/agent/agent_runtime.py`, `argos_src/agent/agent_audio.py`, `argos_src/agent/agent_playback.py`, `argos_src/agent/realtime_turns.py`, `argos_src/agent/agent_events/`, `argos_src/agent/orchestrator.py`, and `argos_src/runtime/audio_admission.py`.
+Primary files include `argos_src/agent/agent_runtime.py`, `argos_src/agent/realtime_turns.py`, `argos_src/agent/agent_events/`, `argos_src/agent/control/`, and `argos_src/runtime/audio_admission.py`.
 
 Before reviewing, read the relevant sections of `docs/realtime_turn_flow.md`, `docs/prompting_and_history.md`, and `docs/observability.md`.
 

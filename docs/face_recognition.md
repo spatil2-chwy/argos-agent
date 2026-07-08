@@ -10,10 +10,10 @@ Read this with:
 - `argos_src/tools/unitree_go2/vision/enroll_visible_person.py`
 - `argos_src/tools/unitree_go2/vision/resolve_employee_identity.py`
 - `argos_src/employee_directory/service.py`
-- `argos_src/agent/agent_audio.py`
+- `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
-- `argos_src/agent/agent_tools.py`
+- `argos_src/agent/control/tool_runtime.py`
 
 This document covers the current Argos face path:
 
@@ -33,6 +33,12 @@ see `docs/attention_gate.md`.
 only when the current depth-gated scene has exactly one usable recognized face.
 If no recognized face, an unknown face, or multiple usable faces are present, it
 is `None`.
+
+The face loop also records recognition evidence for the strongest visible face
+attempt: match status/reason, candidate person/name, similarity score,
+threshold, runner-up score, margin, and margin threshold. That evidence is
+diagnostic only; it explains why face identity did or did not contribute to the
+turn owner, but it does not loosen the strict `primary_face_person_id` policy.
 
 The final spoken-turn owner is resolved later by speaker recognition in `argos_src/speaker_recognition/policy.py`, using:
 
@@ -60,7 +66,7 @@ owner policy       -> owner_id for the turn
 | `enroll_visible_person.py` | LLM tool wrapper for safe live enrollment. The LLM passes only name and optional username. |
 | `resolve_employee_identity.py` | LLM tool for employee-directory lookup before enrollment. |
 | `employee_directory/service.py` | Loads Snowflake rows and locally rehydrates the verified profile during enrollment. |
-| `agent_tools.py` | Arms voice enrollment after face enrollment succeeds. |
+| `control/tool_runtime.py` | Arms voice enrollment after face enrollment succeeds. |
 
 ## Live Enrollment Flow
 
@@ -81,7 +87,7 @@ unknown visible person
     -> wait for Accept / Reject
     -> save averaged face embedding under person_id
     -> seed live presence cache
-    -> agent_tools arms pending voice enrollment
+    -> ToolRuntime arms pending voice enrollment
 ```
 
 The LLM still calls only `enroll_visible_person`. It does not call a display
@@ -248,7 +254,7 @@ On success, the tool returns:
 }
 ```
 
-Then `agent_tools.py` sees the successful `person_id` and calls
+Then `ToolRuntime` sees the successful `person_id` and calls
 `_arm_pending_voice_enrollment(person_id)`.
 
 ## Recognition Preprocessing
@@ -333,6 +339,17 @@ Recognition supports multiple faces:
 - unrecognized usable faces increment `unknown_count`
 - `primary_face_person_id` is set only for exactly one usable recognized face
 
+The presence snapshot also tracks consecutive processed face-loop frames with
+unknown faces:
+
+- `unknown_stability_frames`
+- `attentive_unknown_stability_frames`
+
+These counters reset when unknown faces are no longer visible. Proactive unknown
+or mixed face greetings wait until the relevant counter reaches
+`recognition_stability.window_frames`, so a known person who briefly misses the
+recognition threshold is not immediately greeted as unknown.
+
 `scene_analysis.py` keeps ownership strict:
 
 - exactly one usable recognized face -> `primary_face_person_id`
@@ -341,7 +358,7 @@ Recognition supports multiple faces:
 
 ## Face Target vs Turn Owner
 
-At recording start, `agent_audio.py` snapshots the strict face id and the
+At recording start, `AudioRuntime` snapshots the strict face id and the
 visible face id set from the same moment:
 
 ```python

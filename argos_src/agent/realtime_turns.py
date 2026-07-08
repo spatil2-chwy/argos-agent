@@ -9,17 +9,23 @@ from typing import Any, Optional
 
 import numpy as np
 
+from argos_src.agent.control.types import TurnState
+
 
 AUDIO_CHANNELS = 1
 
-TURN_PHASE_COMMITTED = "committed"
-TURN_PHASE_RESPONSE_REQUESTED = "response_requested"
-TURN_PHASE_WAITING_FIRST_AUDIO = "waiting_first_audio"
-TURN_PHASE_WAITING_TOOLS = "waiting_tools"
-TURN_PHASE_PLAYING = "playing"
-TURN_PHASE_FINALIZED = "finalized"
-TURN_PHASE_CANCELED = "canceled"
-TURN_PHASE_SUPERSEDED = "superseded"
+TURN_PHASE_COMMITTED = TurnState.COMMITTED.value
+TURN_PHASE_QUEUED = TurnState.QUEUED.value
+TURN_PHASE_PREPARING_HISTORY = TurnState.PREPARING_HISTORY.value
+TURN_PHASE_RESPONSE_REQUESTED = TurnState.RESPONSE_REQUESTED.value
+TURN_PHASE_WAITING_FIRST_AUDIO = TurnState.WAITING_FIRST_OUTPUT.value
+TURN_PHASE_WAITING_TOOLS = TurnState.WAITING_TOOLS.value
+TURN_PHASE_REQUESTING_FOLLOWUP = TurnState.REQUESTING_FOLLOWUP.value
+TURN_PHASE_MODEL_DONE = TurnState.MODEL_DONE.value
+TURN_PHASE_PLAYING = TurnState.PLAYING.value
+TURN_PHASE_FINALIZED = TurnState.FINALIZED.value
+TURN_PHASE_CANCELED = TurnState.CANCELED.value
+TURN_PHASE_SUPERSEDED = TurnState.SUPERSEDED.value
 
 TERMINAL_TURN_PHASES = {
     TURN_PHASE_FINALIZED,
@@ -65,6 +71,8 @@ class QueuedTurn:
     owner_confidence: float = 0.0
     speaker_visible: bool = False
     source_is_internal: bool = False
+    exchange_id: str = ""
+    exchange_index: int = 0
     input_text: str = ""
     pending_internal_text: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
