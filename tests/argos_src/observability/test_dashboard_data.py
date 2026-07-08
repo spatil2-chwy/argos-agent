@@ -307,6 +307,39 @@ def test_dashboard_snapshot_marks_error_interactions() -> None:
     ]
 
 
+def test_dashboard_snapshot_exposes_server_error_details() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | "
+            "event=response_create | req_id=rt-server"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:00.100 | component=realtime | "
+            "event=exchange_terminal | req_id=rt-server | terminal_status=error | "
+            "terminal_reason=server_error | error_source=openai_realtime | "
+            "error_type=invalid_request_error | error_message=Some other realtime request failed | "
+            "server_error_type=invalid_request_error | "
+            "server_error_message=Some other realtime request failed"
+        ),
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    interaction = snapshot["interactions"][0]
+    assert interaction["status"] == "error"
+    assert interaction["context"]["error_source"] == "openai_realtime"
+    assert interaction["context"]["error_type"] == "invalid_request_error"
+    assert interaction["context"]["error_message"] == "Some other realtime request failed"
+    assert interaction["context"]["server_error_type"] == "invalid_request_error"
+    assert interaction["context"]["server_error_message"] == "Some other realtime request failed"
+    terminal_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "exchange_terminal")
+    assert terminal_stage["details"]["error_source"] == "openai_realtime"
+    assert terminal_stage["details"]["error_type"] == "invalid_request_error"
+    assert terminal_stage["details"]["error_message"] == "Some other realtime request failed"
+    assert terminal_stage["details"]["server_error_type"] == "invalid_request_error"
+    assert terminal_stage["details"]["server_error_message"] == "Some other realtime request failed"
+
+
 def test_dashboard_snapshot_reports_latest_cost_not_max_cost() -> None:
     rows = [
         _row(

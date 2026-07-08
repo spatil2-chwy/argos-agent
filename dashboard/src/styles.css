@@ -44,6 +44,7 @@ button {
 }
 
 .app-shell {
+  --dashboard-pane-height: max(560px, calc(100vh - 150px));
   min-height: 100vh;
   padding: 18px;
 }
@@ -216,7 +217,7 @@ button {
   gap: 14px;
   max-width: 1760px;
   margin: 0 auto;
-  align-items: start;
+  align-items: stretch;
 }
 
 .sidebar,
@@ -232,8 +233,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: calc(100vh - 150px);
-  min-height: 620px;
+  height: var(--dashboard-pane-height);
+  min-height: 0;
+  overflow: hidden;
   padding: 14px;
 }
 
@@ -450,8 +452,10 @@ button {
 }
 
 .timeline-panel {
-  min-height: 620px;
-  max-height: calc(100vh - 150px);
+  display: flex;
+  flex-direction: column;
+  height: var(--dashboard-pane-height);
+  min-height: 0;
   overflow: hidden;
   padding: 14px;
 }
@@ -460,8 +464,9 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
-  height: calc(100vh - 232px);
-  min-height: 520px;
+  flex: 1;
+  height: auto;
+  min-height: 0;
   margin-top: 12px;
   overflow: hidden;
 }
@@ -520,6 +525,7 @@ button {
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+  padding-bottom: 18px;
 }
 
 .axis-flow {
@@ -811,7 +817,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: calc(100vh - 150px);
+  height: var(--dashboard-pane-height);
   overflow: auto;
 }
 
@@ -1015,6 +1021,7 @@ button {
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    height: auto;
     max-height: none;
   }
 

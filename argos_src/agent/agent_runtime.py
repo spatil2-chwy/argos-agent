@@ -475,6 +475,13 @@ class RealtimeRobotAgent:
                 "face_runner_up_score": metadata.get("face_runner_up_score"),
                 "face_score_margin": metadata.get("face_score_margin"),
                 "face_margin_threshold": metadata.get("face_margin_threshold"),
+                "error_source": metadata.get("error_source"),
+                "error_type": metadata.get("error_type"),
+                "error_code": metadata.get("error_code"),
+                "error_message": metadata.get("error_message"),
+                "server_error_type": metadata.get("server_error_type"),
+                "server_error_code": metadata.get("server_error_code"),
+                "server_error_message": metadata.get("server_error_message"),
                 "trigger": metadata.get("trigger") or metadata.get("admission_reason") or None,
                 "admission_reason": metadata.get("admission_reason") or None,
                 "pending_internal_events": bool(getattr(turn, "pending_internal_text", None)),
@@ -1525,8 +1532,13 @@ class RealtimeRobotAgent:
                 continue
             try:
                 self._run_turn(turn)
-            except Exception:
+            except Exception as exc:
                 self.logger.exception("Turn failed req_id=%s", turn.req_id)
+                metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+                metadata["error_source"] = "runtime"
+                metadata["error_type"] = type(exc).__name__
+                metadata["error_message"] = str(exc) or type(exc).__name__
+                turn.metadata = metadata
                 self._terminate_turn(turn, TURN_PHASE_CANCELED, "turn_exception")
             finally:
                 self._turn_queue.task_done()
@@ -1855,6 +1867,8 @@ class RealtimeRobotAgent:
         turn.interrupted = turn.interrupted or truncate_playback
         turn.finalized = True
         turn.finalized_reason = reason
+        if phase == TURN_PHASE_CANCELED:
+            self._ensure_terminal_error_metadata(turn, reason)
         self._latency.emit(
             event="exchange_terminal",
             req_id=turn.req_id,
@@ -1912,6 +1926,17 @@ class RealtimeRobotAgent:
             self._set_display_mode_async("idle")
         turn.response_finished.set()
         turn.playback_finished.set()
+
+    @staticmethod
+    def _ensure_terminal_error_metadata(turn: QueuedTurn, reason: str) -> None:
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        if not metadata.get("error_source"):
+            metadata["error_source"] = "runtime"
+        if not metadata.get("error_type"):
+            metadata["error_type"] = str(reason or "canceled")
+        if not metadata.get("error_message"):
+            metadata["error_message"] = str(reason or metadata.get("error_type") or "canceled")
+        turn.metadata = metadata
 
     def _clear_playback_tracking_locked(self) -> None:
         self._playback_req_id = ""

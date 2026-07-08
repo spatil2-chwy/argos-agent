@@ -767,6 +767,76 @@ def test_response_watchdog_cancels_stalled_turn():
     assert turn.playback_finished.is_set()
 
 
+def test_no_active_response_cancel_error_does_not_terminate_active_turn():
+    agent = _make_agent()
+    turn = _make_turn("rt-cancel-race")
+    turn.phase = realtime_mod.TURN_PHASE_WAITING_FIRST_AUDIO
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._active_turn = turn
+
+    agent._handle_server_error(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Cancellation failed: no active response found",
+            },
+        }
+    )
+
+    assert turn.phase == realtime_mod.TURN_PHASE_WAITING_FIRST_AUDIO
+    assert not turn.finalized
+    assert not any(event.get("event") == "exchange_terminal" for event in agent._latency.events)
+
+
+def test_non_cancel_race_server_error_terminates_active_turn():
+    agent = _make_agent()
+    turn = _make_turn("rt-server-error")
+    turn.phase = realtime_mod.TURN_PHASE_WAITING_FIRST_AUDIO
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._active_turn = turn
+
+    agent._handle_server_error(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Some other realtime request failed",
+            },
+        }
+    )
+
+    assert turn.phase == realtime_mod.TURN_PHASE_CANCELED
+    assert turn.finalized
+    terminal = next(event for event in agent._latency.events if event.get("event") == "exchange_terminal")
+    assert terminal["terminal_reason"] == "server_error"
+    assert terminal["error_source"] == "openai_realtime"
+    assert terminal["error_type"] == "invalid_request_error"
+    assert terminal["error_message"] == "Some other realtime request failed"
+    assert terminal["server_error_type"] == "invalid_request_error"
+    assert terminal["server_error_message"] == "Some other realtime request failed"
+
+
+def test_terminated_runtime_turn_logs_generic_error_fields():
+    agent = _make_agent()
+    turn = _make_turn("rt-timeout")
+    turn.phase = realtime_mod.TURN_PHASE_WAITING_FIRST_AUDIO
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    agent._terminate_turn(
+        turn,
+        realtime_mod.TURN_PHASE_CANCELED,
+        "response_timeout",
+        send_cancel=False,
+    )
+
+    terminal = next(event for event in agent._latency.events if event.get("event") == "exchange_terminal")
+    assert terminal["terminal_reason"] == "response_timeout"
+    assert terminal["error_source"] == "runtime"
+    assert terminal["error_type"] == "response_timeout"
+    assert terminal["error_message"] == "response_timeout"
+
+
 def test_tool_barrier_waits_for_all_tool_results_before_followup_response():
     agent = _make_agent()
     owner_turn = _FakeOwnerTurnController()

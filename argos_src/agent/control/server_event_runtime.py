@@ -585,10 +585,19 @@ class ServerEventRuntime:
 
     def handle_server_error(self, event: dict[str, Any]) -> None:
         error = event.get("error", {})
+        error_type = str(error.get("type", "unknown") or "unknown")
+        message = str(error.get("message", "unknown") or "unknown")
+        if self._is_no_active_response_cancel_error(error_type=error_type, message=message):
+            self.logger.warning(
+                "Ignoring stale response.cancel server error type=%s message=%s",
+                error_type,
+                message,
+            )
+            return
         self.logger.error(
             "Realtime server error type=%s message=%s",
-            error.get("type", "unknown"),
-            error.get("message", "unknown"),
+            error_type,
+            message,
         )
         response_id = str(error.get("response_id", "") or "").strip()
         turn = self._resolve_turn_for_output(response_id=response_id)
@@ -596,4 +605,20 @@ class ServerEventRuntime:
             with self._turn_lock:
                 turn = self._active_turn
         if turn is not None:
+            metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+            metadata["error_source"] = "openai_realtime"
+            metadata["error_type"] = error_type
+            metadata["error_code"] = str(error.get("code", "") or "")
+            metadata["error_message"] = message
+            metadata["server_error_type"] = error_type
+            metadata["server_error_code"] = str(error.get("code", "") or "")
+            metadata["server_error_message"] = message
+            turn.metadata = metadata
             self._terminate_turn(turn, TURN_PHASE_CANCELED, "server_error")
+
+    @staticmethod
+    def _is_no_active_response_cancel_error(*, error_type: str, message: str) -> bool:
+        return (
+            error_type == "invalid_request_error"
+            and message.lower().startswith("cancellation failed: no active response found")
+        )

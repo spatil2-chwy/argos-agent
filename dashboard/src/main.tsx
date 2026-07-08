@@ -353,7 +353,17 @@ const stageDetailKeys: Record<string, string[]> = {
   playback_completed: [],
   playback_stopped: ["terminal_reason"],
   exchange_complete: ["terminal_status", "terminal_reason"],
-  exchange_terminal: ["terminal_status", "terminal_reason"]
+  exchange_terminal: [
+    "terminal_status",
+    "terminal_reason",
+    "error_source",
+    "error_type",
+    "error_code",
+    "error_message",
+    "server_error_type",
+    "server_error_code",
+    "server_error_message"
+  ]
 };
 
 function StatusPill({ status }: { status: string }) {
@@ -873,6 +883,13 @@ function App() {
                 ["first_reply_audio", formatNumber(selectedExchange?.first_audio_latency_s, "s")],
                 ["exchange_cost", selectedExchangeCost === null ? null : formatCost(Number(selectedExchangeCost))],
                 ["terminal_reason", selectedExchange?.context.terminal_reason],
+                ["error_source", selectedExchange?.context.error_source],
+                ["error_type", selectedExchange?.context.error_type],
+                ["error_code", selectedExchange?.context.error_code],
+                ["error_message", selectedExchange?.context.error_message],
+                ["server_error_type", selectedExchange?.context.server_error_type],
+                ["server_error_code", selectedExchange?.context.server_error_code],
+                ["server_error_message", selectedExchange?.context.server_error_message],
                 ["tools", Object.keys(selectedExchange?.tools ?? {}).join(", ") || null]
               ]}
             />

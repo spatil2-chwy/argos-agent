@@ -89,6 +89,11 @@ in raw diagnostics but does not show it in the main people panel because
 face-resolved owners may have `0.000` audio confidence while still being validly
 resolved from face context.
 
+When an error terminates an exchange, the terminal row carries generic
+`error_source`, `error_type`, `error_code`, and `error_message` fields when
+available. Realtime server failures also preserve provider-specific
+`server_error_type`, `server_error_code`, and `server_error_message` fields.
+
 ## Conversation Segments
 
 The dashboard derives conversation segments from consecutive human exchanges in

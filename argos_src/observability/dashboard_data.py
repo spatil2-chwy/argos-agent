@@ -202,6 +202,13 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "response_status",
         "terminal_status",
         "terminal_reason",
+        "error_source",
+        "error_type",
+        "error_code",
+        "error_message",
+        "server_error_type",
+        "server_error_code",
+        "server_error_message",
         "pending_internal_events",
         "capture_vad_positive_blocks",
         "audio_duration_s",
@@ -351,6 +358,13 @@ class InteractionAccumulator:
                 "turn_kind",
                 "terminal_status",
                 "terminal_reason",
+                "error_source",
+                "error_type",
+                "error_code",
+                "error_message",
+                "server_error_type",
+                "server_error_code",
+                "server_error_message",
             ):
                 value = row.get(context_key)
                 if value not in (None, ""):
