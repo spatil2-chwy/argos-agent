@@ -124,7 +124,7 @@ a broad unscoped search.
 
 The memory tool is read-only from Argos' point of view. Episode ingestion,
 memory extraction, active follow-up handling, archival, and repair belong to
-Tailwag. See `memory_provider.md` and `slack_memory.md` for the memory contract.
+Tailwag. See `identity_memory.md` for the memory contract.
 
 ## Motion And Local Bounds
 

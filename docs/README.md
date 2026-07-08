@@ -26,10 +26,7 @@ Start with these in order:
 
 - `face_recognition.md`: face enrollment, recognition preprocessing, strict primary face ownership, and display review.
 - `speaker_recognition.md`: turn-owned speaker matching, voice enrollment, and ownership fallback.
-- `identity_store.md`: person records, aliases, face/speaker embeddings, and operator identity commands.
-- `memory_provider.md`: Tailwag-backed memory provider, realtime episodes, person context, encounters, and local/external reset boundaries.
-- `slack_memory.md`: Tailwag-backed Slack polling, cursor state, identity convergence, and prompt visibility boundaries.
-- `employee_directory.md`: local employee-directory validation used during enrollment.
+- `identity_memory.md`: the package boundary between Argos sensing and Tailwag-owned identity, biometrics, Slack ingestion, and memory.
 
 ## Providers, Tools, And Surfaces
 
@@ -43,5 +40,5 @@ Start with these in order:
 - Treat `realtime_turn_flow.md` as canonical for turn lifecycle and engagement timing.
 - Treat `prompting_and_history.md` as canonical for Realtime item roles and model-visible history.
 - Treat `robot_tools.md` as canonical for model-visible tool contracts.
-- Treat `memory_provider.md` as canonical for shared memory semantics; use `slack_memory.md` only for Slack-specific ingestion mechanics.
+- Treat `identity_memory.md` as canonical for identity and memory ownership boundaries.
 - Keep setup commands in `launch.md` and `complete_setup.md`; avoid repeating them in subsystem docs unless the command is subsystem-specific.

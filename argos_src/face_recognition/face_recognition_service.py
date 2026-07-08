@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -16,7 +17,6 @@ import torch
 
 from argos_src.face_recognition.bearing import estimate_robot_yaw_error_rad, face_center_px
 from argos_src.face_recognition.constants import (
-    DEFAULT_FACE_DB_PATH,
     MIN_FACE_DETECTION_CONFIDENCE,
 )
 from argos_src.face_recognition.attention_gate import (
@@ -34,9 +34,10 @@ from argos_src.face_recognition.models import (
 from argos_src.face_recognition.pipeline import FaceEmbeddingPipeline, FacePipelineCudaUnavailable
 from argos_src.face_recognition.presence_cache import FacePresenceCache
 from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyze_face_scene
-from argos_src.face_recognition.store import FaceRecognitionStore
-from argos_src.identity.prompting import format_identity_profile_lines
-from argos_src.memory_provider.encounters import build_encounter_metadata
+from argos_src.identity_memory.prompting import (
+    build_encounter_metadata,
+    format_identity_profile_lines,
+)
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
@@ -182,20 +183,16 @@ class FaceRecognitionService:
     Pipeline:
     - MTCNN: face detection + alignment
     - InceptionResnetV1 (FaceNet, vggface2): 512-d face embeddings
-    - ChromaDB: persistent storage + similarity search
+    - Tailwag-owned biometric search and enrollment
     """
 
     def __init__(
         self,
-        db_path: str = DEFAULT_FACE_DB_PATH,
-        recognition_threshold: float = 0.6,
-        recognition_margin_threshold: float = 0.20,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
         attention_gate_settings: AttentionGateSettings | None = None,
         enrollment_policy: FaceEnrollmentPolicy | None = None,
-        identity_db_path: str | None = None,
-        identity_store: Any | None = None,
+        identity_memory_client: Any | None = None,
         memory_store: Any | None = None,
         site_code: str = "",
         camera_resource_id: str = "",
@@ -212,13 +209,7 @@ class FaceRecognitionService:
         self.resnet = None
 
         self.robot_client = robot_client
-        self._recognition_threshold = float(recognition_threshold)
-        self._recognition_margin_threshold = float(recognition_margin_threshold)
-        self.db = FaceRecognitionStore(
-            db_path=db_path,
-            identity_db_path=identity_db_path,
-            identity_store=identity_store,
-        )
+        self.identity_memory_client = identity_memory_client
         self.memory_store = memory_store
         self.site_code = str(site_code or "").strip()
         self._depth_gate_settings = depth_gate_settings
@@ -255,10 +246,10 @@ class FaceRecognitionService:
             else ""
         )
         logger.info(
-            "Face Recognition Service initialized (device=%s%s, enrolled=%s)",
+            "Face Recognition Service initialized (device=%s%s, identity_memory=%s)",
             self.device,
             gpu_name,
-            self.db.collection.count(),
+            type(identity_memory_client).__name__ if identity_memory_client is not None else "disabled",
         )
 
     def subscribe_presence(
@@ -890,54 +881,76 @@ class FaceRecognitionService:
                 "name": str(match.get("name", "") or ""),
                 "person_id": str(match.get("person_id", "") or ""),
                 "similarity": similarity,
-                "threshold": float(getattr(self, "_recognition_threshold", 0.0) or 0.0),
+                "threshold": 0.0,
                 "runner_up_similarity": float(
                     match.get("runner_up_similarity", 0.0) or 0.0
                 ),
                 "margin": float(match.get("similarity_margin", 0.0) or 0.0),
-                "margin_threshold": float(
-                    getattr(self, "_recognition_margin_threshold", 0.0) or 0.0
-                ),
+                "margin_threshold": 0.0,
             }
 
-        matches = self.db.recognize_face(
-            face_embedding=face["embedding"],
-            threshold=-1.0,
-            top_k=2,
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return None, {"status": "rejected", "reason": "identity_memory_unavailable"}
+        result = identity_memory.search_face(
+            embedding=face["embedding"],
+            model="facenet-vggface2",
+            limit=2,
         )
+        matches = [
+            {
+                "person_id": candidate.person_id,
+                "name": candidate.display_name or candidate.person_id,
+                "similarity": float(candidate.score),
+                "metadata": dict(candidate.metadata or {}),
+            }
+            for candidate in tuple(getattr(result, "candidates", ()) or ())
+        ]
         if not matches:
             return None, {"status": "rejected", "reason": "no_db_match"}
         top_match = matches[0]
-        top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
-        runner_up_similarity = (
-            float(matches[1].get("similarity", 0.0) or 0.0)
-            if len(matches) > 1
-            else 0.0
-        )
-        margin = top_similarity - runner_up_similarity
-        if top_similarity < self._recognition_threshold:
+        top_similarity = float(getattr(result, "top_score", 0.0) or top_match.get("similarity", 0.0) or 0.0)
+        runner_up_similarity = float(getattr(result, "runner_up_score", 0.0) or 0.0)
+        margin = float(getattr(result, "margin", top_similarity - runner_up_similarity) or 0.0)
+        result_status = str(getattr(result, "status", "") or "")
+        result_reason = str(getattr(result, "reason", "") or "")
+        threshold = float(getattr(result, "threshold", 0.0) or 0.0)
+        margin_threshold = float(getattr(result, "margin_threshold", 0.0) or 0.0)
+        if result_status != "accepted" and result_reason == "below_threshold":
             return None, {
                 "status": "rejected",
                 "reason": "below_threshold",
                 "name": str(top_match.get("name", "") or ""),
                 "person_id": str(top_match.get("person_id", "") or ""),
                 "similarity": top_similarity,
-                "threshold": float(self._recognition_threshold),
+                "threshold": threshold,
                 "runner_up_similarity": runner_up_similarity,
                 "margin": margin,
-                "margin_threshold": float(self._recognition_margin_threshold),
+                "margin_threshold": margin_threshold,
             }
-        if margin < self._recognition_margin_threshold:
+        if result_status != "accepted" and result_reason == "margin_too_small":
             return None, {
                 "status": "rejected",
                 "reason": "margin_too_small",
                 "name": str(top_match.get("name", "") or ""),
                 "person_id": str(top_match.get("person_id", "") or ""),
                 "similarity": top_similarity,
-                "threshold": float(self._recognition_threshold),
+                "threshold": threshold,
                 "runner_up_similarity": runner_up_similarity,
                 "margin": margin,
-                "margin_threshold": float(self._recognition_margin_threshold),
+                "margin_threshold": margin_threshold,
+            }
+        if result_status != "accepted":
+            return None, {
+                "status": "rejected",
+                "reason": result_reason or "no_match",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": threshold,
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": margin_threshold,
             }
         top_match["runner_up_similarity"] = runner_up_similarity
         top_match["similarity_margin"] = margin
@@ -947,10 +960,10 @@ class FaceRecognitionService:
             "name": str(top_match.get("name", "") or ""),
             "person_id": str(top_match.get("person_id", "") or ""),
             "similarity": top_similarity,
-            "threshold": float(self._recognition_threshold),
+            "threshold": threshold,
             "runner_up_similarity": runner_up_similarity,
             "margin": margin,
-            "margin_threshold": float(self._recognition_margin_threshold),
+            "margin_threshold": margin_threshold,
         }
 
     def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
@@ -1022,34 +1035,29 @@ class FaceRecognitionService:
             meta = match["metadata"]
             if should_record_interaction:
                 try:
-                    updated_meta = self.db.update_interaction(pid)
+                    identity_memory = getattr(self, "identity_memory_client", None)
+                    updated_profile = (
+                        identity_memory.record_encounter(
+                            person_id=pid,
+                            name=match["name"],
+                            site_code=str(getattr(self, "site_code", "") or "").strip(),
+                            metadata=build_encounter_metadata(
+                                name=match["name"],
+                                site_code=str(getattr(self, "site_code", "") or "").strip(),
+                                identity_metadata=meta,
+                            ),
+                        )
+                        if identity_memory is not None
+                        else None
+                    )
                 except Exception:
                     logger.exception(
                         "Failed to update interaction metadata for person_id=%s",
                         pid,
                     )
                 else:
-                    if updated_meta is not None:
-                        meta = {**dict(meta or {}), **dict(updated_meta or {})}
-                        memory_store = getattr(self, "memory_store", None)
-                        if memory_store is not None:
-                            try:
-                                site_code = str(getattr(self, "site_code", "") or "").strip()
-                                memory_store.record_encounter(
-                                    person_id=pid,
-                                    name=match["name"],
-                                    site_code=site_code,
-                                    metadata=build_encounter_metadata(
-                                        name=match["name"],
-                                        site_code=site_code,
-                                        identity_metadata=meta,
-                                    ),
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "Failed to record encounter for person_id=%s",
-                                    pid,
-                                )
+                    if updated_profile:
+                        meta = {**dict(meta or {}), **_profile_metadata(updated_profile)}
                 finally:
                     self._presence_cache.mark_interaction_recorded(pid, now)
             person = PersonContext(
@@ -1334,15 +1342,28 @@ class FaceRecognitionService:
                 updated_meta = match["metadata"]
                 if self._presence_cache.should_record_interaction(match["person_id"], now):
                     try:
-                        updated = self.db.update_interaction(match["person_id"])
+                        identity_memory = getattr(self, "identity_memory_client", None)
+                        if identity_memory is not None:
+                            updated_profile = identity_memory.record_encounter(
+                                person_id=match["person_id"],
+                                name=match["name"],
+                                site_code=str(getattr(self, "site_code", "") or "").strip(),
+                                metadata=build_encounter_metadata(
+                                    name=match["name"],
+                                    site_code=str(getattr(self, "site_code", "") or "").strip(),
+                                    identity_metadata=updated_meta,
+                                ),
+                            )
+                            if updated_profile:
+                                updated_meta = {
+                                    **dict(updated_meta or {}),
+                                    **_profile_metadata(updated_profile),
+                                }
                     except Exception:
                         logger.exception(
                             "Failed to update interaction metadata for person_id=%s",
                             match["person_id"],
                         )
-                    else:
-                        if updated:
-                            updated_meta = {**dict(updated_meta or {}), **dict(updated or {})}
                     finally:
                         self._presence_cache.mark_interaction_recorded(match["person_id"], now)
                 result["people"].append({
@@ -1736,17 +1757,49 @@ class FaceRecognitionService:
         self,
         candidate: FaceEnrollmentCandidate,
     ) -> dict[str, Any]:
-        person_id = self.db.add_person(
-            name=candidate.cleaned_name,
-            face_embedding=candidate.averaged_embedding,
-            metadata=candidate.verified_durable,
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return self._enrollment_response(
+                success=False,
+                status="error",
+                message="Identity memory is unavailable, so I can't save this face yet.",
+                failure_reason="identity_memory_unavailable",
+            )
+        person_id = (
+            str(candidate.verified_durable.get("person_id") or "").strip()
+            or _person_id_from_profile(candidate.cleaned_name, candidate.verified_durable)
         )
+        metadata = {
+            **dict(candidate.verified_durable or {}),
+            "display_name": candidate.cleaned_name,
+            "name": candidate.cleaned_name,
+        }
+        identity_memory.record_encounter(
+            person_id=person_id,
+            name=candidate.cleaned_name,
+            site_code=str(getattr(self, "site_code", "") or "").strip(),
+            metadata=metadata,
+        )
+        result = identity_memory.enroll_face_reference(
+            person_id=person_id,
+            embedding=candidate.averaged_embedding,
+            model="facenet-vggface2",
+            metadata=metadata,
+            consent_status="consented",
+        )
+        if not getattr(result, "saved", False):
+            return self._enrollment_response(
+                success=False,
+                status="error",
+                message="I couldn't save the face reference.",
+                failure_reason=str(getattr(result, "reason", "") or "save_failed"),
+            )
         self._prime_presence_cache_after_enrollment(
             person_id=person_id,
             name=candidate.cleaned_name,
             face=candidate.reference_face,
             image_shape=candidate.image_shape,
-            metadata=candidate.verified_durable,
+            metadata=metadata,
         )
         return self._enrollment_response(
             success=True,
@@ -2168,10 +2221,10 @@ class FaceRecognitionService:
         )
 
     def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
-        threshold = float(getattr(self, "_recognition_threshold", 0.0) or 0.0)
         details: list[str] = []
         for person in persons:
             label = str(person.name or person.person_id).replace(" ", "_")
+            threshold = float(getattr(person, "recognition_threshold", 0.0) or 0.0)
             details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
         return details
 
@@ -2329,3 +2382,39 @@ class FaceRecognitionService:
     def get_presence_snapshot(self) -> dict[str, Any]:
         """Thread-safe read of canonical face presence state."""
         return self._presence_cache.get_presence_snapshot()
+
+
+def _person_id_from_profile(name: str, profile: dict[str, Any]) -> str:
+    username = str(profile.get("username") or "").strip().lower()
+    if username:
+        return f"person_{username}"
+    email = str(profile.get("email") or "").strip().lower()
+    if email and "@" in email:
+        return f"person_{email.split('@', 1)[0]}"
+    slug = "_".join(
+        part
+        for part in re.sub(r"[^a-zA-Z0-9]+", " ", str(name or "").casefold()).split()
+        if part
+    )
+    if slug:
+        return f"person_{slug}"
+    return f"person_{uuid4().hex[:12]}"
+
+
+def _profile_metadata(profile: Any) -> dict[str, Any]:
+    if isinstance(profile, dict):
+        metadata = dict(profile.get("metadata") or {})
+        payload = dict(profile)
+    else:
+        metadata = dict(getattr(profile, "metadata", {}) or {})
+        payload = {
+            "name": getattr(profile, "display_name", ""),
+            "display_name": getattr(profile, "display_name", ""),
+            "email": getattr(profile, "email", ""),
+            "interaction_count": getattr(profile, "interaction_count", 0),
+            "last_seen": getattr(profile, "last_seen", None),
+        }
+    for key, value in payload.items():
+        if value is not None and value != "":
+            metadata[key] = value
+    return metadata

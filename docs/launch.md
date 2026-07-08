@@ -204,26 +204,9 @@ face-capture preview on the Puffle screen and saves only after Accept.
 
 ## Identity and Voice References
 
-Identities are shared across face and speaker recognition. Use the identity CLI
-when you want to delete a person completely.
-
-Manage identities and linked embeddings:
-
-```bash
-cd ~/argos-agent
-source setup_shell.sh
-python3 -m argos_src.identity.manage_identity --list
-python3 -m argos_src.identity.manage_identity --show "Your Name"
-python3 -m argos_src.identity.manage_identity --delete "Your Name"
-```
-
-The identity CLI accepts either:
-
-- a human name / alias from the identity store, or
-- a raw `person_id`
-
-Use [speaker_recognition.md](/home/spatil2/argos-agent/docs/speaker_recognition.md) if
-you need to inspect saved voice-reference metadata.
+Identities, face references, voice references, Slack ingestion, and durable
+memory are owned by Tailwag. Use Tailwag CLI tooling from `tailwag-memory` when
+you need to inspect or delete a person completely.
 
 ## Camera Preview
 
@@ -235,9 +218,8 @@ robot client.
 
 Run the targeted regression tests before live robot checks. For any smoke test
 that can move the robot, confirm clear space, battery state, a working stop path,
-and operator approval. For destructive local identity/biometric cleanup, use the
-guarded reset guidance in `identity_store.md`; Tailwag memory is external and
-must be reset with Tailwag tooling.
+and operator approval. For destructive identity/biometric cleanup, use Tailwag
+tooling.
 
 After bring-up, these are the highest-value manual checks:
 
@@ -260,9 +242,9 @@ python3 -B -m pytest \
   tests/argos_src/test_argos_profile_config.py
 ```
 
-Employee-directory and RapidFuzz lab coverage lives in
-`tests/scripts/labs/test_rapidfuzz_employee_lab.py` and
-`tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`.
+Employee-directory resolution is covered through
+`tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`
+and Tailwag tests in `tailwag-memory`.
 
 ## Logs and Observability
 

@@ -9,10 +9,7 @@ from typing import Any, Optional
 
 import tomli
 import yaml
-from argos_src.face_recognition.constants import DEFAULT_FACE_DB_PATH
-from argos_src.identity.constants import DEFAULT_IDENTITY_DB_PATH
 from argos_src.agent.gesture_runtime import resolve_gesture_preset_name
-from argos_src.speaker_recognition.constants import DEFAULT_SPEAKER_DB_PATH
 from argos_src.speaker_recognition.models import SpeakerRecognitionPolicy
 from argos_src.provider_api.manifest import (
     ManifestValidationError,
@@ -59,13 +56,6 @@ class KnowledgeBaseProfile:
 @dataclass(frozen=True)
 class ToolsProfile:
     enabled_tool_ids: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class EmployeeDirectoryProfile:
-    enabled: bool
-    site_code: str
-    email_domain: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,11 +118,6 @@ class FaceEnrollmentPolicyProfile:
 
 
 @dataclass(frozen=True)
-class PreferenceExtractionProfile:
-    enabled: bool
-
-
-@dataclass(frozen=True)
 class FaceRecognitionStabilityProfile:
     window_frames: int
     min_hits: int
@@ -141,17 +126,13 @@ class FaceRecognitionStabilityProfile:
 @dataclass(frozen=True)
 class FaceRecognitionProfile:
     enabled: bool
-    db_path: str
     loop_interval_sec: float
-    recognition_threshold: float
-    recognition_margin_threshold: float
     recognition_stability: FaceRecognitionStabilityProfile
     live_image_enabled: bool
     depth_gate: FaceDepthGateProfile
     attention_gate: FaceAttentionGateProfile
     enrollment_policy: FaceEnrollmentPolicyProfile
     owner_turn: FaceOwnerTurnProfile
-    preference_extraction: PreferenceExtractionProfile
     proactive_greeting: ProactiveGreetingProfile
 
 
@@ -162,40 +143,15 @@ class SpeakerRecognitionProfile:
 
 
 @dataclass(frozen=True)
-class IdentityStoreProfile:
-    db_path: str
-
-
-@dataclass(frozen=True)
-class MemoryProfile:
+class IdentityMemoryProfile:
     enabled: bool = True
-    retention_class: str = "standard"
+    backend: str = "tailwag_package"
+    site_code: str = ""
     place_room_id: str = "realtime"
+    retention_class: str = "standard"
+    record_live_episodes: bool = True
     extract_live_turn_memory: bool = True
-
-
-@dataclass(frozen=True)
-class SlackMemoryChannelProfile:
-    name: str
-    channel_id: str = ""
-    backfill_hours: Optional[float] = None
-
-
-@dataclass(frozen=True)
-class SlackMemoryProfile:
-    enabled: bool = False
-    start_with_agent: bool = False
-    bot_token_env: str = "SLACK_BOT_TOKEN"
-    poll_interval_sec: float = 1800.0
-    state_path: str = ".tailwag/slack-state.json"
-    backfill_hours: Optional[float] = None
-    force_backfill: bool = False
-    active_thread_hours: float = 24.0
-    history_limit: int = 200
-    reply_limit: int = 200
-    extract_memory: bool = True
-    include_email: bool = True
-    channels: tuple[SlackMemoryChannelProfile, ...] = ()
+    timeout_ms: int = 750
 
 
 @dataclass(frozen=True)
@@ -322,21 +278,11 @@ class ScenarioProfile:
         default_factory=lambda: NavigationProfile(None, ())
     )
     tools: ToolsProfile = field(default_factory=ToolsProfile)
-    employee_directory: EmployeeDirectoryProfile = field(
-        default_factory=lambda: EmployeeDirectoryProfile(
-            enabled=False,
-            site_code="",
-            email_domain="",
-        )
-    )
     knowledge_bases: tuple[KnowledgeBaseProfile, ...] = ()
     face_recognition: FaceRecognitionProfile = field(
         default_factory=lambda: FaceRecognitionProfile(
             enabled=True,
-            db_path=DEFAULT_FACE_DB_PATH,
             loop_interval_sec=1.0,
-            recognition_threshold=0.6,
-            recognition_margin_threshold=0.20,
             recognition_stability=FaceRecognitionStabilityProfile(
                 window_frames=5,
                 min_hits=2,
@@ -384,7 +330,6 @@ class ScenarioProfile:
                 slow_zone_deg=8.0,
                 min_angular_speed_rad_s=0.25,
             ),
-            preference_extraction=PreferenceExtractionProfile(enabled=False),
             proactive_greeting=ProactiveGreetingProfile(
                 recognized_enabled=True,
                 unknown_enabled=True,
@@ -394,22 +339,14 @@ class ScenarioProfile:
             ),
         )
     )
-    identity_store: IdentityStoreProfile = field(
-        default_factory=lambda: IdentityStoreProfile(
-            db_path=DEFAULT_IDENTITY_DB_PATH,
-        )
-    )
-    memory: MemoryProfile = field(default_factory=MemoryProfile)
-    slack_memory: SlackMemoryProfile = field(default_factory=SlackMemoryProfile)
+    identity_memory: IdentityMemoryProfile = field(default_factory=IdentityMemoryProfile)
     speaker_recognition: SpeakerRecognitionProfile = field(
         default_factory=lambda: SpeakerRecognitionProfile(
             enabled=True,
             policy=SpeakerRecognitionPolicy(
                 backend="speechbrain_ecapa",
-                db_path=DEFAULT_SPEAKER_DB_PATH,
                 query_match_threshold=0.40,
                 query_margin_threshold=0.20,
-                reference_update_threshold=0.55,
                 max_clipped_fraction=0.02,
                 explicit_prompt_after_silent_failures=2,
             ),
@@ -930,6 +867,7 @@ def _parse_profile(
     navigation_data = _pop_section(profile_data, "navigation")
     tools_data = _pop_section(profile_data, "tools")
     employee_directory_data = _pop_section(profile_data, "employee_directory")
+    identity_memory_data = _pop_section(profile_data, "identity_memory")
     knowledge_base_data = _pop_list(profile_data, "knowledge_bases", default=[])
     identity_data = _pop_section(profile_data, "identity_store")
     memory_data = _pop_section(profile_data, "memory")
@@ -950,17 +888,20 @@ def _parse_profile(
         manifest=manifest,
         resources=resources,
     )
-    employee_directory = _parse_employee_directory(employee_directory_data)
+    if employee_directory_data:
+        raise ProfileValidationError("employee_directory has moved to identity_memory/Tailwag.")
+    if identity_data:
+        raise ProfileValidationError("identity_store has been removed; identity is Tailwag-owned.")
+    if memory_data:
+        raise ProfileValidationError("memory has been replaced by identity_memory.")
+    if slack_memory_data:
+        raise ProfileValidationError("slack_memory has moved to tailwag-memory.")
+    identity_memory = _parse_identity_memory(identity_memory_data)
     knowledge_bases = tuple(
         _parse_knowledge_base_entry(item, index=i)
         for i, item in enumerate(knowledge_base_data)
     )
     face_recognition = _parse_face_recognition(face_data)
-    identity_store = _parse_identity_store(identity_data)
-    memory = _parse_memory(memory_data)
-    slack_memory = _parse_slack_memory(slack_memory_data)
-    if slack_memory.enabled and not memory.enabled:
-        raise ProfileValidationError("slack_memory.enabled requires memory.enabled.")
     speaker_recognition = _parse_speaker_recognition(speaker_data)
     realtime = _parse_realtime(
         realtime_data,
@@ -971,10 +912,10 @@ def _parse_profile(
         resources=resources,
         face_recognition=face_recognition,
     )
-    tools, employee_directory, face_recognition, realtime = _reconcile_profile_dependencies(
+    tools, face_recognition, realtime = _reconcile_profile_dependencies(
         robot_family=robot_family,
         tools=tools,
-        employee_directory=employee_directory,
+        identity_memory=identity_memory,
         face_recognition=face_recognition,
         realtime=realtime,
     )
@@ -999,11 +940,8 @@ def _parse_profile(
         robot_family=robot_family,
         navigation=navigation,
         tools=tools,
-        employee_directory=employee_directory,
         knowledge_bases=knowledge_bases,
-        identity_store=identity_store,
-        memory=memory,
-        slack_memory=slack_memory,
+        identity_memory=identity_memory,
         face_recognition=face_recognition,
         speaker_recognition=speaker_recognition,
         realtime=realtime,
@@ -1107,22 +1045,6 @@ def _parse_knowledge_base_entry(item: Any, *, index: int) -> KnowledgeBaseProfil
     )
 
 
-def _parse_employee_directory(data: dict[str, Any]) -> EmployeeDirectoryProfile:
-    enabled = _pop_bool(data, "enabled", default=False)
-    site_code = (_pop_optional_str(data, "site_code", default="") or "").strip()
-    email_domain = (_pop_optional_str(data, "email_domain", default="") or "").strip()
-    _reject_unknown(data, "employee_directory")
-    if enabled and not site_code:
-        raise ProfileValidationError(
-            "employee_directory.site_code is required when employee_directory.enabled is true."
-        )
-    return EmployeeDirectoryProfile(
-        enabled=enabled,
-        site_code=site_code,
-        email_domain=email_domain,
-    )
-
-
 def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     from argos_src.face_recognition.attention_gate import (
         AttentionGateSettings,
@@ -1134,7 +1056,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
     attention_gate_data = _pop_section(data, "attention_gate")
     enrollment_policy_data = _pop_section(data, "enrollment_policy")
     owner_turn_data = _pop_section(data, "owner_turn")
-    preference_extraction_data = _pop_section(data, "preference_extraction")
     recognition_stability_data = _pop_section(data, "recognition_stability")
 
     proactive = ProactiveGreetingProfile(
@@ -1371,14 +1292,6 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         )
     _reject_unknown(owner_turn_data, "face_recognition.owner_turn")
 
-    preference_extraction = PreferenceExtractionProfile(
-        enabled=_pop_bool(preference_extraction_data, "enabled", default=False)
-    )
-    _reject_unknown(
-        preference_extraction_data,
-        "face_recognition.preference_extraction",
-    )
-
     recognition_stability = FaceRecognitionStabilityProfile(
         window_frames=_pop_int(
             recognition_stability_data,
@@ -1410,179 +1323,44 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
     profile = FaceRecognitionProfile(
         enabled=_pop_bool(data, "enabled", default=True),
-        db_path=_pop_optional_str(
-            data,
-            "db_path",
-            default=DEFAULT_FACE_DB_PATH,
-        )
-        or DEFAULT_FACE_DB_PATH,
         loop_interval_sec=_pop_float(data, "loop_interval_sec", default=1.0),
-        recognition_threshold=_pop_float(
-            data,
-            "recognition_threshold",
-            default=0.6,
-        ),
-        recognition_margin_threshold=_pop_float(
-            data,
-            "recognition_margin_threshold",
-            default=0.20,
-        ),
         recognition_stability=recognition_stability,
         live_image_enabled=_pop_bool(data, "live_image_enabled", default=True),
         depth_gate=depth_gate,
         attention_gate=attention_gate,
         enrollment_policy=enrollment_policy,
         owner_turn=owner_turn,
-        preference_extraction=preference_extraction,
         proactive_greeting=proactive,
     )
-    profile = replace(profile, db_path=str(resolve_repo_path(profile.db_path)))
-    if not 0.0 <= profile.recognition_threshold <= 1.0:
-        raise ProfileValidationError(
-            "face_recognition.recognition_threshold must be between 0 and 1"
-        )
-    if not 0.0 <= profile.recognition_margin_threshold <= 1.0:
-        raise ProfileValidationError(
-            "face_recognition.recognition_margin_threshold must be between 0 and 1"
-        )
     _reject_unknown(data, "face_recognition")
     return profile
 
 
-def _parse_identity_store(data: dict[str, Any]) -> IdentityStoreProfile:
-    profile = IdentityStoreProfile(
-        db_path=_pop_optional_str(
-            data,
-            "db_path",
-            default=DEFAULT_IDENTITY_DB_PATH,
-        )
-        or DEFAULT_IDENTITY_DB_PATH,
-    )
-    profile = replace(profile, db_path=str(resolve_repo_path(profile.db_path)))
-    _reject_unknown(data, "identity_store")
-    return profile
-
-
-def _parse_memory(data: dict[str, Any]) -> MemoryProfile:
-    retention_class = (
-        _pop_optional_str(data, "retention_class", default="standard") or "standard"
-    ).strip()
+def _parse_identity_memory(data: dict[str, Any]) -> IdentityMemoryProfile:
+    backend = (_pop_optional_str(data, "backend", default="tailwag_package") or "tailwag_package").strip()
+    if backend not in {"tailwag_package", "noop"}:
+        raise ProfileValidationError("identity_memory.backend must be tailwag_package or noop.")
+    site_code = (_pop_optional_str(data, "site_code", default="") or "").strip()
+    retention_class = (_pop_optional_str(data, "retention_class", default="standard") or "standard").strip()
     if not retention_class:
-        raise ProfileValidationError("memory.retention_class must not be empty.")
-    place_room_id = (
-        _pop_optional_str(data, "place_room_id", default="realtime") or "realtime"
-    ).strip()
+        raise ProfileValidationError("identity_memory.retention_class must not be empty.")
+    place_room_id = (_pop_optional_str(data, "place_room_id", default="realtime") or "realtime").strip()
     if not place_room_id:
-        raise ProfileValidationError("memory.place_room_id must not be empty.")
-    profile = MemoryProfile(
+        raise ProfileValidationError("identity_memory.place_room_id must not be empty.")
+    timeout_ms = _pop_int(data, "timeout_ms", default=750)
+    if timeout_ms <= 0:
+        raise ProfileValidationError("identity_memory.timeout_ms must be positive.")
+    profile = IdentityMemoryProfile(
         enabled=_pop_bool(data, "enabled", default=True),
-        retention_class=retention_class,
+        backend=backend,
+        site_code=site_code,
         place_room_id=place_room_id,
-        extract_live_turn_memory=_pop_bool(
-            data,
-            "extract_live_turn_memory",
-            default=True,
-        ),
+        retention_class=retention_class,
+        record_live_episodes=_pop_bool(data, "record_live_episodes", default=True),
+        extract_live_turn_memory=_pop_bool(data, "extract_live_turn_memory", default=True),
+        timeout_ms=timeout_ms,
     )
-    _reject_unknown(data, "memory")
-    return profile
-
-
-def _parse_slack_memory(data: dict[str, Any]) -> SlackMemoryProfile:
-    channel_entries = _pop_list(data, "channels", default=[])
-    channels: list[SlackMemoryChannelProfile] = []
-    for index, raw in enumerate(channel_entries):
-        if not isinstance(raw, dict):
-            raise ProfileValidationError(
-                f"slack_memory.channels[{index}] must be a mapping."
-            )
-        channel_data = dict(raw)
-        context = f"slack_memory.channels[{index}]"
-        name = _pop_required_str(channel_data, "name", context=context).strip()
-        if not name:
-            raise ProfileValidationError(f"{context}.name is required.")
-        channel_id = (
-            _pop_optional_str(channel_data, "channel_id", default="") or ""
-        ).strip()
-        backfill_hours = _pop_optional_float(channel_data, "backfill_hours", default=None)
-        if backfill_hours is not None and backfill_hours <= 0:
-            raise ProfileValidationError(f"{context}.backfill_hours must be positive.")
-        channels.append(
-            SlackMemoryChannelProfile(
-                name=name,
-                channel_id=channel_id,
-                backfill_hours=backfill_hours,
-            )
-        )
-        _reject_unknown(channel_data, context)
-
-    poll_interval = _pop_float(data, "poll_interval_sec", default=1800.0)
-    if poll_interval <= 0:
-        raise ProfileValidationError("slack_memory.poll_interval_sec must be positive.")
-    backfill_hours = _pop_optional_float(data, "backfill_hours", default=None)
-    if backfill_hours is not None and backfill_hours <= 0:
-        raise ProfileValidationError("slack_memory.backfill_hours must be positive.")
-    active_thread_hours = _pop_float(data, "active_thread_hours", default=24.0)
-    if active_thread_hours <= 0:
-        raise ProfileValidationError("slack_memory.active_thread_hours must be positive.")
-    history_limit = _pop_int(data, "history_limit", default=200)
-    if history_limit <= 0:
-        raise ProfileValidationError("slack_memory.history_limit must be positive.")
-    reply_limit = _pop_int(data, "reply_limit", default=200)
-    if reply_limit <= 0:
-        raise ProfileValidationError("slack_memory.reply_limit must be positive.")
-
-    force_backfill = _pop_bool(data, "force_backfill", default=False)
-    start_with_agent = _pop_bool(data, "start_with_agent", default=False)
-    if force_backfill and start_with_agent:
-        raise ProfileValidationError(
-            "slack_memory.force_backfill cannot be used with start_with_agent."
-        )
-    if force_backfill and backfill_hours is None:
-        raise ProfileValidationError(
-            "slack_memory.force_backfill requires slack_memory.backfill_hours."
-        )
-
-    profile = SlackMemoryProfile(
-        enabled=_pop_bool(data, "enabled", default=False),
-        start_with_agent=start_with_agent,
-        bot_token_env=(
-            _pop_optional_str(data, "bot_token_env", default="SLACK_BOT_TOKEN")
-            or "SLACK_BOT_TOKEN"
-        ).strip()
-        or "SLACK_BOT_TOKEN",
-        poll_interval_sec=poll_interval,
-        state_path=str(
-            resolve_repo_path(
-                _pop_optional_str(
-                    data,
-                    "state_path",
-                    default=".tailwag/slack-state.json",
-                )
-                or ".tailwag/slack-state.json"
-            )
-        ),
-        backfill_hours=backfill_hours,
-        force_backfill=force_backfill,
-        active_thread_hours=active_thread_hours,
-        history_limit=history_limit,
-        reply_limit=reply_limit,
-        extract_memory=_pop_bool(data, "extract_memory", default=True),
-        include_email=_pop_bool(data, "include_email", default=True),
-        channels=tuple(channels),
-    )
-    if profile.enabled and not profile.channels:
-        raise ProfileValidationError(
-            "slack_memory.channels must contain at least one channel when enabled."
-        )
-    if profile.enabled:
-        for index, channel in enumerate(profile.channels):
-            if not channel.channel_id:
-                raise ProfileValidationError(
-                    f"slack_memory.channels[{index}].channel_id is required when "
-                    "slack_memory.enabled."
-                )
-    _reject_unknown(data, "slack_memory")
+    _reject_unknown(data, "identity_memory")
     return profile
 
 
@@ -1591,14 +1369,6 @@ def _parse_speaker_recognition(data: dict[str, Any]) -> SpeakerRecognitionProfil
     try:
         policy = SpeakerRecognitionPolicy(
             backend="speechbrain_ecapa",
-            db_path=str(resolve_repo_path(DEFAULT_SPEAKER_DB_PATH)),
-            query_match_threshold=_pop_float(data, "query_match_threshold", default=0.40),
-            query_margin_threshold=_pop_float(data, "query_margin_threshold", default=0.20),
-            reference_update_threshold=_pop_float(
-                data,
-                "reference_update_threshold",
-                default=0.55,
-            ),
             max_clipped_fraction=_pop_float(data, "max_clipped_fraction", default=0.02),
             explicit_prompt_after_silent_failures=_pop_int(
                 data,
@@ -1744,21 +1514,20 @@ def _reconcile_profile_dependencies(
     *,
     robot_family: str,
     tools: ToolsProfile,
-    employee_directory: EmployeeDirectoryProfile,
+    identity_memory: IdentityMemoryProfile,
     face_recognition: FaceRecognitionProfile,
     realtime: RealtimeProfile,
 ) -> tuple[
     ToolsProfile,
-    EmployeeDirectoryProfile,
     FaceRecognitionProfile,
     RealtimeProfile,
 ]:
     """Collapse dependent knobs so the loaded profile matches runtime behavior."""
-    if face_recognition.enabled and employee_directory.enabled:
-        return tools, employee_directory, face_recognition, realtime
+    if face_recognition.enabled and identity_memory.enabled:
+        return tools, face_recognition, realtime
 
     effective_tool_ids = list(tools.enabled_tool_ids)
-    if not employee_directory.enabled:
+    if not identity_memory.enabled:
         effective_tool_ids = [
             name
             for name in effective_tool_ids
@@ -1783,11 +1552,6 @@ def _reconcile_profile_dependencies(
                     unknown_enabled=False,
                 ),
             )
-        if face_recognition.preference_extraction.enabled:
-            face_recognition = replace(
-                face_recognition,
-                preference_extraction=PreferenceExtractionProfile(enabled=False),
-            )
         if realtime.admission.open_on_face_presence:
             realtime = replace(
                 realtime,
@@ -1808,7 +1572,7 @@ def _reconcile_profile_dependencies(
     effective_tool_ids_tuple = tuple(effective_tool_ids)
     if effective_tool_ids_tuple != tools.enabled_tool_ids:
         tools = replace(tools, enabled_tool_ids=effective_tool_ids_tuple)
-    return tools, employee_directory, face_recognition, realtime
+    return tools, face_recognition, realtime
 
 
 def _looks_like_wake_word_model_path(value: str) -> bool:

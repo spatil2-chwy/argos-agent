@@ -38,11 +38,9 @@ Canonical operator guide: `docs/launch.md`. Full documentation map:
     ├── capabilities/
     ├── display/
     ├── face_recognition/
-    ├── identity/
-    │   └── embeddings/
+    ├── identity_memory/
     ├── integrations/
     ├── media/
-    ├── memory_provider/
     ├── provider_api/
     ├── runtime/
     └── tools/
@@ -57,5 +55,5 @@ Canonical operator guide: `docs/launch.md`. Full documentation map:
 - Runtime architecture and turn flow: `docs/architecture.md`, `docs/realtime_turn_flow.md`
 - Prompting and history: `docs/prompting_and_history.md`
 - Robot tools/provider contract: `docs/robot_tools.md`
-- Identity and memory: `docs/face_recognition.md`, `docs/speaker_recognition.md`, `docs/identity_store.md`, `docs/memory_provider.md`, `docs/slack_memory.md`
+- Identity and memory: `docs/face_recognition.md`, `docs/speaker_recognition.md`
 - Display, observability, setup: `docs/interaction_display.md`, `docs/observability.md`, `docs/complete_setup.md`

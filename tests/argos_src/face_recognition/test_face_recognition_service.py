@@ -35,14 +35,6 @@ def _load_face_service_module(monkeypatch):
         capture_mod,
     )
 
-    db_mod = types.ModuleType("argos_src.face_recognition.store")
-    db_mod.FaceRecognitionStore = object
-    monkeypatch.setitem(
-        sys.modules,
-        "argos_src.face_recognition.store",
-        db_mod,
-    )
-
     pipeline_mod = types.ModuleType("argos_src.face_recognition.pipeline")
     pipeline_mod.FaceEmbeddingPipeline = types.SimpleNamespace(
         resolve_device=lambda: types.SimpleNamespace(type="cpu")
@@ -98,6 +90,67 @@ def _face(
         "embedding": embedding if embedding is not None else [0.1, 0.2, 0.3],
         "depth_m": depth_m,
     }
+
+
+class _FakeBiometricCandidate:
+    def __init__(self, person_id, display_name, score, metadata=None):
+        self.person_id = person_id
+        self.display_name = display_name
+        self.score = score
+        self.metadata = dict(metadata or {})
+
+
+class _FakeBiometricSearchResult:
+    def __init__(
+        self,
+        *,
+        candidates=(),
+        recognized=False,
+        status="rejected",
+        reason="no_match",
+        threshold=0.6,
+        margin_threshold=0.2,
+        top_score=0.0,
+        runner_up_score=0.0,
+        margin=0.0,
+    ):
+        self.candidates = tuple(candidates)
+        self.recognized = recognized
+        self.status = status
+        self.reason = reason
+        self.threshold = threshold
+        self.margin_threshold = margin_threshold
+        self.top_score = top_score
+        self.runner_up_score = runner_up_score
+        self.margin = margin
+
+
+class _FakeEnrollmentResult:
+    saved = True
+    reason = "saved"
+
+
+class _FakeIdentityMemory:
+    def __init__(self, *, search_result=None, person_id="person-123"):
+        self.search_result = search_result or _FakeBiometricSearchResult()
+        self.person_id = person_id
+        self.searches = []
+        self.encounters = []
+        self.enrollments = []
+
+    def search_face(self, **kwargs):
+        self.searches.append(kwargs)
+        return self.search_result
+
+    def record_encounter(self, **kwargs):
+        self.encounters.append(kwargs)
+        return True
+
+    def enroll_face_reference(self, **kwargs):
+        self.enrollments.append(kwargs)
+        result = _FakeEnrollmentResult()
+        result.person_id = self.person_id
+        return result
 
 
 def _person(
@@ -430,7 +483,6 @@ def test_attention_log_details_include_reason_pose_and_raw_state(monkeypatch):
 def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._recognition_threshold = 0.65
     details = module.FaceRecognitionService._format_recognition_log_details(
         service,
         [
@@ -439,6 +491,7 @@ def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
                 name="Sakshee Patil",
                 interaction_count=1,
                 confidence=0.734,
+                recognition_threshold=0.65,
                 bbox_area=1600,
                 timestamp=100.0,
             )
@@ -451,18 +504,20 @@ def test_recognition_log_details_include_similarity_and_threshold(monkeypatch):
 def test_recognize_face_match_accepts_clear_top_match(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._recognition_threshold = 0.6
-    service._recognition_margin_threshold = 0.20
-    calls = []
-
-    def recognize_face(**kwargs):
-        calls.append(kwargs)
-        return [
-            {"person_id": "arushi", "name": "Arushi", "similarity": 0.82},
-            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.55},
-        ]
-
-    service.db = types.SimpleNamespace(recognize_face=recognize_face)
+    service.identity_memory_client = _FakeIdentityMemory(
+        search_result=_FakeBiometricSearchResult(
+            candidates=(
+                _FakeBiometricCandidate("arushi", "Arushi", 0.82),
+                _FakeBiometricCandidate("sakshee", "Sakshee", 0.55),
+            ),
+            recognized=True,
+            status="accepted",
+            reason="matched",
+            top_score=0.82,
+            runner_up_score=0.55,
+            margin=0.27,
+        )
+    )
 
     match = module.FaceRecognitionService._recognize_face_match(
         service,
@@ -472,20 +527,25 @@ def test_recognize_face_match_accepts_clear_top_match(monkeypatch):
     assert match["person_id"] == "arushi"
     assert match["runner_up_similarity"] == 0.55
     assert abs(match["similarity_margin"] - 0.27) < 1e-6
-    assert calls[0]["threshold"] == -1.0
-    assert calls[0]["top_k"] == 2
+    assert service.identity_memory_client.searches[0]["limit"] == 2
 
 
 def test_recognize_face_match_rejects_low_similarity(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._recognition_threshold = 0.6
-    service._recognition_margin_threshold = 0.20
-    service.db = types.SimpleNamespace(
-        recognize_face=lambda **_kwargs: [
-            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
-            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
-        ]
+    service.identity_memory_client = _FakeIdentityMemory(
+        search_result=_FakeBiometricSearchResult(
+            candidates=(
+                _FakeBiometricCandidate("arushi", "Arushi", 0.59),
+                _FakeBiometricCandidate("sakshee", "Sakshee", 0.10),
+            ),
+            recognized=False,
+            status="rejected",
+            reason="below_threshold",
+            top_score=0.59,
+            runner_up_score=0.10,
+            margin=0.49,
+        )
     )
 
     match = module.FaceRecognitionService._recognize_face_match(
@@ -499,13 +559,19 @@ def test_recognize_face_match_rejects_low_similarity(monkeypatch):
 def test_recognize_face_match_diagnostics_explain_low_similarity(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._recognition_threshold = 0.6
-    service._recognition_margin_threshold = 0.20
-    service.db = types.SimpleNamespace(
-        recognize_face=lambda **_kwargs: [
-            {"person_id": "arushi", "name": "Arushi", "similarity": 0.59},
-            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.10},
-        ]
+    service.identity_memory_client = _FakeIdentityMemory(
+        search_result=_FakeBiometricSearchResult(
+            candidates=(
+                _FakeBiometricCandidate("arushi", "Arushi", 0.59),
+                _FakeBiometricCandidate("sakshee", "Sakshee", 0.10),
+            ),
+            recognized=False,
+            status="rejected",
+            reason="below_threshold",
+            top_score=0.59,
+            runner_up_score=0.10,
+            margin=0.49,
+        )
     )
 
     match, diagnostics = (
@@ -525,13 +591,19 @@ def test_recognize_face_match_diagnostics_explain_low_similarity(monkeypatch):
 def test_recognize_face_match_rejects_small_margin(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
-    service._recognition_threshold = 0.6
-    service._recognition_margin_threshold = 0.20
-    service.db = types.SimpleNamespace(
-        recognize_face=lambda **_kwargs: [
-            {"person_id": "arushi", "name": "Arushi", "similarity": 0.75},
-            {"person_id": "sakshee", "name": "Sakshee", "similarity": 0.62},
-        ]
+    service.identity_memory_client = _FakeIdentityMemory(
+        search_result=_FakeBiometricSearchResult(
+            candidates=(
+                _FakeBiometricCandidate("arushi", "Arushi", 0.75),
+                _FakeBiometricCandidate("sakshee", "Sakshee", 0.62),
+            ),
+            recognized=False,
+            status="rejected",
+            reason="margin_too_small",
+            top_score=0.75,
+            runner_up_score=0.62,
+            margin=0.13,
+        )
     )
 
     match = module.FaceRecognitionService._recognize_face_match(
@@ -642,19 +714,18 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
             },
         }
 
-    def update_interaction(person_id: str):
+    def record_encounter(**kwargs):
+        person_id = kwargs["person_id"]
         update_calls.append(person_id)
         interaction_state["count"] += 1
         return {
-            "name": "Alex",
+            "display_name": "Alex",
             "interaction_count": interaction_state["count"],
             "last_seen": f"count-{interaction_state['count']}",
         }
 
     service._recognize_face_match = recognize_face_match
-    service.db = types.SimpleNamespace(
-        update_interaction=update_interaction,
-    )
+    service.identity_memory_client = types.SimpleNamespace(record_encounter=record_encounter)
 
     persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._build_scene_state(
         service,
@@ -751,8 +822,11 @@ def test_build_scene_state_records_encounter_once_per_presence_episode(monkeypat
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     service.site_code = "BOS3"
     encounters = []
-    service.memory_store = types.SimpleNamespace(
-        record_encounter=lambda **kwargs: encounters.append(kwargs) or "mem-1"
+    service.identity_memory_client = types.SimpleNamespace(
+        record_encounter=lambda **kwargs: encounters.append(kwargs) or {
+            "display_name": "Alex",
+            "interaction_count": 2,
+        }
     )
 
     def recognize_face_match(_face_payload):
@@ -764,11 +838,6 @@ def test_build_scene_state_records_encounter_once_per_presence_episode(monkeypat
         }
 
     service._recognize_face_match = recognize_face_match
-    service.db = types.SimpleNamespace(
-        update_interaction=lambda _person_id: {
-            "interaction_count": 2,
-        },
-    )
 
     module.FaceRecognitionService._build_scene_state(
         service,
@@ -796,8 +865,8 @@ def test_build_scene_state_skips_encounter_when_identity_update_misses(monkeypat
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     service.site_code = "BOS3"
     encounters = []
-    service.memory_store = types.SimpleNamespace(
-        record_encounter=lambda **kwargs: encounters.append(kwargs) or "mem-1"
+    service.identity_memory_client = types.SimpleNamespace(
+        record_encounter=lambda **kwargs: encounters.append(kwargs) or None
     )
     service._recognize_face_match = lambda _face_payload: {
         "person_id": "person-missing",
@@ -805,7 +874,6 @@ def test_build_scene_state_skips_encounter_when_identity_update_misses(monkeypat
         "similarity": 0.93,
         "metadata": {"interaction_count": 1},
     }
-    service.db = types.SimpleNamespace(update_interaction=lambda _person_id: None)
 
     persons, _, _, _ = module.FaceRecognitionService._build_scene_state(
         service,
@@ -814,7 +882,7 @@ def test_build_scene_state_skips_encounter_when_identity_update_misses(monkeypat
         now=100.0,
     )
 
-    assert encounters == []
+    assert len(encounters) == 1
     assert persons[0].person_id == "person-missing"
     assert persons[0].interaction_count == 1
 
@@ -835,7 +903,9 @@ def test_build_scene_state_has_no_primary_face_id_with_multiple_usable_faces(mon
         ]
     )
     service._recognize_face_match = lambda _face_payload: next(matches)
-    service.db = types.SimpleNamespace(update_interaction=lambda _person_id: {})
+    service.identity_memory_client = types.SimpleNamespace(
+        record_encounter=lambda **_kwargs: {}
+    )
 
     persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._build_scene_state(
         service,
@@ -859,8 +929,9 @@ def test_build_scene_state_adds_robot_yaw_bearing(monkeypatch):
     service._camera_resource_id = "head_realsense"
     service._camera_info_capture = None
     service.site_code = ""
-    service.memory_store = None
-    service.db = types.SimpleNamespace(update_interaction=lambda _person_id: {})
+    service.identity_memory_client = types.SimpleNamespace(
+        record_encounter=lambda **_kwargs: {}
+    )
     service._recognize_face_match = lambda _face_payload: {
         "person_id": "person-1",
         "name": "Alex",
@@ -900,11 +971,11 @@ def test_recognize_faces_continues_when_interaction_update_fails(monkeypatch):
     image = _good_image()
     face = _face(area=6400, depth_m=0.8)
 
-    class _FakeDb:
-        def update_interaction(self, _person_id):
+    class _FakeIdentityMemory:
+        def record_encounter(self, **_kwargs):
             raise RuntimeError("db unavailable")
 
-    service.db = _FakeDb()
+    service.identity_memory_client = _FakeIdentityMemory()
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
@@ -943,16 +1014,7 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
     service = object.__new__(module.FaceRecognitionService)
     image = _good_image()
     face = _face(area=6400, depth_m=0.8)
-    added = {}
-
-    class _FakeDb:
-        def add_person(self, *, name, face_embedding, metadata=None):
-            added["name"] = name
-            added["face_embedding"] = face_embedding
-            added["metadata"] = metadata
-            return "person-123"
-
-    service.db = _FakeDb()
+    service.identity_memory_client = _FakeIdentityMemory()
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
@@ -987,8 +1049,10 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
 
     assert result["success"] is True
     assert result["status"] == "enrolled"
-    assert added["name"] == "Sakshee Patil"
-    assert added["metadata"] == {
+    enrollment = service.identity_memory_client.enrollments[0]
+    assert enrollment["person_id"] == "person_spatil2"
+    assert enrollment["model"] == "facenet-vggface2"
+    assert enrollment["metadata"] == {
         "official_name": "Sakshee Patil",
         "employee_name": "Sakshee Patil",
         "username": "spatil2",
@@ -1002,6 +1066,8 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
         "senior_leadership_team": "Jeff Greenfield",
         "business_function": "AI & Data",
         "tenure": "0 year(s), 3 month(s), 5 day(s)",
+        "display_name": "Sakshee Patil",
+        "name": "Sakshee Patil",
     }
 
 
@@ -1011,12 +1077,7 @@ def test_enroll_visible_person_primes_presence_cache_for_voice_followup(monkeypa
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     image = _good_image()
     face = _face(area=6400, depth_m=0.8)
-
-    class _FakeDb:
-        def add_person(self, *, name, face_embedding, metadata=None):
-            return "person-voice-ready"
-
-    service.db = _FakeDb()
+    service.identity_memory_client = _FakeIdentityMemory()
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
@@ -1038,7 +1099,7 @@ def test_enroll_visible_person_primes_presence_cache_for_voice_followup(monkeypa
     assert snapshot["recognized_count"] == 1
     assert snapshot["unknown_count"] == 0
     assert snapshot["primary_face_kind"] == "recognized"
-    assert cached[0].person_id == "person-voice-ready"
+    assert cached[0].person_id == "person_sakshee_patil"
     assert cached[0].name == "Sakshee Patil"
 
 
@@ -1399,14 +1460,7 @@ def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch)
             [0.0, -1.0, 0.0],
         ]
     )
-    added = []
-
-    class _FakeDb:
-        def add_person(self, *, name, face_embedding):
-            added.append((name, face_embedding))
-            return "person-bad"
-
-    service.db = _FakeDb()
+    service.identity_memory_client = _FakeIdentityMemory()
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(
@@ -1424,7 +1478,7 @@ def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch)
 
     assert result["success"] is False
     assert result["status"] == "retry_quality"
-    assert added == []
+    assert service.identity_memory_client.enrollments == []
 
 
 def test_detect_faces_falls_back_to_cpu_when_cuda_pipeline_is_unusable(monkeypatch):

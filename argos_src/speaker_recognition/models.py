@@ -15,10 +15,8 @@ class SpeakerRecognitionPolicy:
     """Pure runtime settings for speaker matching and voice enrollment."""
 
     backend: str = "speechbrain_ecapa"
-    db_path: str = ""
     query_match_threshold: float = 0.40
     query_margin_threshold: float = 0.20
-    reference_update_threshold: float = 0.55
     explicit_prompt_after_silent_failures: int = 2
     max_clipped_fraction: float = 0.02
 
@@ -27,8 +25,6 @@ class SpeakerRecognitionPolicy:
             raise ValueError("query_match_threshold must be within [0, 1]")
         if not 0.0 <= self.query_margin_threshold <= 1.0:
             raise ValueError("query_margin_threshold must be within [0, 1]")
-        if not 0.0 <= self.reference_update_threshold <= 1.0:
-            raise ValueError("reference_update_threshold must be within [0, 1]")
         if self.explicit_prompt_after_silent_failures < 1:
             raise ValueError("explicit_prompt_after_silent_failures must be >= 1")
         if not 0.0 <= self.max_clipped_fraction <= 1.0:

@@ -126,9 +126,6 @@ class RealtimeRobotAgent:
         coalescer: Optional[EventCoalescer] = None,
         face_service: Any = None,
         speaker_service: Any = None,
-        employee_directory_service: Any = None,
-        slack_memory_service: Any = None,
-        identity_store: Any = None,
         memory_context_compiler: Any = None,
         preference_extractor: Any = None,
         preference_extraction_enabled: bool = False,
@@ -142,6 +139,7 @@ class RealtimeRobotAgent:
         stand_tool_name: str = "move_robot",
         supports_navigation: bool = False,
         state_observer: Any = None,
+        identity_memory_client: Any = None,
     ) -> None:
         self.logger = logging.getLogger("argos.agent_runtime")
         self.scenario_profile = scenario_profile
@@ -153,9 +151,7 @@ class RealtimeRobotAgent:
         self.coalescer = coalescer
         self.face_service = face_service
         self.speaker_service = speaker_service
-        self.employee_directory_service = employee_directory_service
-        self.slack_memory_service = slack_memory_service
-        self.identity_store = identity_store
+        self.identity_memory_client = identity_memory_client
         self.memory_context_compiler = memory_context_compiler
         self.preference_extractor = preference_extractor
         self.preference_extraction_enabled = preference_extraction_enabled
@@ -172,7 +168,7 @@ class RealtimeRobotAgent:
         self._last_tool_summary: Optional[str] = None
         self._last_external_input_s = 0.0
         self._current_office_location = str(
-            getattr(getattr(scenario_profile, "employee_directory", None), "site_code", "")
+            getattr(getattr(scenario_profile, "identity_memory", None), "site_code", "")
             or ""
         ).strip()
 
@@ -1044,16 +1040,6 @@ class RealtimeRobotAgent:
                 self.speaker_service.shutdown()
             except Exception:
                 self.logger.exception("Failed to stop speaker service cleanly")
-        if getattr(self, "employee_directory_service", None) is not None:
-            try:
-                self.employee_directory_service.shutdown()
-            except Exception:
-                self.logger.exception("Failed to stop employee directory cleanly")
-        if getattr(self, "slack_memory_service", None) is not None:
-            try:
-                self.slack_memory_service.shutdown()
-            except Exception:
-                self.logger.exception("Failed to stop Tailwag Slack memory service cleanly")
         if getattr(self, "memory_context_compiler", None) is not None:
             try:
                 close_memory = getattr(self.memory_context_compiler, "close", None)

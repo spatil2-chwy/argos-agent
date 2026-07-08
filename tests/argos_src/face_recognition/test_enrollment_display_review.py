@@ -12,19 +12,16 @@ from argos_src.face_recognition.face_recognition_service import (
 )
 
 
-class _DB:
+class _IdentityMemory:
     def __init__(self):
-        self.saved = []
+        self.enrollments = []
 
-    def add_person(self, *, name, face_embedding, metadata):
-        self.saved.append(
-            {
-                "name": name,
-                "face_embedding": face_embedding,
-                "metadata": metadata,
-            }
-        )
-        return "person-1"
+    def record_encounter(self, **_kwargs):
+        return None
+
+    def enroll_face_reference(self, **kwargs):
+        self.enrollments.append(kwargs)
+        return type("Enrollment", (), {"saved": True, "reason": "saved"})()
 
 
 class _Display:
@@ -41,7 +38,7 @@ class _Display:
 
 def _service_with_candidate():
     service = object.__new__(FaceRecognitionService)
-    service.db = _DB()
+    service.identity_memory_client = _IdentityMemory()
     candidate = FaceEnrollmentCandidate(
         cleaned_name="Sakshee Patil",
         verified_durable={"official_name": "Sakshee Patil", "username": "spatil2"},
@@ -72,7 +69,7 @@ def test_enrollment_display_accept_commits_person():
 
     assert result["success"] is True
     assert result["status"] == "enrolled"
-    assert len(service.db.saved) == 1
+    assert len(service.identity_memory_client.enrollments) == 1
     assert display.reviews[0]["image_url"].startswith("data:image/png;base64,")
 
 
@@ -105,7 +102,7 @@ def test_enrollment_display_reject_does_not_commit():
 
     assert result["success"] is False
     assert result["status"] == "user_rejected_preview"
-    assert service.db.saved == []
+    assert service.identity_memory_client.enrollments == []
 
 
 def test_enrollment_display_timeout_does_not_commit():
@@ -121,7 +118,7 @@ def test_enrollment_display_timeout_does_not_commit():
 
     assert result["success"] is False
     assert result["status"] == "review_timeout"
-    assert service.db.saved == []
+    assert service.identity_memory_client.enrollments == []
 
 
 def test_enrollment_display_unavailable_does_not_commit():
@@ -137,7 +134,7 @@ def test_enrollment_display_unavailable_does_not_commit():
 
     assert result["success"] is False
     assert result["status"] == "display_unavailable"
-    assert service.db.saved == []
+    assert service.identity_memory_client.enrollments == []
 
 
 def test_enrollment_without_display_preserves_commit_behavior():
@@ -147,4 +144,4 @@ def test_enrollment_without_display_preserves_commit_behavior():
 
     assert result["success"] is True
     assert result["status"] == "enrolled"
-    assert len(service.db.saved) == 1
+    assert len(service.identity_memory_client.enrollments) == 1

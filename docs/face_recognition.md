@@ -9,7 +9,7 @@ Read this with:
 - `argos_src/face_recognition/presence_cache.py`
 - `argos_src/tools/unitree_go2/vision/enroll_visible_person.py`
 - `argos_src/tools/unitree_go2/vision/resolve_employee_identity.py`
-- `argos_src/employee_directory/service.py`
+- `argos_src/identity_memory/tailwag_package.py`
 - `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
@@ -65,7 +65,7 @@ owner policy       -> owner_id for the turn
 | `presence_cache.py` | Stores current visible people, strict primary face identity, and `/go2/face_presence` snapshot. |
 | `enroll_visible_person.py` | LLM tool wrapper for safe live enrollment. The LLM passes only name and optional username. |
 | `resolve_employee_identity.py` | LLM tool for employee-directory lookup before enrollment. |
-| `employee_directory/service.py` | Loads Snowflake rows and locally rehydrates the verified profile during enrollment. |
+| `identity_memory/tailwag_package.py` | Calls Tailwag for directory lookup, biometric search/enrollment, encounters, and prompt context. |
 | `control/tool_runtime.py` | Arms voice enrollment after face enrollment succeeds. |
 
 ## Live Enrollment Flow
@@ -287,11 +287,10 @@ The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_fa
 becoming recognized-person context while still allowing fisheye captures where
 valid nearby faces are smaller than RealSense crops.
 
-Recognition accepts the top database match only when similarity is at least
-`recognition_threshold` (`0.6` in the static interaction profile) and the
-top-vs-runner-up similarity margin is at least `recognition_margin_threshold`
-(`0.20`). This keeps low-confidence and ambiguous matches out of the live
-person context.
+Recognition sends FaceNet vectors to Tailwag. Tailwag owns biometric reference
+search, thresholds, margin policy, consent filtering, and archived-person
+filtering, then returns the accepted/rejected diagnostics that Argos logs and
+shows on the dashboard.
 
 What recognition does not do:
 
@@ -402,8 +401,6 @@ Main config lives in:
 face_recognition:
   enabled: true
   loop_interval_sec: 0.3
-  recognition_threshold: 0.6
-  recognition_margin_threshold: 0.20
   depth_gate:
     enabled: false
     sync_slop_sec: 0.12
@@ -542,7 +539,6 @@ poetry run pytest \
   tests/argos_src/face_recognition/test_enrollment_display_review.py \
   tests/argos_src/tools/unitree_go2/vision/test_enroll_visible_person_tool.py \
   tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py \
-  tests/scripts/labs/test_rapidfuzz_employee_lab.py \
   tests/argos_src/speaker_recognition/test_policy.py \
   tests/argos_src/speaker_recognition/test_service.py \
   tests/argos_src/agent/test_agent_runtime.py
@@ -597,14 +593,5 @@ cd ~/argos-agent
 python3 run_profile.py --profile static_interaction
 ```
 
-Manage identities:
-
-```bash
-cd ~/argos-agent
-python3 -m argos_src.identity.manage_identity --list
-python3 -m argos_src.identity.manage_identity --show "Your Name"
-python3 -m argos_src.identity.manage_identity --delete "Your Name"
-```
-
-`argos_src.identity.manage_identity --delete` removes the identity row plus linked face
-and speaker embeddings.
+Manage durable identities, face references, and voice references with Tailwag
+tooling from `tailwag-memory`.

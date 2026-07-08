@@ -72,17 +72,14 @@ def test_build_lab_config_keeps_speaker_db_isolated_from_agent_db(tmp_path: Path
         max_record_sec=8.0,
         query_match_threshold=None,
         query_margin_threshold=None,
-        reference_update_threshold=None,
         max_clipped_fraction=None,
     )
 
     config = build_lab_config(args)
     summary = session_summary_payload(config, vad_impl="test")
 
-    assert config.speaker_db_path == str((tmp_path / "speaker_lab" / "speaker_db").resolve())
-    assert config.policy.db_path == config.speaker_db_path
-    assert config.profile_speaker_db_path != config.speaker_db_path
-    assert summary["speaker_db_isolated_from_agent"] is True
+    assert config.session_dir == str((tmp_path / "speaker_lab").resolve())
+    assert "speaker_db_path" not in summary
 
 
 def test_render_stats_payload_reports_expected_duration_and_sample_count() -> None:
@@ -144,10 +141,8 @@ def test_inspect_vad_frames_uses_vad_window_size_when_available() -> None:
 def test_summarize_attempt_diagnostics_flags_trim_fallback_and_borderline_match() -> None:
     policy = SpeakerRecognitionPolicy(
         backend="speechbrain_ecapa",
-        db_path="/tmp/test_speaker_db",
         query_match_threshold=0.6,
         query_margin_threshold=0.08,
-        reference_update_threshold=0.55,
         max_clipped_fraction=0.02,
         explicit_prompt_after_silent_failures=2,
     )

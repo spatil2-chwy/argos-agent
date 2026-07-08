@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 
@@ -10,8 +11,6 @@ from argos_src.speaker_recognition.backend import (
     SpeakerEmbeddingBackend,
     SpeechBrainEcapaBackend,
 )
-from argos_src.speaker_recognition.constants import DEFAULT_SPEAKER_DB_PATH
-from argos_src.identity.embeddings.speaker_store import SpeakerEmbeddingStore
 from argos_src.speaker_recognition.models import (
     SpeakerRecognitionPolicy,
     SpeakerResolutionResult,
@@ -36,21 +35,18 @@ class SpeakerRecognitionService:
         *,
         policy: SpeakerRecognitionPolicy,
         backend: SpeakerEmbeddingBackend | None = None,
-        speaker_db: SpeakerEmbeddingStore | None = None,
+        identity_memory_client: Any | None = None,
     ) -> None:
         self.policy = policy
         self.backend = backend or SpeechBrainEcapaBackend()
-        self.db = speaker_db or SpeakerEmbeddingStore(
-            db_path=policy.db_path or DEFAULT_SPEAKER_DB_PATH
-        )
+        self.identity_memory_client = identity_memory_client
         self._logged_no_references_notice = False
         logger.info(
-            "Speaker recognition initialized backend=%s db_path=%s "
-            "match_threshold=%.3f reference_update_threshold=%.3f",
+            "Speaker recognition initialized backend=%s identity_memory=%s "
+            "fallback_match_threshold=%.3f",
             self.policy.backend,
-            self.policy.db_path or DEFAULT_SPEAKER_DB_PATH,
+            type(identity_memory_client).__name__ if identity_memory_client is not None else "disabled",
             self.policy.query_match_threshold,
-            self.policy.reference_update_threshold,
         )
 
     def shutdown(self) -> None:
@@ -70,7 +66,14 @@ class SpeakerRecognitionService:
         )
 
     def has_reference(self, person_id: str) -> bool:
-        return self.db.has_reference(person_id)
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return False
+        try:
+            return bool(identity_memory.has_voice_reference(str(person_id or "").strip()))
+        except Exception:
+            logger.exception("Voice reference check failed person_id=%s", person_id)
+            return False
 
     def resolve_turn_owner(
         self,
@@ -89,11 +92,11 @@ class SpeakerRecognitionService:
                 runner_up_score=0.0,
                 visible_face_person_ids=visible_face_person_ids,
             )
-        references = self.db.get_reference_embeddings()
-        if not references:
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
             if not self._logged_no_references_notice:
                 logger.info(
-                    "Speaker recognition has no enrolled voice references yet; using strict face ownership until a voice reference is saved."
+                    "Speaker recognition has no identity-memory client; using strict face ownership."
                 )
                 self._logged_no_references_notice = True
             return resolve_owner_id(
@@ -104,22 +107,62 @@ class SpeakerRecognitionService:
                 runner_up_score=0.0,
                 visible_face_person_ids=visible_face_person_ids,
             )
-        query_embedding = self.backend.embed_query_clip(
-            waveform,
-            sample_rate=16000,
-        )
-        scored = self.backend.score_against_references(query_embedding, references)
-        audio_speaker_id = scored[0][0] if scored else None
-        top_score = scored[0][1] if scored else 0.0
-        runner_up_score = scored[1][1] if len(scored) > 1 else 0.0
-        return resolve_owner_id(
-            policy=self.policy,
-            primary_face_person_id=primary_face_person_id,
-            audio_speaker_id=audio_speaker_id,
-            top_score=top_score,
-            runner_up_score=runner_up_score,
-            visible_face_person_ids=visible_face_person_ids,
-        )
+        query_embedding = self.backend.embed_query_clip(waveform, sample_rate=16000)
+        try:
+            search = identity_memory.search_voice(
+                embedding=query_embedding,
+                model=str(getattr(self.backend, "model_name", self.policy.backend) or self.policy.backend),
+                limit=2,
+            )
+            candidates = tuple(getattr(search, "candidates", ()) or ())
+            voice_candidate = candidates[0] if bool(getattr(search, "recognized", False)) and candidates else None
+            top_score = float(getattr(search, "top_score", 0.0) or 0.0)
+            runner_up_score = float(getattr(search, "runner_up_score", 0.0) or 0.0)
+            margin = float(getattr(search, "margin", max(0.0, top_score - runner_up_score)) or 0.0)
+            visible_candidates = tuple(
+                {"person_id": rendered}
+                for rendered in (
+                    str(person_id or "").strip()
+                    for person_id in (visible_face_person_ids or ())
+                )
+                if rendered
+            )
+            owner = identity_memory.resolve_turn_owner(
+                primary_face_candidate=(
+                    {"person_id": str(primary_face_person_id).strip()}
+                    if str(primary_face_person_id or "").strip()
+                    else None
+                ),
+                visible_face_candidates=visible_candidates,
+                voice_candidate=voice_candidate,
+                policy_context={
+                    "voice_top_score": top_score,
+                    "voice_runner_up_score": runner_up_score,
+                    "voice_margin": margin,
+                    "voice_status": str(getattr(search, "status", "") or ""),
+                    "voice_reason": str(getattr(search, "reason", "") or ""),
+                },
+            )
+            return SpeakerResolutionResult(
+                audio_speaker_id=getattr(owner, "audio_speaker_id", None),
+                top_score=float(getattr(owner, "top_score", top_score) or 0.0),
+                runner_up_score=float(getattr(owner, "runner_up_score", runner_up_score) or 0.0),
+                margin=float(getattr(owner, "margin", margin) or 0.0),
+                speaker_visible=bool(getattr(owner, "speaker_visible", False)),
+                owner_id=getattr(owner, "owner_id", None),
+                owner_source=str(getattr(owner, "owner_source", "unknown") or "unknown"),  # type: ignore[arg-type]
+                owner_confidence=float(getattr(owner, "owner_confidence", 0.0) or 0.0),
+            )
+        except Exception:
+            logger.exception("Tailwag speaker owner resolution failed; falling back to face-only ownership.")
+            return resolve_owner_id(
+                policy=self.policy,
+                primary_face_person_id=primary_face_person_id,
+                audio_speaker_id=None,
+                top_score=0.0,
+                runner_up_score=0.0,
+                visible_face_person_ids=visible_face_person_ids,
+            )
 
     def trim_turn_audio(
         self,
@@ -155,66 +198,30 @@ class SpeakerRecognitionService:
             waveform,
             sample_rate=16000,
         )
-        existing = self.db.get_reference(str(person_id or "").strip())
-        if existing is not None and existing.get("embedding") is not None:
-            existing_embedding = np.asarray(existing["embedding"], dtype=np.float32).reshape(-1)
-            current_embedding = np.asarray(embedding, dtype=np.float32).reshape(-1)
-            existing_norm = float(np.linalg.norm(existing_embedding))
-            current_norm = float(np.linalg.norm(current_embedding))
-            if existing_norm <= 1e-8 or current_norm <= 1e-8:
-                return VoiceEnrollmentResult(
-                    saved=False,
-                    reason="reject_inconsistent",
-                    person_id=str(person_id or "").strip(),
-                    attempt_kind=attempt_kind,  # type: ignore[arg-type]
-                )
-            consistency = float(
-                np.dot(existing_embedding / existing_norm, current_embedding / current_norm)
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return VoiceEnrollmentResult(
+                saved=False,
+                reason="identity_memory_unavailable",
+                person_id=str(person_id or "").strip(),
+                attempt_kind=attempt_kind,  # type: ignore[arg-type]
             )
-            if consistency < self.policy.reference_update_threshold:
-                return VoiceEnrollmentResult(
-                    saved=False,
-                    reason="reject_inconsistent",
-                    person_id=str(person_id or "").strip(),
-                    attempt_kind=attempt_kind,  # type: ignore[arg-type]
-                )
-            metadata = dict(existing.get("metadata") or {})
-            clip_count = max(1, int(metadata.get("clip_count", 1) or 1))
-            total_voiced_sec = float(
-                metadata.get("total_voiced_sec", metadata.get("query_duration_s", 0.0)) or 0.0
-            )
-            previous_mean_rms = float(
-                metadata.get("mean_rms_level", metadata.get("rms_level", 0.0)) or 0.0
-            )
-            embedding = ((existing_embedding * clip_count) + current_embedding) / float(
-                clip_count + 1
-            )
-            embedding_norm = float(np.linalg.norm(embedding))
-            if embedding_norm > 1e-8:
-                embedding = embedding / embedding_norm
-            updated_clip_count = clip_count + 1
-            updated_total_voiced_sec = total_voiced_sec + stats.duration_s
-            updated_mean_rms = (
-                (previous_mean_rms * clip_count) + stats.rms_level
-            ) / float(updated_clip_count)
-        else:
-            updated_clip_count = 1
-            updated_total_voiced_sec = stats.duration_s
-            updated_mean_rms = stats.rms_level
-        self.db.upsert_reference(
+        result = identity_memory.enroll_voice_reference(
             person_id=str(person_id or "").strip(),
             embedding=embedding,
-            model_name=str(getattr(self.backend, "model_name", "unknown") or "unknown"),
-            query_duration_s=stats.duration_s,
-            rms_level=stats.rms_level,
-            clip_count=updated_clip_count,
-            total_voiced_sec=updated_total_voiced_sec,
-            mean_rms_level=updated_mean_rms,
+            model=str(getattr(self.backend, "model_name", "unknown") or "unknown"),
+            metadata={
+                "query_duration_s": stats.duration_s,
+                "rms_level": stats.rms_level,
+                "clipped_fraction": stats.clipped_fraction,
+                "attempt_kind": attempt_kind,
+            },
+            consent_status="consented",
         )
         self._logged_no_references_notice = False
         return VoiceEnrollmentResult(
-            saved=True,
-            reason="saved",
+            saved=bool(getattr(result, "saved", False)),
+            reason=str(getattr(result, "reason", "") or ("saved" if getattr(result, "saved", False) else "save_failed")),
             person_id=str(person_id or "").strip(),
             attempt_kind=attempt_kind,  # type: ignore[arg-type]
         )

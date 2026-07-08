@@ -175,31 +175,14 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
         def submit(self, *args, **kwargs):
             return None
 
-    class _FakeTailwagMemoryProvider:
+    class _FakeIdentityMemoryClient:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.retention_class = kwargs["retention_class"]
-            created["memory_providers"].append(self)
+            created["identity_memory_clients"].append(self)
 
         def close(self):
             return None
-
-    class _FakeTailwagSlackMemoryService:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            self.started = False
-            created["slack_services"].append(self)
-
-        def start_background(self):
-            self.started = True
-
-        def shutdown(self):
-            return None
-
-    class _FakeIdentityStore:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            created["identity_stores"].append(self)
 
     class _FakeFaceRecognitionService:
         def __init__(self, **kwargs):
@@ -339,14 +322,10 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     startup_mod.prepare_robot_for_agent_session = lambda *_args, **_kwargs: []
     monkeypatch.setitem(sys.modules, "argos_src.agent.startup", startup_mod)
 
-    memory_provider_mod = types.ModuleType("argos_src.memory_provider")
-    memory_provider_mod.TailwagMemoryProvider = _FakeTailwagMemoryProvider
-    memory_provider_mod.TailwagSlackMemoryService = _FakeTailwagSlackMemoryService
-    monkeypatch.setitem(sys.modules, "argos_src.memory_provider", memory_provider_mod)
-
-    identity_mod = types.ModuleType("argos_src.identity")
-    identity_mod.IdentityStore = _FakeIdentityStore
-    monkeypatch.setitem(sys.modules, "argos_src.identity", identity_mod)
+    identity_memory_mod = types.ModuleType("argos_src.identity_memory")
+    identity_memory_mod.TailwagPackageIdentityMemoryClient = _FakeIdentityMemoryClient
+    identity_memory_mod.NoopIdentityMemoryClient = _FakeIdentityMemoryClient
+    monkeypatch.setitem(sys.modules, "argos_src.identity_memory", identity_memory_mod)
 
     attention_mod = types.ModuleType("argos_src.face_recognition.attention_gate")
     attention_mod.AttentionGateSettings = lambda **kwargs: SimpleNamespace(**kwargs)
@@ -2530,31 +2509,24 @@ def test_capture_turn_context_continues_without_memory_when_tailwag_fails():
     assert "Failed to compile memory context for person-1" in log_messages
 
 
-def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(monkeypatch):
+def test_factory_wires_identity_memory_into_prompt_extraction_and_face(monkeypatch):
     created = {
-        "memory_providers": [],
-        "slack_services": [],
-        "identity_stores": [],
+        "identity_memory_clients": [],
         "face_services": [],
         "face_event_bridges": [],
     }
     profile = _parse_factory_profile(
         {
             "name": "tailwag-factory-wiring",
-            "memory": {
+            "identity_memory": {
                 "enabled": True,
                 "retention_class": "priority",
                 "place_room_id": "lab",
+                "record_live_episodes": True,
                 "extract_live_turn_memory": False,
-            },
-            "slack_memory": {
-                "enabled": True,
-                "start_with_agent": True,
-                "channels": [{"name": "argos-test", "channel_id": "C123"}],
             },
             "face_recognition": {
                 "enabled": True,
-                "preference_extraction": {"enabled": True},
             },
             "speaker_recognition": {"enabled": False},
             "battery": {"enabled": False},
@@ -2565,43 +2537,38 @@ def test_factory_wires_tailwag_provider_into_prompt_extraction_face_and_slack(mo
 
     agent = factory_mod.create_agent(scenario_profile=profile)
 
-    assert len(created["memory_providers"]) == 1
-    provider = created["memory_providers"][0]
-    assert provider.kwargs == {
+    assert len(created["identity_memory_clients"]) == 1
+    client = created["identity_memory_clients"][0]
+    assert client.kwargs == {
         "site_code": "",
         "place_room_id": "lab",
         "retention_class": "priority",
         "extract_live_turn_memory": False,
     }
-    assert agent.kwargs["memory_context_compiler"] is provider
-    assert agent.kwargs["preference_extractor"] is provider
+    assert agent.kwargs["identity_memory_client"] is client
+    assert agent.kwargs["memory_context_compiler"] is client
+    assert agent.kwargs["preference_extractor"] is client
     assert agent.kwargs["preference_extraction_enabled"] is True
     assert len(created["face_services"]) == 1
-    assert created["face_services"][0].kwargs["memory_store"] is provider
-    assert len(created["slack_services"]) == 1
-    assert created["slack_services"][0].kwargs["episode_recorder"] is provider
-    assert created["slack_services"][0].started is True
-    assert agent.kwargs["slack_memory_service"] is created["slack_services"][0]
+    assert created["face_services"][0].kwargs["identity_memory_client"] is client
+    assert created["face_services"][0].kwargs["memory_store"] is client
     assert agent.kwargs["state_observer"] is not None
     assert created["engagements"][0].kwargs["state_observer"] is agent.kwargs["state_observer"]
     assert created["coalescers"][0].kwargs["state_observer"] is agent.kwargs["state_observer"]
 
 
-def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(monkeypatch):
+def test_factory_identity_memory_disabled_omits_client_from_runtime_surfaces(monkeypatch):
     created = {
-        "memory_providers": [],
-        "slack_services": [],
-        "identity_stores": [],
+        "identity_memory_clients": [],
         "face_services": [],
         "face_event_bridges": [],
     }
     profile = _parse_factory_profile(
         {
             "name": "tailwag-factory-memory-disabled",
-            "memory": {"enabled": False},
+            "identity_memory": {"enabled": False, "record_live_episodes": True},
             "face_recognition": {
                 "enabled": True,
-                "preference_extraction": {"enabled": True},
             },
             "speaker_recognition": {"enabled": False},
             "battery": {"enabled": False},
@@ -2612,28 +2579,26 @@ def test_factory_memory_disabled_omits_tailwag_provider_from_runtime_surfaces(mo
 
     agent = factory_mod.create_agent(scenario_profile=profile)
 
-    assert created["memory_providers"] == []
-    assert created["slack_services"] == []
+    assert created["identity_memory_clients"] == []
+    assert agent.kwargs["identity_memory_client"] is None
     assert agent.kwargs["memory_context_compiler"] is None
     assert agent.kwargs["preference_extractor"] is None
-    assert agent.kwargs["preference_extraction_enabled"] is True
+    assert agent.kwargs["preference_extraction_enabled"] is False
     assert len(created["face_services"]) == 1
     assert created["face_services"][0].kwargs["memory_store"] is None
 
 
 def test_factory_memory_query_tools_create_tailwag_provider_without_face_runtime(monkeypatch):
     created = {
-        "memory_providers": [],
-        "slack_services": [],
+        "identity_memory_clients": [],
         "sqlite_memory_stores": [],
-        "identity_stores": [],
         "face_services": [],
         "face_event_bridges": [],
     }
     profile = _parse_factory_profile(
         {
             "name": "tailwag-memory-tools-only",
-            "memory": {"enabled": True},
+            "identity_memory": {"enabled": True},
             "tools": {
                 "enabled_tool_ids": [
                     "memory.search_semantic",
@@ -2649,12 +2614,12 @@ def test_factory_memory_query_tools_create_tailwag_provider_without_face_runtime
 
     agent = factory_mod.create_agent(scenario_profile=profile)
 
-    assert len(created["memory_providers"]) == 1
-    provider = created["memory_providers"][0]
-    assert created["identity_stores"] == []
-    assert agent.kwargs["memory_context_compiler"] is provider
+    assert len(created["identity_memory_clients"]) == 1
+    client = created["identity_memory_clients"][0]
+    assert agent.kwargs["identity_memory_client"] is client
+    assert agent.kwargs["memory_context_compiler"] is client
     build_kwargs = created["build_builtin_tools_kwargs"][0]
-    assert build_kwargs["memory_provider"] is provider
+    assert build_kwargs["memory_provider"] is client
 
 
 def test_audio_turn_pending_internal_text_uses_system_role_message():

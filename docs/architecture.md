@@ -9,8 +9,7 @@ This is the high-level map of the current Argos stack. The deeper component docs
 - `attention_gate.md`
 - `speaker_recognition.md`
 - `face_recognition.md`
-- `memory_provider.md`
-- `slack_memory.md`
+- `identity_memory.md`
 - `observability.md`
 
 ## Core Idea
@@ -86,7 +85,7 @@ camera + optional depth
 Tailwag is the semantic memory writer and person-context source. Argos sends the
 full active conversation episode to Tailwag from speaker-owned realtime turn
 text. Prompt views still surface as `About` and `Potential Followups`, but the
-storage and extraction contract lives outside Argos. See `memory_provider.md`
+storage and extraction contract lives outside Argos. See `identity_memory.md`
 for the Tailwag-backed provider contract.
 
 Important distinctions:
@@ -235,6 +234,4 @@ as subtitles.
 - Use `speaker_recognition.md` for voice enrollment, audio ownership, strict face ownership, and voice-reference management.
 - Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.
-- Use `identity_store.md` for shared person records and face/speaker embedding-store management.
-- Use `memory_provider.md` for Tailwag-backed person context, episodes, encounters, semantic search, and reset boundaries.
-- Use `slack_memory.md` for Tailwag-backed Slack polling, cursor state, and identity convergence.
+- Use `identity_memory.md` for Tailwag-backed person profiles, biometric references, episodes, semantic search, Slack ingestion, and reset boundaries.

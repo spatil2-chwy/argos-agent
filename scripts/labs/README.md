@@ -4,8 +4,9 @@ These scripts are small lab tools for testing Argos functionality without starti
 the full realtime agent.
 
 They still use the real Argos service code, profile config, provider camera
-resources, face embedding model, and face/identity stores. They are meant for diagnosis and
-parameter tuning, not for normal user-facing registration.
+resources, and embedding models. Durable identity and memory now live in
+`tailwag-memory`; these scripts are meant for diagnosis and parameter tuning,
+not for normal user-facing registration.
 
 Run from the repo root:
 
@@ -20,8 +21,6 @@ poetry run python -m scripts.labs.owner_turn_calibration_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
 poetry run python -m scripts.labs.enrollment_audio_collection --help
-poetry run python -m scripts.labs.speaker_recognition_lab --help
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 poetry run python -m scripts.labs.agent_state_machine_lab --help
 ```
@@ -127,8 +126,6 @@ Current registration tuning defaults match the production agent:
 - `min_face_area=1300`
 - `min_brightness=35`
 - `min_contrast=15.5`
-- `recognition_threshold=0.6`
-- `recognition_margin_threshold=0.20`
 
 Use `--details` when you want the full diagnostic dump.
 
@@ -183,46 +180,6 @@ profile YAML:
 ```bash
 poetry run python -m scripts.labs.owner_turn_calibration_lab --move \
   --camera-yaw-offset-deg -4.0 --turn-gain 0.8
-```
-
-Speaker enrollment to a temporary lab DB:
-
-```bash
-poetry run python -m scripts.labs.speaker_recognition_lab enroll --person-id person_me --clips 3
-```
-
-Speaker recognition against that lab DB:
-
-```bash
-poetry run python -m scripts.labs.speaker_recognition_lab recognize --clips 1
-```
-
-Each speaker attempt also saves a JSON report with:
-- the effective profile/policy config used for that run
-- raw vs trimmed clip stats
-- VAD frame counts and frame-RMS summaries
-- explicit diagnostics such as trim fallback, VAD mismatch, quiet clips, and borderline matches
-
-List the temporary lab references:
-
-```bash
-poetry run python -m scripts.labs.speaker_recognition_lab list
-```
-
-Employee-directory registration probe from the microphone:
-
-```bash
-# Agent-style registration probe: wait for "Listening...", say your name once,
-# print the transcript, the actual Realtime tool-call args, and the employee-directory
-# match result, then exit.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3
-
-# Same as above, but keep listening until Ctrl+C.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --loop
-
-# If Snowflake stores Latin-script names and multilingual ASR is returning a
-# native-script transcript, force English transcription for this lab run.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --language en
 ```
 
 Realtime state machine report from latency logs:
