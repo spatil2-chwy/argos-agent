@@ -103,7 +103,11 @@ class PreferenceRuntime:
                     finish_episode(reason=reason)
             return
         self._emit_memory_segment_flushed(completed_segment, reason=reason)
-        self.schedule_segment_extraction(completed_segment, reason=reason)
+        self.schedule_segment_extraction(
+            completed_segment,
+            reason=reason,
+            synchronous=reason == "shutdown",
+        )
 
     def _emit_memory_segment_flushed(self, segment: Any, *, reason: str) -> None:
         host = self._host
@@ -152,7 +156,13 @@ class PreferenceRuntime:
                 host._preference_idle_flush_timer.cancel()
                 host._preference_idle_flush_timer = None
 
-    def schedule_segment_extraction(self, segment: Any, *, reason: str) -> None:
+    def schedule_segment_extraction(
+        self,
+        segment: Any,
+        *,
+        reason: str,
+        synchronous: bool = False,
+    ) -> None:
         host = self._host
         if not host.preference_extraction_enabled or host.preference_extractor is None:
             return
@@ -172,10 +182,35 @@ class PreferenceRuntime:
                         reason=reason,
                     )
                 except TypeError:
-                    host.preference_extractor.extract_and_store_segment(segment)
+                    try:
+                        host.preference_extractor.extract_and_store_segment(segment)
+                    except Exception:
+                        host.logger.exception(
+                            "Preference extraction failed segment=%s person=%s reason=%s",
+                            segment.segment_id,
+                            segment.person_id,
+                            reason,
+                        )
+                except Exception:
+                    host.logger.exception(
+                        "Preference extraction failed segment=%s person=%s reason=%s",
+                        segment.segment_id,
+                        segment.person_id,
+                        reason,
+                    )
             finally:
                 with host._pending_lock:
                     host._pending_preference_segment_ids.discard(segment.segment_id)
+
+        if synchronous:
+            host.logger.info(
+                "Running preference extraction synchronously segment=%s person=%s reason=%s",
+                segment.segment_id,
+                segment.person_id,
+                reason,
+            )
+            run_then_clear()
+            return
 
         try:
             host._preference_executor.submit(run_then_clear)

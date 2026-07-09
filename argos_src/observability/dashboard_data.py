@@ -181,6 +181,14 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "memory_flush_reason",
         "memory_extraction_enabled",
         "memory_extraction_scheduled",
+        "tailwag_episode_id",
+        "tailwag_episode_extract_memory",
+        "tailwag_memory_result_count",
+        "tailwag_memory_created_count",
+        "tailwag_memory_addressed_count",
+        "tailwag_memory_supported_count",
+        "tailwag_memory_error_count",
+        "tailwag_episode_error",
         "biometric_update_modality",
         "biometric_update_person_id",
         "biometric_update_accepted",
@@ -247,6 +255,9 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "exchange_context": ("identity", "Speaker and owner resolved"),
         "owner_handoff": ("owner_handoff", "Owner handoff"),
         "memory_segment_flushed": ("memory_flushed", "Memory segment flushed"),
+        "tailwag_episode_recorded": ("tailwag_episode_recorded", "Tailwag episode recorded"),
+        "tailwag_episode_failed": ("tailwag_episode_failed", "Tailwag episode failed"),
+        "tailwag_episode_skipped": ("tailwag_episode_skipped", "Tailwag episode skipped"),
         "adaptive_biometric_update": (
             "biometric_update",
             "Biometric reference update",
@@ -266,6 +277,15 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
     if mapped is None:
         return None
     key, title = mapped
+    if label == "adaptive_biometric_update":
+        title = _biometric_update_title(row)
+    if label == "tailwag_episode_recorded":
+        created = str(row.get("tailwag_memory_created_count") or "0").strip()
+        errors = str(row.get("tailwag_memory_error_count") or "0").strip()
+        title = f"Tailwag episode recorded: {created} memories, {errors} errors"
+    if label == "tailwag_episode_failed":
+        reason = str(row.get("tailwag_episode_error") or "unknown").strip()
+        title = f"Tailwag episode failed: {reason}"
     return {
         "key": key,
         "title": title,
@@ -274,6 +294,26 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "component": row.get("component", "unknown"),
         "details": _stage_details(row),
     }
+
+
+def _biometric_update_title(row: dict[str, str]) -> str:
+    modality = str(row.get("biometric_update_modality") or "reference").strip()
+    status = str(row.get("biometric_update_status") or "unknown").strip()
+    reason = str(row.get("biometric_update_reason") or "").strip()
+    sample_count = str(row.get("biometric_update_sample_count") or "").strip()
+    target_count = str(row.get("biometric_update_target_sample_count") or "").strip()
+    count_suffix = (
+        f" ({sample_count}/{target_count})"
+        if sample_count and target_count and target_count != "0"
+        else ""
+    )
+    if status == "updated":
+        return f"Biometric {modality} update accepted{count_suffix}"
+    if status == "complete":
+        return f"Biometric {modality} update complete{count_suffix}"
+    if reason:
+        return f"Biometric {modality} update {status}: {reason}{count_suffix}"
+    return f"Biometric {modality} update {status}{count_suffix}"
 
 
 @dataclass

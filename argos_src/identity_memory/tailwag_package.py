@@ -13,6 +13,7 @@ from uuid import uuid4
 import numpy as np
 
 from argos_src.agent.preference_types import PreferenceSegment
+from argos_src.observability.observability import LatencyLogger
 from .models import (
     BiometricCandidate,
     BiometricEnrollmentResult,
@@ -55,6 +56,7 @@ class TailwagPackageIdentityMemoryClient:
         self._active_started_at = ""
         self._active_segment_text: dict[str, str] = {}
         self._active_person_ids: set[str] = set()
+        self._latency = LatencyLogger("identity_memory")
 
     def close(self) -> None:
         client = self._client_instance
@@ -333,19 +335,47 @@ class TailwagPackageIdentityMemoryClient:
             episode = self._episode_from_segment(segment)
         except Exception:
             logger.exception("Tailwag live-turn episode construction failed")
+            self._emit_live_episode_event(
+                event="tailwag_episode_failed",
+                segment=segment,
+                reason=reason,
+                error="episode_construction_failed",
+            )
             if _is_terminal_flush(reason):
                 self.finish_active_episode(reason=reason)
             return
         if episode is None:
+            self._emit_live_episode_event(
+                event="tailwag_episode_skipped",
+                segment=segment,
+                reason=reason,
+                error="empty_segment",
+            )
             return
         terminal = _is_terminal_flush(reason)
         try:
-            self._client().record_episode(
+            result = self._client().record_episode(
                 episode,
                 extract_memory=self.extract_live_turn_memory,
             )
+            self._emit_live_episode_event(
+                event="tailwag_episode_recorded",
+                segment=segment,
+                reason=reason,
+                episode_id=str(getattr(result, "episode_id", "") or getattr(episode, "id", "") or ""),
+                extract_memory=self.extract_live_turn_memory,
+                result=result,
+            )
         except Exception:
             logger.exception("Tailwag live-turn episode ingestion failed")
+            self._emit_live_episode_event(
+                event="tailwag_episode_failed",
+                segment=segment,
+                reason=reason,
+                episode_id=str(getattr(episode, "id", "") or ""),
+                extract_memory=self.extract_live_turn_memory,
+                error="record_episode_failed",
+            )
         finally:
             if terminal:
                 self.finish_active_episode(reason=reason)
@@ -429,6 +459,54 @@ class TailwagPackageIdentityMemoryClient:
             self._active_started_at = ""
             self._active_segment_text = {}
             self._active_person_ids = set()
+
+    def _emit_live_episode_event(
+        self,
+        *,
+        event: str,
+        segment: PreferenceSegment,
+        reason: str,
+        episode_id: str = "",
+        extract_memory: bool | None = None,
+        result: Any | None = None,
+        error: str = "",
+    ) -> None:
+        turns = tuple(getattr(segment, "turns", ()) or ())
+        last_turn_id = str(getattr(turns[-1], "turn_id", "") or "") if turns else ""
+        memory_results = tuple(getattr(result, "memory_results", ()) or ())
+        created_count = sum(
+            len(tuple(getattr(item, "created_memory_ids", ()) or ()))
+            for item in memory_results
+        )
+        addressed_count = sum(
+            len(tuple(getattr(item, "addressed_memory_ids", ()) or ()))
+            for item in memory_results
+        )
+        supported_count = sum(
+            len(tuple(getattr(item, "supported_memory_ids", ()) or ()))
+            for item in memory_results
+        )
+        error_count = sum(
+            1
+            for item in memory_results
+            if str(getattr(item, "error", "") or "").strip()
+        )
+        self._latency.emit(
+            event=event,
+            req_id=last_turn_id or None,
+            memory_segment_id=getattr(segment, "segment_id", None),
+            memory_person_id=getattr(segment, "person_id", None),
+            memory_turn_count=len(turns),
+            memory_flush_reason=reason,
+            tailwag_episode_id=episode_id or None,
+            tailwag_episode_extract_memory=extract_memory,
+            tailwag_memory_result_count=len(memory_results),
+            tailwag_memory_created_count=created_count,
+            tailwag_memory_addressed_count=addressed_count,
+            tailwag_memory_supported_count=supported_count,
+            tailwag_memory_error_count=error_count,
+            tailwag_episode_error=error or None,
+        )
 
     @staticmethod
     def _person_input(**kwargs: Any) -> Any:

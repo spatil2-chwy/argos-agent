@@ -58,6 +58,16 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
             "biometric_update_target_sample_count=5 | biometric_update_similarity=0.910"
         ),
         _row(
+            "ts=2026-07-07 10:00:00.850 | component=identity_memory | "
+            "event=tailwag_episode_recorded | session_id=s-1 | req_id=rt-1 | "
+            "memory_segment_id=rt-pref | memory_person_id=person-1 | "
+            "memory_turn_count=1 | memory_flush_reason=shutdown | "
+            "tailwag_episode_id=argos:conversation:1 | "
+            "tailwag_episode_extract_memory=True | tailwag_memory_result_count=1 | "
+            "tailwag_memory_created_count=1 | tailwag_memory_addressed_count=0 | "
+            "tailwag_memory_supported_count=0 | tailwag_memory_error_count=0"
+        ),
+        _row(
             "ts=2026-07-07 10:00:01.000 | component=state | event=ignored | "
             "session_id=s-1 | axis=coalescer | trigger=timer_flush | "
             "ignored_reason=recording_active"
@@ -96,11 +106,20 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert identity_stage["details"]["face_score"] == "0.420"
     assert identity_stage["details"]["face_score_margin"] == "0.110"
     biometric_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "biometric_update")
+    assert biometric_stage["title"] == "Biometric voice update accepted (2/5)"
     assert biometric_stage["details"]["biometric_update_modality"] == "voice"
     assert biometric_stage["details"]["biometric_update_accepted"] == "True"
     assert biometric_stage["details"]["biometric_update_sample_count"] == "2"
     assert biometric_stage["details"]["biometric_update_target_sample_count"] == "5"
     assert biometric_stage["details"]["biometric_update_similarity"] == "0.910"
+    tailwag_stage = next(
+        stage for stage in interaction["lifecycle"] if stage["key"] == "tailwag_episode_recorded"
+    )
+    assert tailwag_stage["title"] == "Tailwag episode recorded: 1 memories, 0 errors"
+    assert tailwag_stage["details"]["tailwag_episode_id"] == "argos:conversation:1"
+    assert tailwag_stage["details"]["tailwag_episode_extract_memory"] == "True"
+    assert tailwag_stage["details"]["tailwag_memory_created_count"] == "1"
+    assert tailwag_stage["details"]["tailwag_memory_error_count"] == "0"
     assert interaction["tools"] == {"capture_scene": 1}
     assert interaction["state_by_axis"] == [
         {

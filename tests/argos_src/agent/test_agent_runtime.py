@@ -105,6 +105,14 @@ class _ImmediateExecutor:
         fn()
 
 
+class _RecordingExecutor:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn):
+        self.submitted.append(fn)
+
+
 class _FakeConnector:
     def __init__(self):
         self.messages = []
@@ -2022,6 +2030,32 @@ def test_same_speaker_resume_cancels_idle_preference_flush():
         "rt-pref-resume-1",
         "rt-pref-resume-2",
     ]
+
+
+def test_shutdown_preference_flush_runs_extraction_synchronously():
+    agent = _make_agent()
+    executor = _RecordingExecutor()
+    agent._preference_executor = executor
+    seen = []
+    reasons = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment, reason="": (
+            seen.append(segment),
+            reasons.append(reason),
+        )
+    )
+    turn = _make_turn("rt-pref-shutdown", audio_speaker_id="person-9")
+    turn.user_transcript = "I am reading a new book"
+    turn.assistant_transcript = "that sounds fun"
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert executor.submitted == []
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-9"
+    assert [item.turn_id for item in seen[0].turns] == ["rt-pref-shutdown"]
+    assert reasons == ["shutdown"]
 
 
 def test_unattributed_turn_flushes_active_preference_segment():
