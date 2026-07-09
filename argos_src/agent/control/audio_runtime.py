@@ -595,6 +595,8 @@ class AudioRuntime:
                     audio_pcm16=trimmed_audio_pcm16,
                     primary_face_person_id=primary_face_person_id,
                     visible_face_person_ids=visible_face_person_ids,
+                    face_evidence=face_evidence_fields,
+                    log_fields={**dict(exchange_fields or {}), "req_id": req_id},
                 )
             except Exception:
                 self.logger.exception("Speaker resolution failed req_id=%s", req_id)
@@ -609,6 +611,17 @@ class AudioRuntime:
                 "audio_score_margin": round(float(resolution.margin), 3),
             }
         )
+        face_observation_submitter = getattr(
+            self,
+            "_maybe_submit_adaptive_face_observation",
+            None,
+        )
+        if callable(face_observation_submitter):
+            face_observation_submitter(
+                resolution=resolution,
+                face_evidence_fields=face_evidence_fields,
+                log_fields={**dict(exchange_fields or {}), "req_id": req_id},
+            )
 
         turn = QueuedTurn(
             kind="audio",

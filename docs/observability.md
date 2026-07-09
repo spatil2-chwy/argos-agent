@@ -89,6 +89,21 @@ in raw diagnostics but does not show it in the main people panel because
 face-resolved owners may have `0.000` audio confidence while still being validly
 resolved from face context.
 
+Adaptive biometric update attempts emit `component=identity_memory` with
+`event=adaptive_biometric_update`. When the event is associated with a turn, the
+dashboard shows a "Biometric reference update" lifecycle stage with:
+
+- `biometric_update_modality`
+- `biometric_update_accepted`
+- `biometric_update_status`
+- `biometric_update_reason`
+- `biometric_update_sample_count`
+- `biometric_update_target_sample_count`
+- `biometric_update_similarity`
+
+These fields are not prompt context. They are operator visibility into Tailwag's
+reference-update decision.
+
 When an error terminates an exchange, the terminal row carries generic
 `error_source`, `error_type`, `error_code`, and `error_message` fields when
 available. Realtime server failures also preserve provider-specific

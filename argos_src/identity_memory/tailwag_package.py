@@ -17,6 +17,7 @@ from .models import (
     BiometricCandidate,
     BiometricEnrollmentResult,
     BiometricSearchResult,
+    BiometricUpdateResult,
     OwnerResolution,
     PersonMemoryContext,
     PersonProfile,
@@ -188,6 +189,34 @@ class TailwagPackageIdentityMemoryClient:
         )
         return _enrollment_result(result)
 
+    def observe_face_embedding(
+        self,
+        *,
+        person_id: str,
+        embedding: Any,
+        model: str,
+        evidence: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> BiometricUpdateResult:
+        try:
+            result = self._client().observe_face_embedding(
+                person_id=str(person_id or "").strip(),
+                embedding=_embedding_list(embedding),
+                model=model,
+                evidence=dict(evidence or {}),
+                metadata=dict(metadata or {}),
+            )
+            return _update_result(result)
+        except Exception:
+            logger.exception("Tailwag face observation failed person_id=%s", person_id)
+            return BiometricUpdateResult(
+                accepted=False,
+                status="rejected",
+                reason="tailwag_unavailable",
+                person_id=str(person_id or "").strip(),
+                modality="face",
+            )
+
     def search_voice(self, *, embedding: Any, model: str, limit: int = 2) -> BiometricSearchResult:
         try:
             result = self._client().search_voice(
@@ -218,6 +247,34 @@ class TailwagPackageIdentityMemoryClient:
             consent_status=consent_status,
         )
         return _enrollment_result(result)
+
+    def observe_voice_embedding(
+        self,
+        *,
+        person_id: str,
+        embedding: Any,
+        model: str,
+        evidence: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> BiometricUpdateResult:
+        try:
+            result = self._client().observe_voice_embedding(
+                person_id=str(person_id or "").strip(),
+                embedding=_embedding_list(embedding),
+                model=model,
+                evidence=dict(evidence or {}),
+                metadata=dict(metadata or {}),
+            )
+            return _update_result(result)
+        except Exception:
+            logger.exception("Tailwag voice observation failed person_id=%s", person_id)
+            return BiometricUpdateResult(
+                accepted=False,
+                status="rejected",
+                reason="tailwag_unavailable",
+                person_id=str(person_id or "").strip(),
+                modality="voice",
+            )
 
     def has_voice_reference(self, person_id: str) -> bool:
         try:
@@ -430,6 +487,21 @@ def _enrollment_result(value: Any) -> BiometricEnrollmentResult:
         reason=str(payload.get("reason") or ""),
         person_id=str(payload.get("person_id") or ""),
         reference_id=str(payload.get("reference_id") or ""),
+    )
+
+
+def _update_result(value: Any) -> BiometricUpdateResult:
+    payload = _plain(value)
+    return BiometricUpdateResult(
+        accepted=bool(payload.get("accepted")),
+        status=str(payload.get("status") or "rejected"),
+        reason=str(payload.get("reason") or ""),
+        person_id=str(payload.get("person_id") or ""),
+        reference_id=str(payload.get("reference_id") or ""),
+        modality=str(payload.get("modality") or ""),
+        sample_count=_safe_int(payload.get("sample_count")),
+        target_sample_count=_safe_int(payload.get("target_sample_count")),
+        similarity=float(payload.get("similarity") or 0.0),
     )
 
 

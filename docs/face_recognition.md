@@ -292,6 +292,14 @@ search, thresholds, margin policy, consent filtering, and archived-person
 filtering, then returns the accepted/rejected diagnostics that Argos logs and
 shows on the dashboard.
 
+For adaptive reference updates, the face loop only caches the most recent
+accepted face embedding for each recognized person in process memory. It does not
+write or update biometric storage directly. After speaker resolution, Argos
+offers that cached face observation to Tailwag only when the final owner source
+is `audio_face_agree`. Tailwag decides whether the observation is close enough to
+the current `FaceReference` aggregate and whether the reference has already
+reached its target sample count.
+
 What recognition does not do:
 
 - no blur gate
@@ -299,6 +307,7 @@ What recognition does not do:
 - no contrast gate
 - no frontal-face enrollment policy
 - no 5-frame burst consistency check
+- no prompt-visible biometric update notes
 
 That split is intentional. Enrollment should save only good references.
 Recognition should still recognize a real person when they move, turn slightly, or

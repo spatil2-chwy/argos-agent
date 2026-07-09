@@ -692,6 +692,11 @@ class AgentStateRuntime:
             "face_runner_up_score",
             "face_score_margin",
             "face_margin_threshold",
+            "faces_detected",
+            "recognized_count",
+            "unknown_count",
+            "attentive_recognized_count",
+            "attentive_unknown_count",
         ):
             value = snapshot.get(key)
             if value not in (None, ""):

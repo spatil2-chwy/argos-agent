@@ -7,6 +7,7 @@ from typing import Any
 from .models import (
     BiometricEnrollmentResult,
     BiometricSearchResult,
+    BiometricUpdateResult,
     OwnerResolution,
     PersonMemoryContext,
     PersonProfile,
@@ -53,11 +54,29 @@ class NoopIdentityMemoryClient:
     def enroll_face_reference(self, **kwargs: Any) -> BiometricEnrollmentResult:
         return BiometricEnrollmentResult(False, "rejected", "identity_memory_disabled", str(kwargs.get("person_id") or ""))
 
+    def observe_face_embedding(self, **kwargs: Any) -> BiometricUpdateResult:
+        return BiometricUpdateResult(
+            accepted=False,
+            status="rejected",
+            reason="identity_memory_disabled",
+            person_id=str(kwargs.get("person_id") or ""),
+            modality="face",
+        )
+
     def search_voice(self, **kwargs: Any) -> BiometricSearchResult:
         return BiometricSearchResult(reason="identity_memory_disabled")
 
     def enroll_voice_reference(self, **kwargs: Any) -> BiometricEnrollmentResult:
         return BiometricEnrollmentResult(False, "rejected", "identity_memory_disabled", str(kwargs.get("person_id") or ""))
+
+    def observe_voice_embedding(self, **kwargs: Any) -> BiometricUpdateResult:
+        return BiometricUpdateResult(
+            accepted=False,
+            status="rejected",
+            reason="identity_memory_disabled",
+            person_id=str(kwargs.get("person_id") or ""),
+            modality="voice",
+        )
 
     def has_voice_reference(self, person_id: str) -> bool:
         return False

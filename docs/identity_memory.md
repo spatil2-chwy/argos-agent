@@ -14,7 +14,7 @@ Tailwag owns durable identity and memory:
 
 - Neo4j person profiles
 - Snowflake-backed directory records
-- face and voice biometric references
+- face and voice biometric references, including adaptive reference sample counts
 - owner resolution from face and voice evidence
 - Slack ingestion
 - live episode ingestion and memory extraction
@@ -61,3 +61,27 @@ The LLM does not pass a `person_id`. Argos scopes the search to the current
 resolved turn owner from request context, and the tool returns an error when no
 recognized owner is available. Search itself is read-only from Argos' point of
 view; episode ingestion, extraction, archival, and repair remain Tailwag-owned.
+
+## Adaptive Biometric Updates
+
+Initial face and voice enrollment still work the same way: Argos produces one
+FaceNet or ECAPA embedding and Tailwag stores the first durable reference sample.
+After that, Argos may offer additional embeddings only when ownership evidence is
+cross-modal safe:
+
+- voice observations can be offered when a clean face owner confirms the speaker,
+  or when face and voice agree
+- face observations can be offered only when face and voice agree
+- voice-only ownership does not self-train voice
+- face-only ownership does not self-train face
+
+Argos does not store durable sample counts or update centroids. It only keeps a
+session-local cooldown/completion cache in
+`argos_src/identity_memory/biometric_updates.py` so it does not repeatedly ask
+Tailwag to update a reference that Tailwag already reported as complete.
+
+Tailwag returns update result fields such as `accepted`, `status`, `reason`,
+`sample_count`, `target_sample_count`, and `similarity`. Argos logs those as the
+structured dashboard event `adaptive_biometric_update`. These fields are for
+operators and debugging only; prompt assembly does not include biometric update
+details.

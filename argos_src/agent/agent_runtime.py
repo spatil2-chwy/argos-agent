@@ -64,6 +64,7 @@ from argos_src.agent.control.types import (
 )
 from argos_src.agent.control.watchdog_runtime import TurnWatchdogRuntime
 from argos_src.agent.control.voice_command_runtime import VoiceCommandRuntime
+from argos_src.identity_memory.biometric_updates import AdaptiveBiometricObservation
 from argos_src.observability.state_observer import StructuredStateObserver
 from argos_src.agent.runtime_context import (
     format_current_office_location_block,
@@ -115,6 +116,20 @@ def _human_text_from_text_turn(text: str) -> str:
     return rendered.split(marker, 1)[1].strip()
 
 
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 class RealtimeRobotAgent:
     """Persistent realtime speech-to-speech robot agent runtime."""
 
@@ -143,6 +158,7 @@ class RealtimeRobotAgent:
         supports_navigation: bool = False,
         state_observer: Any = None,
         identity_memory_client: Any = None,
+        adaptive_update_coordinator: Any = None,
     ) -> None:
         self.logger = logging.getLogger("argos.agent_runtime")
         self.scenario_profile = scenario_profile
@@ -155,6 +171,7 @@ class RealtimeRobotAgent:
         self.face_service = face_service
         self.speaker_service = speaker_service
         self.identity_memory_client = identity_memory_client
+        self.adaptive_update_coordinator = adaptive_update_coordinator
         self.memory_context_compiler = memory_context_compiler
         self.preference_extractor = preference_extractor
         self.preference_extraction_enabled = preference_extraction_enabled
@@ -775,6 +792,68 @@ class RealtimeRobotAgent:
             speech_end_unix_s,
         )
 
+    def _maybe_submit_adaptive_face_observation(
+        self,
+        *,
+        resolution: SpeakerResolutionResult,
+        face_evidence_fields: dict[str, Any],
+        log_fields: dict[str, Any] | None = None,
+    ) -> None:
+        coordinator = getattr(self, "adaptive_update_coordinator", None)
+        face_service = getattr(self, "face_service", None)
+        owner_id = str(getattr(resolution, "owner_id", "") or "").strip()
+        if (
+            coordinator is None
+            or face_service is None
+            or not owner_id
+            or str(getattr(resolution, "owner_source", "") or "") != "audio_face_agree"
+        ):
+            return
+        getter = getattr(face_service, "get_recent_face_observation", None)
+        if not callable(getter):
+            return
+        try:
+            observation = getter(owner_id)
+        except Exception:
+            self.logger.debug(
+                "Adaptive face observation unavailable owner_id=%s",
+                owner_id,
+                exc_info=True,
+            )
+            return
+        if not observation:
+            return
+        metadata = dict(observation.get("metadata") or {})
+        evidence = {
+            **dict(face_evidence_fields or {}),
+            "owner_id": owner_id,
+            "owner_source": str(getattr(resolution, "owner_source", "") or ""),
+            "primary_face_person_id": str(face_evidence_fields.get("face_match_person_id") or owner_id),
+            "audio_speaker_id": str(getattr(resolution, "audio_speaker_id", "") or "").strip(),
+            "face_margin": _safe_float(
+                face_evidence_fields.get("face_score_margin") or metadata.get("margin")
+            ),
+            "voice_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "audio_score_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "recognized_count": _safe_int(face_evidence_fields.get("recognized_count")),
+            "unknown_count": _safe_int(face_evidence_fields.get("unknown_count")),
+        }
+        coordinator.submit(
+            AdaptiveBiometricObservation(
+                modality="face",
+                person_id=owner_id,
+                embedding=observation.get("embedding"),
+                model=str(observation.get("model") or "facenet-vggface2"),
+                evidence=evidence,
+                metadata={
+                    **metadata,
+                    "source": "face_loop",
+                    "observed_at": float(observation.get("observed_at", 0.0) or 0.0),
+                },
+                log_fields=dict(log_fields or {}),
+            )
+        )
+
     def _playback_callback(self, outdata: Any, frames: int, time_info: Any, status: Any) -> None:
         self._audio_controller()._playback_callback(outdata, frames, time_info, status)
 
@@ -1050,6 +1129,11 @@ class RealtimeRobotAgent:
                 self.speaker_service.shutdown()
             except Exception:
                 self.logger.exception("Failed to stop speaker service cleanly")
+        if getattr(self, "adaptive_update_coordinator", None) is not None:
+            try:
+                self.adaptive_update_coordinator.close()
+            except Exception:
+                self.logger.exception("Failed to stop adaptive biometric updates cleanly")
         if getattr(self, "memory_context_compiler", None) is not None:
             try:
                 close_memory = getattr(self.memory_context_compiler, "close", None)

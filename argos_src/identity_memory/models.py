@@ -56,6 +56,19 @@ class BiometricEnrollmentResult:
 
 
 @dataclass(frozen=True)
+class BiometricUpdateResult:
+    accepted: bool = False
+    status: str = "rejected"
+    reason: str = ""
+    person_id: str = ""
+    reference_id: str = ""
+    modality: str = ""
+    sample_count: int = 0
+    target_sample_count: int = 0
+    similarity: float = 0.0
+
+
+@dataclass(frozen=True)
 class OwnerResolution:
     audio_speaker_id: str | None
     top_score: float

@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from argos_src.identity_memory.biometric_updates import AdaptiveBiometricObservation
 from argos_src.speaker_recognition.backend import (
     SpeakerEmbeddingBackend,
     SpeechBrainEcapaBackend,
@@ -36,10 +37,12 @@ class SpeakerRecognitionService:
         policy: SpeakerRecognitionPolicy,
         backend: SpeakerEmbeddingBackend | None = None,
         identity_memory_client: Any | None = None,
+        adaptive_update_coordinator: Any | None = None,
     ) -> None:
         self.policy = policy
         self.backend = backend or SpeechBrainEcapaBackend()
         self.identity_memory_client = identity_memory_client
+        self.adaptive_update_coordinator = adaptive_update_coordinator
         self._logged_no_references_notice = False
         logger.info(
             "Speaker recognition initialized backend=%s identity_memory=%s "
@@ -81,6 +84,8 @@ class SpeakerRecognitionService:
         audio_pcm16: bytes,
         primary_face_person_id: str | None,
         visible_face_person_ids: tuple[str, ...] | list[str] | None = None,
+        face_evidence: dict[str, Any] | None = None,
+        log_fields: dict[str, Any] | None = None,
     ) -> SpeakerResolutionResult:
         waveform = np.frombuffer(audio_pcm16 or b"", dtype=np.int16).copy()
         if waveform.size <= 0:
@@ -143,7 +148,7 @@ class SpeakerRecognitionService:
                     "voice_reason": str(getattr(search, "reason", "") or ""),
                 },
             )
-            return SpeakerResolutionResult(
+            resolution = SpeakerResolutionResult(
                 audio_speaker_id=getattr(owner, "audio_speaker_id", None),
                 top_score=float(getattr(owner, "top_score", top_score) or 0.0),
                 runner_up_score=float(getattr(owner, "runner_up_score", runner_up_score) or 0.0),
@@ -153,6 +158,16 @@ class SpeakerRecognitionService:
                 owner_source=str(getattr(owner, "owner_source", "unknown") or "unknown"),  # type: ignore[arg-type]
                 owner_confidence=float(getattr(owner, "owner_confidence", 0.0) or 0.0),
             )
+            self._maybe_submit_adaptive_voice_observation(
+                resolution=resolution,
+                query_embedding=query_embedding,
+                waveform=waveform,
+                primary_face_person_id=primary_face_person_id,
+                visible_face_person_ids=visible_face_person_ids,
+                face_evidence=face_evidence,
+                log_fields=log_fields,
+            )
+            return resolution
         except Exception:
             logger.exception("Tailwag speaker owner resolution failed; falling back to face-only ownership.")
             return resolve_owner_id(
@@ -225,3 +240,74 @@ class SpeakerRecognitionService:
             person_id=str(person_id or "").strip(),
             attempt_kind=attempt_kind,  # type: ignore[arg-type]
         )
+
+    def _maybe_submit_adaptive_voice_observation(
+        self,
+        *,
+        resolution: SpeakerResolutionResult,
+        query_embedding: Any,
+        waveform: np.ndarray,
+        primary_face_person_id: str | None,
+        visible_face_person_ids: tuple[str, ...] | list[str] | None,
+        face_evidence: dict[str, Any] | None,
+        log_fields: dict[str, Any] | None,
+    ) -> None:
+        coordinator = getattr(self, "adaptive_update_coordinator", None)
+        owner_id = str(getattr(resolution, "owner_id", "") or "").strip()
+        owner_source = str(getattr(resolution, "owner_source", "") or "").strip()
+        if coordinator is None or not owner_id or owner_source not in {"face", "audio_face_agree"}:
+            return
+        if enrollment_rejection_reason(self.policy, audio_pcm16=waveform):
+            return
+        if not self.has_reference(owner_id):
+            return
+        stats = clip_stats(waveform)
+        face_payload = dict(face_evidence or {})
+        visible_ids = tuple(
+            rendered
+            for rendered in (
+                str(person_id or "").strip()
+                for person_id in (visible_face_person_ids or ())
+            )
+            if rendered
+        )
+        primary_face_id = str(primary_face_person_id or "").strip()
+        evidence = {
+            **face_payload,
+            "owner_id": owner_id,
+            "owner_source": owner_source,
+            "primary_face_person_id": primary_face_id,
+            "audio_speaker_id": str(getattr(resolution, "audio_speaker_id", "") or "").strip(),
+            "voice_score": float(getattr(resolution, "top_score", 0.0) or 0.0),
+            "voice_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "audio_score_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "visible_face_count": len(visible_ids),
+            "recognized_count": _safe_int(
+                face_payload.get("recognized_count"),
+                default=len(set(visible_ids)),
+            ),
+            "unknown_count": _safe_int(face_payload.get("unknown_count")),
+        }
+        coordinator.submit(
+            AdaptiveBiometricObservation(
+                modality="voice",
+                person_id=owner_id,
+                embedding=query_embedding,
+                model=str(getattr(self.backend, "model_name", self.policy.backend) or self.policy.backend),
+                evidence=evidence,
+                metadata={
+                    "query_duration_s": stats.duration_s,
+                    "rms_level": stats.rms_level,
+                    "clipped_fraction": stats.clipped_fraction,
+                    "source": "turn_audio",
+                },
+                log_fields=dict(log_fields or {}),
+            )
+        )
+
+
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)

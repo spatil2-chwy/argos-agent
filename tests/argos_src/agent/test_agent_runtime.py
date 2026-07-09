@@ -436,12 +436,16 @@ class _FakeSpeakerService:
         audio_pcm16,
         primary_face_person_id,
         visible_face_person_ids,
+        face_evidence=None,
+        log_fields=None,
     ):
         self.resolve_calls.append(
             {
                 "audio_pcm16": audio_pcm16,
                 "primary_face_person_id": primary_face_person_id,
                 "visible_face_person_ids": tuple(visible_face_person_ids or ()),
+                "face_evidence": dict(face_evidence or {}),
+                "log_fields": dict(log_fields or {}),
             }
         )
         owner_id = str(primary_face_person_id or "").strip() or None

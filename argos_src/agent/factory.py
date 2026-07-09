@@ -282,6 +282,7 @@ def create_agent(
     identity_memory_client = None
     memory_provider = None
     memory_context_compiler = None
+    adaptive_update_coordinator = None
     if scenario_profile.identity_memory.enabled and (
         needs_face_runtime
         or scenario_profile.identity_memory.record_live_episodes
@@ -305,6 +306,15 @@ def create_agent(
             )
         memory_provider = identity_memory_client
         memory_context_compiler = identity_memory_client
+        try:
+            from argos_src.identity_memory import AdaptiveBiometricUpdateCoordinator
+
+            adaptive_update_coordinator = AdaptiveBiometricUpdateCoordinator(
+                identity_memory_client,
+                logger_=logger,
+            )
+        except ImportError:
+            logger.debug("Adaptive biometric update coordinator unavailable", exc_info=True)
 
     if needs_face_runtime:
         from argos_src.face_recognition.attention_gate import (
@@ -382,6 +392,7 @@ def create_agent(
         speaker_service = SpeakerRecognitionService(
             policy=scenario_profile.speaker_recognition.policy,
             identity_memory_client=identity_memory_client,
+            adaptive_update_coordinator=adaptive_update_coordinator,
         )
         try:
             speaker_service.prewarm()
@@ -464,6 +475,7 @@ def create_agent(
         face_service=face_service,
         speaker_service=speaker_service,
         identity_memory_client=identity_memory_client,
+        adaptive_update_coordinator=adaptive_update_coordinator,
         memory_context_compiler=memory_context_compiler,
         preference_extractor=preference_extractor,
         preference_extraction_enabled=(

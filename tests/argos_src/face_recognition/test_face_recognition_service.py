@@ -726,6 +726,12 @@ def test_build_scene_state_uses_tailwag_match_metadata(monkeypatch):
     assert persons[0].recognition_status == "accepted"
     assert persons[0].recognition_reason == "matched"
     assert persons[0].recognition_threshold >= 0.0
+    observation = service.get_recent_face_observation("person-1", max_age_sec=999.0)
+    assert observation is not None
+    assert observation["person_id"] == "person-1"
+    assert observation["model"] == "facenet-vggface2"
+    np.testing.assert_allclose(observation["embedding"], np.asarray([0.1, 0.2, 0.3], dtype=np.float32))
+    assert observation["metadata"]["score"] == 0.93
 
     persons, _, _, _ = module.FaceRecognitionService._build_scene_state(
         service,

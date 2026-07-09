@@ -226,6 +226,8 @@ class FaceRecognitionService:
         self._attentive_unknown_stability_frames = 0
         self._presence_subscribers: list[Callable[[dict[str, Any]], None]] = []
         self._presence_subscribers_lock = threading.Lock()
+        self._recent_face_observations: dict[str, dict[str, Any]] = {}
+        self._recent_face_observations_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
@@ -1069,6 +1071,26 @@ class FaceRecognitionService:
                 )
             )
             face["recognized_person_id"] = pid
+            self._remember_recent_face_observation(
+                person_id=pid,
+                embedding=face.get("embedding"),
+                metadata={
+                    "score": float(recognition.get("similarity", match["similarity"]) or 0.0),
+                    "runner_up_score": float(
+                        recognition.get("runner_up_similarity", 0.0) or 0.0
+                    ),
+                    "margin": float(recognition.get("margin", 0.0) or 0.0),
+                    "threshold": float(recognition.get("threshold", 0.0) or 0.0),
+                    "margin_threshold": float(
+                        recognition.get("margin_threshold", 0.0) or 0.0
+                    ),
+                    "bbox_area": int(bbox_area),
+                    "center_distance": float(center_distance),
+                    "depth_m": face.get("depth_m"),
+                    "attentive": bool(attention.attentive),
+                    "attention_confidence": float(attention.confidence),
+                },
+            )
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
@@ -2315,6 +2337,59 @@ class FaceRecognitionService:
     def get_presence_snapshot(self) -> dict[str, Any]:
         """Thread-safe read of canonical face presence state."""
         return self._presence_cache.get_presence_snapshot()
+
+    def get_recent_face_observation(
+        self,
+        person_id: str,
+        *,
+        max_age_sec: float = 8.0,
+    ) -> dict[str, Any] | None:
+        """Return the latest accepted face embedding for a person in this session."""
+        rendered = str(person_id or "").strip()
+        if not rendered:
+            return None
+        now = time.time()
+        if not hasattr(self, "_recent_face_observations_lock"):
+            self._recent_face_observations_lock = threading.Lock()
+        if not hasattr(self, "_recent_face_observations"):
+            self._recent_face_observations = {}
+        with self._recent_face_observations_lock:
+            observation = dict(self._recent_face_observations.get(rendered) or {})
+        if not observation:
+            return None
+        observed_at = float(observation.get("observed_at", 0.0) or 0.0)
+        if max_age_sec > 0.0 and (now - observed_at) > float(max_age_sec):
+            return None
+        return observation
+
+    def _remember_recent_face_observation(
+        self,
+        *,
+        person_id: str,
+        embedding: Any,
+        metadata: dict[str, Any],
+    ) -> None:
+        rendered = str(person_id or "").strip()
+        if not rendered or embedding is None:
+            return
+        try:
+            vector = np.asarray(embedding, dtype=np.float32).reshape(-1).copy()
+        except Exception:
+            return
+        if vector.size <= 0:
+            return
+        if not hasattr(self, "_recent_face_observations_lock"):
+            self._recent_face_observations_lock = threading.Lock()
+        if not hasattr(self, "_recent_face_observations"):
+            self._recent_face_observations = {}
+        with self._recent_face_observations_lock:
+            self._recent_face_observations[rendered] = {
+                "person_id": rendered,
+                "embedding": vector,
+                "model": "facenet-vggface2",
+                "metadata": dict(metadata or {}),
+                "observed_at": time.time(),
+            }
 
 
 def _person_id_from_profile(name: str, profile: dict[str, Any]) -> str:

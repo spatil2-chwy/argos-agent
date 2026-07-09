@@ -50,6 +50,14 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
             "owner_source=audio | session_id=s-1 | req_id=rt-1"
         ),
         _row(
+            "ts=2026-07-07 10:00:00.760 | component=identity_memory | "
+            "event=adaptive_biometric_update | session_id=s-1 | req_id=rt-1 | "
+            "biometric_update_modality=voice | biometric_update_person_id=person-1 | "
+            "biometric_update_accepted=True | biometric_update_status=updated | "
+            "biometric_update_reason=updated | biometric_update_sample_count=2 | "
+            "biometric_update_target_sample_count=5 | biometric_update_similarity=0.910"
+        ),
+        _row(
             "ts=2026-07-07 10:00:01.000 | component=state | event=ignored | "
             "session_id=s-1 | axis=coalescer | trigger=timer_flush | "
             "ignored_reason=recording_active"
@@ -87,6 +95,12 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert identity_stage["details"]["face_match_reason"] == "below_threshold"
     assert identity_stage["details"]["face_score"] == "0.420"
     assert identity_stage["details"]["face_score_margin"] == "0.110"
+    biometric_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "biometric_update")
+    assert biometric_stage["details"]["biometric_update_modality"] == "voice"
+    assert biometric_stage["details"]["biometric_update_accepted"] == "True"
+    assert biometric_stage["details"]["biometric_update_sample_count"] == "2"
+    assert biometric_stage["details"]["biometric_update_target_sample_count"] == "5"
+    assert biometric_stage["details"]["biometric_update_similarity"] == "0.910"
     assert interaction["tools"] == {"capture_scene": 1}
     assert interaction["state_by_axis"] == [
         {
