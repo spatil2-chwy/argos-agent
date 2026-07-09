@@ -3,14 +3,7 @@
 from __future__ import annotations
 
 import queue
-import re
-import threading
 from typing import Any
-
-
-DEFAULT_SUBTITLE_MAX_CHARS = 350
-DEFAULT_SUBTITLE_RECENT_SENTENCES = 3
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 class DisplayController:
@@ -48,16 +41,15 @@ class DisplayController:
         rendered = str(text or "").strip()
         if not rendered:
             return
-        payload = {
-            "text": rendered,
-            "duration_ms": int(duration_ms),
-        }
-        with self._subtitle_lock():
-            host._display_pending_subtitle = payload
-            if bool(getattr(host, "_display_subtitle_queued", False)):
-                return
-            host._display_subtitle_queued = True
-        host._display_queue.put(("subtitle_latest", None))
+        host._display_queue.put(
+            (
+                "subtitle",
+                {
+                    "text": rendered,
+                    "duration_ms": int(duration_ms),
+                },
+            )
+        )
 
     def worker_loop(self) -> None:
         host = self._host
@@ -73,68 +65,18 @@ class DisplayController:
                 if kind == "mode":
                     self.apply_mode(display, str(payload or ""))
                 elif kind == "subtitle" and isinstance(payload, dict):
-                    self._apply_subtitle(display, payload)
-                elif kind == "subtitle_latest":
-                    payload = self._take_latest_subtitle()
-                    if payload is not None:
-                        self._apply_subtitle(display, payload)
+                    display.show_subtitle(
+                        str(payload.get("text", "") or ""),
+                        duration_ms=int(payload.get("duration_ms", 5000) or 5000),
+                    )
             except Exception:
                 host.logger.debug("Display update failed", exc_info=True)
             finally:
                 host._display_queue.task_done()
 
     @staticmethod
-    def subtitle_window(
-        text: str,
-        *,
-        max_chars: int = DEFAULT_SUBTITLE_MAX_CHARS,
-        recent_sentences: int = DEFAULT_SUBTITLE_RECENT_SENTENCES,
-    ) -> str:
-        rendered = " ".join(str(text or "").split())
-        if len(rendered) <= max_chars:
-            return rendered
-        sentences = [
-            sentence.strip()
-            for sentence in _SENTENCE_END_RE.split(rendered)
-            if sentence.strip()
-        ]
-        if len(sentences) > 1:
-            window = sentences[-max(1, int(recent_sentences)) :]
-            while len(window) > 1:
-                candidate = " ".join(window)
-                if len(candidate) <= max_chars:
-                    return candidate
-                window = window[1:]
-            rendered = window[0]
-        trimmed = rendered[-max_chars:].strip()
-        if " " in trimmed:
-            trimmed = trimmed.split(" ", 1)[1]
-        return trimmed.strip()
-
-    def _subtitle_lock(self) -> threading.Lock:
-        host = self._host
-        lock = getattr(host, "_display_subtitle_lock", None)
-        if lock is None:
-            lock = threading.Lock()
-            host._display_subtitle_lock = lock
-            host._display_pending_subtitle = None
-            host._display_subtitle_queued = False
-        return lock
-
-    def _take_latest_subtitle(self) -> dict[str, Any] | None:
-        host = self._host
-        with self._subtitle_lock():
-            payload = getattr(host, "_display_pending_subtitle", None)
-            host._display_pending_subtitle = None
-            host._display_subtitle_queued = False
-        return payload if isinstance(payload, dict) else None
-
-    @staticmethod
-    def _apply_subtitle(display: Any, payload: dict[str, Any]) -> None:
-        display.show_subtitle(
-            str(payload.get("text", "") or ""),
-            duration_ms=int(payload.get("duration_ms", 5000) or 5000),
-        )
+    def subtitle_window(text: str) -> str:
+        return " ".join(str(text or "").split())
 
     @staticmethod
     def apply_mode(display: Any, mode: str) -> None:

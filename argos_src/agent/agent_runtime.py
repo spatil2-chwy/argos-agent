@@ -17,10 +17,7 @@ from uuid import uuid4
 import websocket
 
 from argos_src.agent.control.coalescer import EventCoalescer
-from argos_src.agent.control.display_controller import (
-    DEFAULT_SUBTITLE_MAX_CHARS,
-    DisplayController,
-)
+from argos_src.agent.control.display_controller import DisplayController
 from argos_src.agent.control.engagement_runtime import EngagementStateMachine
 from argos_src.agent.preference_segments import _PreferenceSegmentCoordinator
 from argos_src.agent.control.audio_runtime import (
@@ -268,9 +265,6 @@ class RealtimeRobotAgent:
         self._display_thread: Optional[threading.Thread] = None
         self._display_mode_lock = threading.Lock()
         self._display_mode = ""
-        self._display_subtitle_lock = threading.Lock()
-        self._display_pending_subtitle: Optional[dict[str, Any]] = None
-        self._display_subtitle_queued = False
         self._resample_state: Any = None
         self._wake_window_until = 0.0
         self._input_suppressed_until_s = 0.0
@@ -1005,12 +999,8 @@ class RealtimeRobotAgent:
         )
 
     @staticmethod
-    def _display_subtitle_window(
-        text: str,
-        *,
-        max_chars: int = DEFAULT_SUBTITLE_MAX_CHARS,
-    ) -> str:
-        return DisplayController.subtitle_window(text, max_chars=max_chars)
+    def _display_subtitle_window(text: str) -> str:
+        return DisplayController.subtitle_window(text)
 
     def _display_worker_loop(self) -> None:
         self._display_controller_runtime().worker_loop()

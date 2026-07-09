@@ -707,6 +707,12 @@ def test_forced_idle_display_mode_requeues_even_when_cached():
     assert agent._display_queue.get_nowait() == ("mode", "idle")
 
 
+def test_display_subtitle_window_has_no_character_limit():
+    text = " ".join(f"word{i}" for i in range(80))
+
+    assert realtime_mod.RealtimeRobotAgent._display_subtitle_window(text) == text
+
+
 def test_superseded_turn_is_canceled_and_old_audio_is_ignored():
     agent = _make_agent()
     old_turn = _make_turn("rt-old")
@@ -1124,6 +1130,46 @@ def test_output_audio_and_transcript_resolve_by_response_and_item_id():
     assert turn.assistant_item_id == "asst-1"
     assert turn.assistant_transcript == "hi"
     assert agent.engagement.output_started == [(turn.req_id, "resp-1")]
+
+
+def test_response_done_flushes_complete_audio_transcript_to_display():
+    agent = _make_agent()
+    agent.display_runtime = object()
+    agent._display_queue = queue.Queue()
+    turn = _make_turn("rt-final-display")
+    turn.response_id = "resp-final-display"
+    turn.audio_started = True
+    turn.assistant_transcript = "partial"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, turn.response_id)
+
+    agent._handle_response_done(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-final-display",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-final-display",
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "partial transcript completed",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert turn.assistant_transcript == "partial transcript completed"
+    assert agent._display_queue.get_nowait() == (
+        "subtitle",
+        {"text": "partial transcript completed", "duration_ms": 5000},
+    )
 
 
 def test_owner_turn_is_requested_when_audio_turn_commits():

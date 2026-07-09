@@ -498,8 +498,17 @@ class ServerEventRuntime:
             response_id=response_id or None,
             **self._exchange_log_fields(turn),
         )
-        if not turn.assistant_transcript:
-            turn.assistant_transcript = self._transcript_from_response(response)
+        final_transcript = self._transcript_from_response(response)
+        if final_transcript and (
+            not turn.assistant_transcript
+            or len(final_transcript) >= len(turn.assistant_transcript.strip())
+        ):
+            turn.assistant_transcript = final_transcript
+        if turn.audio_started and turn.assistant_transcript.strip():
+            self._show_display_subtitle_async(
+                self._display_subtitle_window(turn.assistant_transcript),
+                duration_ms=5000,
+            )
         output_items = response.get("output", []) or []
         for output_item in output_items:
             item_id = str(output_item.get("id", "") or "").strip()
