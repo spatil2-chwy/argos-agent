@@ -98,7 +98,9 @@ Recording is the only state mode that sends a status subtitle; assistant
 transcript subtitles still stream from the spoken response.
 
 Display updates are queued through a background worker in `RealtimeRobotAgent`.
-HTTP calls do not run inside the microphone callback.
+Subtitle deltas coalesce to the latest pending subtitle so the screen does not
+fall behind on stale partial transcript text. HTTP calls do not run inside the
+microphone callback.
 
 ## Face Enrollment Review
 
