@@ -273,11 +273,7 @@ class AudioRuntime:
         interaction = self.engagement.snapshot()
         interaction_state = interaction.state
         playback_guard_active = self._input_playback_guard_active(now_s=now)
-        if (interaction_state == "speaking" or playback_guard_active) and wake_detected:
-            self.engagement.on_face_or_wake()
-            self.interrupt_current_response(reason="wake_word_interrupt")
-            return
-        if playback_guard_active:
+        if interaction_state == "speaking" or playback_guard_active:
             return
 
         with self._recording_lock:

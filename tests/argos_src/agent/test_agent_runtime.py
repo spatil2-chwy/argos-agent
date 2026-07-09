@@ -2319,6 +2319,52 @@ def test_closed_admission_clears_passive_alert_display():
     assert agent._display_mode == "idle"
 
 
+def test_wake_word_during_speaking_does_not_interrupt_response():
+    import numpy as np
+
+    agent = _make_agent()
+    agent.realtime_profile.input_sample_rate = 16000
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    agent._resample_state = None
+    agent._input_suppressed_until_s = 0.0
+    agent._playback_req_id = ""
+    agent._recording_active = False
+    agent._vad = lambda *_args, **_kwargs: (True, {})
+    agent._wake_word = lambda *_args, **_kwargs: (True, {})
+    interruptions = []
+    agent.interrupt_current_response = lambda *, reason: interruptions.append(reason)
+
+    class _SpeakingEngagement:
+        def __init__(self):
+            self.face_or_wake_calls = 0
+
+        def snapshot(self):
+            return SimpleNamespace(
+                state="speaking",
+                req_id="rt-speaking",
+                entered_at=0.0,
+                expires_at=None,
+                nav_active=False,
+                nav_source="",
+                nav_interruptible=True,
+                nav_passive_listen_allowed=True,
+            )
+
+        def on_face_or_wake(self):
+            self.face_or_wake_calls += 1
+
+    engagement = _SpeakingEngagement()
+    agent.engagement = engagement
+    chunk = np.zeros((1600, 1), dtype=np.int16)
+
+    agent._capture_callback(chunk, 1600, None, None)
+
+    assert interruptions == []
+    assert engagement.face_or_wake_calls == 0
+    assert agent._recording_active is False
+
+
 def test_closed_admission_does_not_clear_thinking_display():
     agent = _make_agent()
     agent.display_runtime = object()

@@ -367,7 +367,7 @@ COOLDOWN
 ### What Actually Triggers the Transitions
 
 - `on_face_or_wake()`
-  Moves `IDLE -> ALERT` for proactive face attention. If already speaking and a wake word is heard, it is used together with interruption logic.
+  Moves `IDLE -> ALERT` for proactive face attention. Wake words heard while the robot is already speaking are suppressed by the audio guard.
 - `on_human_input(req_id)`
   Moves `IDLE` / `ALERT` / `COOLDOWN -> ENGAGED`.
 - `on_agent_output_started(req_id, stream_id)`
@@ -418,11 +418,11 @@ Interruption is owned locally, not by the model.
 
 Common triggers:
 
-- wake word while the robot is already speaking
 - external `/voice_commands` message with `stop`
 
 The audio callback also has playback/echo guards so assistant audio does not
-become a new human turn. Wake-word barge-in is the intentional exception.
+become a new human turn. Wake-word barge-in is disabled while assistant speech
+or playback guard is active.
 
 `interrupt_current_response(...)` calls `_terminate_turn(...)` with:
 
