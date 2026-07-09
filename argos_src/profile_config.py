@@ -151,7 +151,6 @@ class IdentityMemoryProfile:
     retention_class: str = "standard"
     record_live_episodes: bool = True
     extract_live_turn_memory: bool = True
-    timeout_ms: int = 750
 
 
 @dataclass(frozen=True)
@@ -1347,9 +1346,6 @@ def _parse_identity_memory(data: dict[str, Any]) -> IdentityMemoryProfile:
     place_room_id = (_pop_optional_str(data, "place_room_id", default="realtime") or "realtime").strip()
     if not place_room_id:
         raise ProfileValidationError("identity_memory.place_room_id must not be empty.")
-    timeout_ms = _pop_int(data, "timeout_ms", default=750)
-    if timeout_ms <= 0:
-        raise ProfileValidationError("identity_memory.timeout_ms must be positive.")
     profile = IdentityMemoryProfile(
         enabled=_pop_bool(data, "enabled", default=True),
         backend=backend,
@@ -1358,7 +1354,6 @@ def _parse_identity_memory(data: dict[str, Any]) -> IdentityMemoryProfile:
         retention_class=retention_class,
         record_live_episodes=_pop_bool(data, "record_live_episodes", default=True),
         extract_live_turn_memory=_pop_bool(data, "extract_live_turn_memory", default=True),
-        timeout_ms=timeout_ms,
     )
     _reject_unknown(data, "identity_memory")
     return profile

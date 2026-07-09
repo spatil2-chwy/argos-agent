@@ -44,13 +44,7 @@ tools:
 
 identity_memory:
   enabled: true
-  backend: tailwag_package
   site_code: BOS3
-  place_room_id: realtime
-  retention_class: standard
-  record_live_episodes: true
-  extract_live_turn_memory: true
-  timeout_ms: 750
 
 knowledge_bases:
   - kind: whoami_query

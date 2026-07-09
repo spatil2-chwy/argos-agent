@@ -387,6 +387,20 @@ def test_identity_memory_rejects_unknown_backend():
         )
 
 
+def test_identity_memory_rejects_timeout_ms():
+    with pytest.raises(ProfileValidationError, match="identity_memory"):
+        _parse_profile(
+            {
+                "name": "identity-memory-timeout",
+                "identity_memory": {
+                    "timeout_ms": 750,
+                },
+            },
+            profile_path=Path("/tmp/identity-memory-timeout.yaml"),
+            framework_config={},
+        )
+
+
 def test_legacy_employee_directory_section_is_rejected():
     with pytest.raises(ProfileValidationError, match="employee_directory"):
         _parse_profile(

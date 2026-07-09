@@ -23,19 +23,26 @@ Tailwag owns durable identity and memory:
 Argos imports Tailwag only through `argos_src.identity_memory.tailwag_package`.
 Everything else uses the `IdentityMemoryClient` protocol or the noop fallback.
 
-The shipped profile section is:
+The shipped profile section keeps only the normal operational knobs:
 
 ```yaml
 identity_memory:
   enabled: true
-  backend: tailwag_package
   site_code: BOS3
-  place_room_id: realtime
-  retention_class: standard
-  record_live_episodes: true
-  extract_live_turn_memory: true
-  timeout_ms: 750
 ```
+
+The remaining identity-memory profile keys are advanced switches with defaults:
+
+- `backend`: defaults to `tailwag_package`; set to `noop` only for disabled
+  identity-memory test or fallback runs.
+- `place_room_id`: defaults to `realtime`; attached to Tailwag live episodes as
+  room metadata.
+- `retention_class`: defaults to `standard`; attached to Tailwag live episodes
+  for Tailwag-owned retention policy.
+- `record_live_episodes`: defaults to `true`; controls whether resolved live
+  turn segments are sent to Tailwag as episodes.
+- `extract_live_turn_memory`: defaults to `true`; controls whether Tailwag
+  extracts semantic memory from recorded live episodes.
 
 Removed Argos sections include `identity_store`, `employee_directory`, `memory`,
 and `slack_memory`. Face and speaker recognition no longer accept local database
