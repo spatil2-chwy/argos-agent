@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 from argos_src.agent.realtime_turns import FrozenTurnContext
 from argos_src.face_recognition.models import PersonContext
-from argos_src.identity_memory.prompting import format_identity_profile_lines
 
 
 class TurnContextRuntime:
@@ -38,6 +37,9 @@ class TurnContextRuntime:
         except Exception:
             host.logger.exception("Failed to compile memory context for %s", person_id)
             return person
+        directory_lines = tuple(getattr(context, "directory_profile_lines", ()) or ())
+        if directory_lines:
+            person.directory_profile_lines = directory_lines
         person.memory_profile_lines = tuple(context.profile_lines or ())
         person.potential_followups = tuple(context.followup_lines or ())
         if context.preferred_language:
@@ -85,7 +87,7 @@ class TurnContextRuntime:
                 confidence=1.0,
                 bbox_area=0,
                 timestamp=time.time(),
-                directory_profile_lines=directory_lines or format_identity_profile_lines(metadata),
+                directory_profile_lines=directory_lines,
                 memory_profile_lines=(),
                 preferred_language="",
                 potential_followups=(),

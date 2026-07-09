@@ -16,9 +16,6 @@ class _IdentityMemory:
     def __init__(self):
         self.enrollments = []
 
-    def record_encounter(self, **_kwargs):
-        return None
-
     def enroll_face_reference(self, **kwargs):
         self.enrollments.append(kwargs)
         return type("Enrollment", (), {"saved": True, "reason": "saved"})()

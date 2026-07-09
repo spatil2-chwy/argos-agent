@@ -42,7 +42,7 @@ class ResolveEmployeeIdentityTool(BaseTool):
         "directory_unavailable, or invalid_input, with up to 3 minimal candidate profiles."
     )
     args_schema: Type[BaseModel] = _ResolveEmployeeIdentityInput
-    employee_directory_service: Any = Field(exclude=True)
+    identity_memory_client: Any = Field(exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
@@ -53,7 +53,7 @@ class ResolveEmployeeIdentityTool(BaseTool):
         shared_last_name: str,
         shared_name: str = "",
     ) -> str:
-        result = self.employee_directory_service.resolve_identity(
+        result = self.identity_memory_client.resolve_identity(
             shared_first_name=shared_first_name,
             shared_last_name=shared_last_name,
             shared_name=shared_name,
@@ -76,9 +76,9 @@ class ResolveEmployeeIdentityTool(BaseTool):
 
 
 def get_resolve_employee_identity_tool(
-    employee_directory_service: Any,
+    identity_memory_client: Any,
 ) -> BaseTool:
-    """Return the employee lookup tool bound to the active directory service."""
+    """Return the employee lookup tool bound to the active identity-memory client."""
     return ResolveEmployeeIdentityTool(
-        employee_directory_service=employee_directory_service,
+        identity_memory_client=identity_memory_client,
     )

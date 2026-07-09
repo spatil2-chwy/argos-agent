@@ -120,14 +120,6 @@ def format_people_context(
         if name not in visible_other_names:
             visible_other_names.append(name)
 
-    if audio_speaker_id and str(audio_speaker_id or "").strip() == resolved_owner_id:
-        if speaker_visible:
-            lines.append("  Speaker resolution: voice match.")
-        else:
-            lines.append("  Speaker resolution: voice match; not visible right now.")
-    elif owner_source == "face":
-        lines.append("  Speaker resolution: visible face owner.")
-
     if visible_other_names or unknown_count > 0:
         lines.append("")
         lines.append("[OTHER PEOPLE IN VIEW]")

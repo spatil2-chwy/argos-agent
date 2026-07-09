@@ -2400,6 +2400,7 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
         def person_context(self, person_id, **_kwargs):
             calls.append(person_id)
             return SimpleNamespace(
+                directory_profile_lines=(f"directory for {person_id}",),
                 profile_lines=(f"memory for {person_id}",),
                 followup_lines=(f"followup for {person_id}",),
                 preferred_language=f"language-{person_id}",
@@ -2453,7 +2454,7 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
     assert alice.directory_profile_lines == ("title: Engineer",)
     assert alice.memory_profile_lines == ()
     assert alice.potential_followups == ()
-    assert bob.directory_profile_lines == ("title: PM",)
+    assert bob.directory_profile_lines == ("directory for person-2",)
     assert bob.memory_profile_lines == ("memory for person-2",)
     assert bob.potential_followups == ("followup for person-2",)
     assert bob.preferred_language == "language-person-2"
@@ -2687,7 +2688,7 @@ def test_people_context_reports_audio_face_mismatch():
 
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- Bob (met once before)" in rendered
-    assert "Speaker resolution: voice match." in rendered
+    assert "Speaker resolution:" not in rendered
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
     assert "[talking to you]" not in rendered
@@ -2788,7 +2789,7 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
     assert "About: preferred name: Bobby" in rendered
 
 
-def test_people_context_reports_audio_face_agreement():
+def test_people_context_omits_audio_face_agreement_logistics():
     persons = [
         SimpleNamespace(
             person_id="person-1",
@@ -2819,11 +2820,11 @@ def test_people_context_reports_audio_face_agreement():
 
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- Alice (met 2 times)" in rendered
-    assert "Speaker resolution: voice match." in rendered
+    assert "Speaker resolution:" not in rendered
     assert "primary visible person" not in rendered
 
 
-def test_people_context_reports_offscreen_audio_speaker():
+def test_people_context_omits_offscreen_audio_speaker_logistics():
     persons = [
         SimpleNamespace(
             person_id="person-1",
@@ -2862,7 +2863,7 @@ def test_people_context_reports_offscreen_audio_speaker():
 
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- Bob (met once before)" in rendered
-    assert "Speaker resolution: voice match; not visible right now." in rendered
+    assert "Speaker resolution:" not in rendered
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
     assert "Attribute this turn to Bob, not Alice." not in rendered
@@ -2910,7 +2911,7 @@ def test_people_context_falls_back_to_owner_id_when_owner_person_missing():
 
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- person-7 (first time; not visible)" in rendered
-    assert "Speaker resolution: voice match; not visible right now." in rendered
+    assert "Speaker resolution:" not in rendered
 
 
 def test_people_context_emits_preferred_language_directive():

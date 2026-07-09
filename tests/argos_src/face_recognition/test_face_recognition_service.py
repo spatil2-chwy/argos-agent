@@ -135,16 +135,11 @@ class _FakeIdentityMemory:
         self.search_result = search_result or _FakeBiometricSearchResult()
         self.person_id = person_id
         self.searches = []
-        self.encounters = []
         self.enrollments = []
 
     def search_face(self, **kwargs):
         self.searches.append(kwargs)
         return self.search_result
-
-    def record_encounter(self, **kwargs):
-        self.encounters.append(kwargs)
-        return True
 
     def enroll_face_reference(self, **kwargs):
         self.enrollments.append(kwargs)
@@ -692,7 +687,7 @@ def test_loop_tick_emits_timing_metric(monkeypatch):
     assert service._latest_loop_frame is not None
 
 
-def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
+def test_build_scene_state_uses_tailwag_match_metadata(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     service._presence_cache = module.FacePresenceCache(
@@ -700,32 +695,20 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
         interaction_dedupe_sec=60.0,
     )
 
-    interaction_state = {"count": 2}
-    update_calls: list[str] = []
-
     def recognize_face_match(_face_payload):
         return {
             "person_id": "person-1",
             "name": "Alex",
             "similarity": 0.93,
             "metadata": {
-                "interaction_count": interaction_state["count"],
+                "interaction_count": 2,
                 "last_seen": "before",
+                "directory_profile_lines": ("title: Engineer",),
             },
         }
 
-    def record_encounter(**kwargs):
-        person_id = kwargs["person_id"]
-        update_calls.append(person_id)
-        interaction_state["count"] += 1
-        return {
-            "display_name": "Alex",
-            "interaction_count": interaction_state["count"],
-            "last_seen": f"count-{interaction_state['count']}",
-        }
-
     service._recognize_face_match = recognize_face_match
-    service.identity_memory_client = types.SimpleNamespace(record_encounter=record_encounter)
+    service.identity_memory_client = types.SimpleNamespace()
 
     persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._build_scene_state(
         service,
@@ -734,12 +717,12 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
         now=100.0,
     )
 
-    assert update_calls == ["person-1"]
     assert unknown_count == 0
     assert current_ids == {"person-1"}
     assert analysis.attention_target is not None
     assert analysis.attention_target.person_id == "person-1"
-    assert persons[0].interaction_count == 3
+    assert persons[0].interaction_count == 2
+    assert persons[0].directory_profile_lines == ("title: Engineer",)
     assert persons[0].recognition_status == "accepted"
     assert persons[0].recognition_reason == "matched"
     assert persons[0].recognition_threshold >= 0.0
@@ -751,8 +734,7 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
         now=101.0,
     )
 
-    assert update_calls == ["person-1"]
-    assert persons[0].interaction_count == 3
+    assert persons[0].interaction_count == 2
 
     persons, _, _, _ = module.FaceRecognitionService._build_scene_state(
         service,
@@ -761,8 +743,7 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
         now=106.1,
     )
 
-    assert update_calls == ["person-1"]
-    assert persons[0].interaction_count == 3
+    assert persons[0].interaction_count == 2
 
     persons, _, _, _ = module.FaceRecognitionService._build_scene_state(
         service,
@@ -771,8 +752,7 @@ def test_build_scene_state_dedupes_interaction_updates(monkeypatch):
         now=160.1,
     )
 
-    assert update_calls == ["person-1", "person-1"]
-    assert persons[0].interaction_count == 4
+    assert persons[0].interaction_count == 2
 
 
 def test_best_face_match_evidence_prefers_highest_similarity(monkeypatch):
@@ -816,18 +796,12 @@ def test_best_face_match_evidence_prefers_highest_similarity(monkeypatch):
     assert evidence["similarity"] == 0.82
 
 
-def test_build_scene_state_records_encounter_once_per_presence_episode(monkeypatch):
+def test_build_scene_state_does_not_emit_person_seen_update(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     service.site_code = "BOS3"
-    encounters = []
-    service.identity_memory_client = types.SimpleNamespace(
-        record_encounter=lambda **kwargs: encounters.append(kwargs) or {
-            "display_name": "Alex",
-            "interaction_count": 2,
-        }
-    )
+    service.identity_memory_client = types.SimpleNamespace()
 
     def recognize_face_match(_face_payload):
         return {
@@ -852,22 +826,15 @@ def test_build_scene_state_records_encounter_once_per_presence_episode(monkeypat
         now=101.0,
     )
 
-    assert len(encounters) == 1
-    assert encounters[0]["person_id"] == "person-1"
-    assert encounters[0]["name"] == "Alex"
-    assert encounters[0]["site_code"] == "BOS3"
-    assert encounters[0]["metadata"]["site_code"] == "BOS3"
+    assert True
 
 
-def test_build_scene_state_skips_encounter_when_identity_update_misses(monkeypatch):
+def test_build_scene_state_uses_match_metadata_when_profile_is_not_loaded(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     service._presence_cache = module.FacePresenceCache(cache_expire_sec=5.0)
     service.site_code = "BOS3"
-    encounters = []
-    service.identity_memory_client = types.SimpleNamespace(
-        record_encounter=lambda **kwargs: encounters.append(kwargs) or None
-    )
+    service.identity_memory_client = types.SimpleNamespace()
     service._recognize_face_match = lambda _face_payload: {
         "person_id": "person-missing",
         "name": "Alex",
@@ -882,7 +849,6 @@ def test_build_scene_state_skips_encounter_when_identity_update_misses(monkeypat
         now=100.0,
     )
 
-    assert len(encounters) == 1
     assert persons[0].person_id == "person-missing"
     assert persons[0].interaction_count == 1
 
@@ -903,9 +869,7 @@ def test_build_scene_state_has_no_primary_face_id_with_multiple_usable_faces(mon
         ]
     )
     service._recognize_face_match = lambda _face_payload: next(matches)
-    service.identity_memory_client = types.SimpleNamespace(
-        record_encounter=lambda **_kwargs: {}
-    )
+    service.identity_memory_client = types.SimpleNamespace()
 
     persons, unknown_count, current_ids, analysis = module.FaceRecognitionService._build_scene_state(
         service,
@@ -929,9 +893,7 @@ def test_build_scene_state_adds_robot_yaw_bearing(monkeypatch):
     service._camera_resource_id = "head_realsense"
     service._camera_info_capture = None
     service.site_code = ""
-    service.identity_memory_client = types.SimpleNamespace(
-        record_encounter=lambda **_kwargs: {}
-    )
+    service.identity_memory_client = types.SimpleNamespace()
     service._recognize_face_match = lambda _face_payload: {
         "person_id": "person-1",
         "name": "Alex",
@@ -960,7 +922,7 @@ def test_build_scene_state_adds_robot_yaw_bearing(monkeypatch):
     assert persons[0].bearing_rad < 0.0
 
 
-def test_recognize_faces_continues_when_interaction_update_fails(monkeypatch):
+def test_recognize_faces_does_not_emit_person_seen_update(monkeypatch):
     module = _load_face_service_module(monkeypatch)
     service = object.__new__(module.FaceRecognitionService)
     service._presence_cache = module.FacePresenceCache(
@@ -971,11 +933,7 @@ def test_recognize_faces_continues_when_interaction_update_fails(monkeypatch):
     image = _good_image()
     face = _face(area=6400, depth_m=0.8)
 
-    class _FakeIdentityMemory:
-        def record_encounter(self, **_kwargs):
-            raise RuntimeError("db unavailable")
-
-    service.identity_memory_client = _FakeIdentityMemory()
+    service.identity_memory_client = types.SimpleNamespace()
     service._capture_for_recognition = lambda *_args, **_kwargs: (image, None)
     service._prepare_faces_for_recognition_result = (
         lambda *_args, **_kwargs: module.FacePreparationResult(faces=[dict(face)])
@@ -1006,8 +964,6 @@ def test_recognize_faces_continues_when_interaction_update_fails(monkeypatch):
             "interaction_count": 7,
         }
     ]
-    assert not service._presence_cache.should_record_interaction("person-1", time.time())
-
 
 def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
     module = _load_face_service_module(monkeypatch)

@@ -141,6 +141,7 @@ class TailwagPackageIdentityMemoryClient:
             directory_lines = tuple(payload.get("directory_profile_lines") or ())
             followup_lines = tuple(payload.get("potential_followups") or ())
             return PersonMemoryContext(
+                directory_profile_lines=directory_lines,
                 profile_lines=profile_lines or fallback_profile_lines,
                 followup_lines=followup_lines or fallback_followup_lines,
                 preferred_language=str(payload.get("preferred_language") or DEFAULT_PREFERRED_LANGUAGE),
@@ -155,33 +156,6 @@ class TailwagPackageIdentityMemoryClient:
     def site_blocks(self, site_code: str, *, current_person_id: str | None = None) -> tuple[str, ...]:
         del site_code, current_person_id
         return ()
-
-    def record_encounter(
-        self,
-        *,
-        person_id: str,
-        name: str = "",
-        site_code: str = "",
-        metadata: dict[str, Any] | None = None,
-        observed_at: str | None = None,
-    ) -> PersonProfile | None:
-        del site_code
-        rendered = str(person_id or "").strip()
-        if not rendered:
-            return None
-        meta = dict(metadata or {})
-        if name and "display_name" not in meta:
-            meta["display_name"] = name
-        try:
-            profile = self._client().record_encounter(
-                rendered,
-                observed_at=observed_at,
-                metadata=meta,
-            )
-            return self.person_profile(rendered) if profile is None else self._profile_from_payload(_plain(profile), rendered)
-        except Exception:
-            logger.exception("Tailwag encounter update failed person_id=%s", rendered)
-            return None
 
     def search_face(self, *, embedding: Any, model: str, limit: int = 2) -> BiometricSearchResult:
         try:

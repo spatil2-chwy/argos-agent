@@ -8,6 +8,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class PersonMemoryContext:
+    directory_profile_lines: tuple[str, ...] = ()
     profile_lines: tuple[str, ...] = ()
     followup_lines: tuple[str, ...] = ()
     preferred_language: str = "English"

@@ -422,7 +422,7 @@ def create_agent(
         enabled_tool_ids=enabled_tool_ids,
         robot_client=robot_client,
         face_service=face_service,
-        employee_directory_service=identity_memory_client,
+        identity_memory_client=identity_memory_client,
         location_store=navigation_runtime_store,
         nav_state=nav_state,
         on_nav_event=wiring.submit_nav_event,

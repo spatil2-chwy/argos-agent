@@ -34,10 +34,6 @@ from argos_src.face_recognition.models import (
 from argos_src.face_recognition.pipeline import FaceEmbeddingPipeline, FacePipelineCudaUnavailable
 from argos_src.face_recognition.presence_cache import FacePresenceCache
 from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyze_face_scene
-from argos_src.identity_memory.prompting import (
-    build_encounter_metadata,
-    format_identity_profile_lines,
-)
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
@@ -1027,39 +1023,9 @@ class FaceRecognitionService:
 
             current_ids.add(pid)
             face["recognized_name"] = match["name"]
-            should_record_interaction = self._presence_cache.should_record_interaction(
-                pid,
-                now,
-            )
             self._presence_cache.mark_person_seen(pid, now)
             meta = match["metadata"]
-            if should_record_interaction:
-                try:
-                    identity_memory = getattr(self, "identity_memory_client", None)
-                    updated_profile = (
-                        identity_memory.record_encounter(
-                            person_id=pid,
-                            name=match["name"],
-                            site_code=str(getattr(self, "site_code", "") or "").strip(),
-                            metadata=build_encounter_metadata(
-                                name=match["name"],
-                                site_code=str(getattr(self, "site_code", "") or "").strip(),
-                                identity_metadata=meta,
-                            ),
-                        )
-                        if identity_memory is not None
-                        else None
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to update interaction metadata for person_id=%s",
-                        pid,
-                    )
-                else:
-                    if updated_profile:
-                        meta = {**dict(meta or {}), **_profile_metadata(updated_profile)}
-                finally:
-                    self._presence_cache.mark_interaction_recorded(pid, now)
+            directory_profile_lines = _profile_directory_lines(meta)
             person = PersonContext(
                 person_id=pid,
                 name=match["name"],
@@ -1087,7 +1053,7 @@ class FaceRecognitionService:
                 head_yaw_deg=attention.yaw_deg,
                 head_pitch_deg=attention.pitch_deg,
                 head_roll_deg=attention.roll_deg,
-                directory_profile_lines=format_identity_profile_lines(meta),
+                directory_profile_lines=directory_profile_lines,
             )
             persons.append(person)
             candidates.append(
@@ -1338,34 +1304,7 @@ class FaceRecognitionService:
         for face in detected_faces:
             match = self._recognize_face_match(face)
             if match is not None:
-                now = time.time()
                 updated_meta = match["metadata"]
-                if self._presence_cache.should_record_interaction(match["person_id"], now):
-                    try:
-                        identity_memory = getattr(self, "identity_memory_client", None)
-                        if identity_memory is not None:
-                            updated_profile = identity_memory.record_encounter(
-                                person_id=match["person_id"],
-                                name=match["name"],
-                                site_code=str(getattr(self, "site_code", "") or "").strip(),
-                                metadata=build_encounter_metadata(
-                                    name=match["name"],
-                                    site_code=str(getattr(self, "site_code", "") or "").strip(),
-                                    identity_metadata=updated_meta,
-                                ),
-                            )
-                            if updated_profile:
-                                updated_meta = {
-                                    **dict(updated_meta or {}),
-                                    **_profile_metadata(updated_profile),
-                                }
-                    except Exception:
-                        logger.exception(
-                            "Failed to update interaction metadata for person_id=%s",
-                            match["person_id"],
-                        )
-                    finally:
-                        self._presence_cache.mark_interaction_recorded(match["person_id"], now)
                 result["people"].append({
                     "name": match["name"],
                     "person_id": match["person_id"],
@@ -1774,12 +1713,6 @@ class FaceRecognitionService:
             "display_name": candidate.cleaned_name,
             "name": candidate.cleaned_name,
         }
-        identity_memory.record_encounter(
-            person_id=person_id,
-            name=candidate.cleaned_name,
-            site_code=str(getattr(self, "site_code", "") or "").strip(),
-            metadata=metadata,
-        )
         result = identity_memory.enroll_face_reference(
             person_id=person_id,
             embedding=candidate.averaged_embedding,
@@ -1975,7 +1908,7 @@ class FaceRecognitionService:
             timestamp=now,
             depth_m=depth_m,
             center_distance=center_distance,
-            directory_profile_lines=format_identity_profile_lines(metadata),
+            directory_profile_lines=(),
         )
         attention_target = AttentionTarget(
             kind="recognized",
@@ -2401,20 +2334,9 @@ def _person_id_from_profile(name: str, profile: dict[str, Any]) -> str:
     return f"person_{uuid4().hex[:12]}"
 
 
-def _profile_metadata(profile: Any) -> dict[str, Any]:
+def _profile_directory_lines(profile: Any) -> tuple[str, ...]:
     if isinstance(profile, dict):
-        metadata = dict(profile.get("metadata") or {})
-        payload = dict(profile)
+        lines = profile.get("directory_profile_lines") or ()
     else:
-        metadata = dict(getattr(profile, "metadata", {}) or {})
-        payload = {
-            "name": getattr(profile, "display_name", ""),
-            "display_name": getattr(profile, "display_name", ""),
-            "email": getattr(profile, "email", ""),
-            "interaction_count": getattr(profile, "interaction_count", 0),
-            "last_seen": getattr(profile, "last_seen", None),
-        }
-    for key, value in payload.items():
-        if value is not None and value != "":
-            metadata[key] = value
-    return metadata
+        lines = getattr(profile, "directory_profile_lines", ()) or ()
+    return tuple(str(line) for line in lines if str(line or "").strip())

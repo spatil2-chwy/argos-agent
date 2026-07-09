@@ -47,9 +47,6 @@ class NoopIdentityMemoryClient:
     def site_blocks(self, site_code: str, *, current_person_id: str | None = None) -> tuple[str, ...]:
         return ()
 
-    def record_encounter(self, **kwargs: Any) -> PersonProfile | None:
-        return None
-
     def search_face(self, **kwargs: Any) -> BiometricSearchResult:
         return BiometricSearchResult(reason="identity_memory_disabled")
 
