@@ -637,14 +637,18 @@ button {
 }
 
 .stage-owner_handoff .stage-icon,
-.stage-memory_flushed .stage-icon {
+.stage-memory_flushed .stage-icon,
+.stage-tailwag_episode_recorded .stage-icon,
+.stage-tailwag_episode_skipped .stage-icon,
+.stage-biometric_update .stage-icon {
   background: #eef4ff;
   border-color: #c7d7fe;
   color: #3538cd;
 }
 
 .stage-playback_stopped .stage-icon,
-.stage-exchange_terminal .stage-icon {
+.stage-exchange_terminal .stage-icon,
+.stage-tailwag_episode_failed .stage-icon {
   background: #fff1f3;
   border-color: #fecdd6;
   color: #c01048;

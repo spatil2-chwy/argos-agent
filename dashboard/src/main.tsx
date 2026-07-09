@@ -8,6 +8,8 @@ import {
   ChevronDown,
   CircleDollarSign,
   Clock3,
+  Database,
+  Fingerprint,
   MessagesSquare,
   Mic,
   Radio,
@@ -216,6 +218,10 @@ const stageIcon: Record<string, React.ReactNode> = {
   identity: <UserRound size={18} />,
   owner_handoff: <MessagesSquare size={18} />,
   memory_flushed: <MessagesSquare size={18} />,
+  tailwag_episode_recorded: <Database size={18} />,
+  tailwag_episode_failed: <AlertTriangle size={18} />,
+  tailwag_episode_skipped: <Database size={18} />,
+  biometric_update: <Fingerprint size={18} />,
   model_requested: <Bot size={18} />,
   first_audio: <Volume2 size={18} />,
   tool_requested: <Wrench size={18} />,
@@ -336,6 +342,33 @@ const stageDetailKeys: Record<string, string[]> = {
     "memory_turn_count",
     "memory_flush_reason",
     "memory_extraction_scheduled"
+  ],
+  tailwag_episode_recorded: [
+    "tailwag_episode_id",
+    "tailwag_episode_extract_memory",
+    "tailwag_memory_result_count",
+    "tailwag_memory_created_count",
+    "tailwag_memory_addressed_count",
+    "tailwag_memory_supported_count",
+    "tailwag_memory_error_count"
+  ],
+  tailwag_episode_failed: ["tailwag_episode_error"],
+  tailwag_episode_skipped: [
+    "memory_person_id",
+    "memory_turn_count",
+    "memory_flush_reason",
+    "memory_extraction_enabled"
+  ],
+  biometric_update: [
+    "biometric_update_modality",
+    "biometric_update_person_id",
+    "biometric_update_accepted",
+    "biometric_update_status",
+    "biometric_update_reason",
+    "biometric_update_sample_count",
+    "biometric_update_target_sample_count",
+    "biometric_update_similarity",
+    "biometric_update_reference_id"
   ],
   model_requested: ["pending_internal_events"],
   first_audio: ["duration_s"],
