@@ -203,9 +203,9 @@ Important detail:
 Adaptive voice updates are separate from first voice enrollment. If a person has
 no voice reference yet, Argos skips adaptive voice updates so the pending
 post-face-enrollment voice capture remains the first durable sample. Once a voice
-reference exists, Argos may offer a turn's ECAPA embedding to Tailwag when the
-owner was confirmed by face or by face+voice agreement. Voice-only ownership does
-not self-train the voice reference.
+reference exists, Argos may offer a turn's ECAPA embedding to Tailwag only when
+face and voice agree on the owner. Voice-only and face-only ownership do not
+self-train the voice reference.
 
 Tailwag owns the similarity threshold, running average, sample count, completion
 state, and consent/status filtering for those updates.

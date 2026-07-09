@@ -344,7 +344,7 @@ class ScenarioProfile:
             enabled=True,
             policy=SpeakerRecognitionPolicy(
                 backend="speechbrain_ecapa",
-                query_match_threshold=0.40,
+                query_match_threshold=0.50,
                 query_margin_threshold=0.20,
                 max_clipped_fraction=0.02,
                 explicit_prompt_after_silent_failures=2,

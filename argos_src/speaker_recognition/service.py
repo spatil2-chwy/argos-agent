@@ -255,7 +255,7 @@ class SpeakerRecognitionService:
         coordinator = getattr(self, "adaptive_update_coordinator", None)
         owner_id = str(getattr(resolution, "owner_id", "") or "").strip()
         owner_source = str(getattr(resolution, "owner_source", "") or "").strip()
-        if coordinator is None or not owner_id or owner_source not in {"face", "audio_face_agree"}:
+        if coordinator is None or not owner_id or owner_source != "audio_face_agree":
             return
         if enrollment_rejection_reason(self.policy, audio_pcm16=waveform):
             return

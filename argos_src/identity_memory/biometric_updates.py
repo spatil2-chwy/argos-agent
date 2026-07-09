@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import logging
 import threading
-import time
 from typing import Any
 
 from .models import BiometricUpdateResult
@@ -34,16 +33,13 @@ class AdaptiveBiometricUpdateCoordinator:
         self,
         identity_memory_client: Any,
         *,
-        cooldown_sec: float = 45.0,
         logger_: logging.Logger | None = None,
         max_workers: int = 1,
     ) -> None:
         self.identity_memory_client = identity_memory_client
-        self.cooldown_sec = max(0.0, float(cooldown_sec))
         self.logger = logger_ or logger
         self._lock = threading.Lock()
         self._completed: set[tuple[str, str]] = set()
-        self._last_attempt_at: dict[tuple[str, str], float] = {}
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, int(max_workers)),
             thread_name_prefix="adaptive-biometric-update",
@@ -135,14 +131,9 @@ class AdaptiveBiometricUpdateCoordinator:
         if modality not in {"face", "voice"} or not person_id:
             return True
         key = (person_id, modality)
-        now = time.monotonic()
         with self._lock:
             if key in self._completed:
                 return True
-            last_attempt = self._last_attempt_at.get(key)
-            if last_attempt is not None and (now - last_attempt) < self.cooldown_sec:
-                return True
-            self._last_attempt_at[key] = now
         return False
 
     @staticmethod

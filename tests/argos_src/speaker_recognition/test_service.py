@@ -189,7 +189,7 @@ def test_voice_adaptive_update_skips_voice_only_owner():
     assert coordinator.observations == []
 
 
-def test_voice_adaptive_update_uses_clean_face_owner_evidence():
+def test_voice_adaptive_update_skips_face_only_owner():
     memory = _FakeIdentityMemory(
         search=SimpleNamespace(
             candidates=(),
@@ -221,13 +221,50 @@ def test_voice_adaptive_update_uses_clean_face_owner_evidence():
         },
     )
 
+    assert coordinator.observations == []
+
+
+def test_voice_adaptive_update_uses_audio_face_agreement():
+    candidate = SimpleNamespace(person_id="alice", display_name="Alice", score=0.82)
+    memory = _FakeIdentityMemory(
+        search=SimpleNamespace(
+            candidates=(candidate,),
+            recognized=True,
+            status="accepted",
+            reason="matched",
+            top_score=0.82,
+            runner_up_score=0.2,
+            margin=0.62,
+        )
+    )
+    memory.has_voice.add("alice")
+    coordinator = _FakeAdaptiveCoordinator()
+    service = SpeakerRecognitionService(
+        policy=SpeakerRecognitionPolicy(),
+        backend=_FakeBackend(embeddings=[np.asarray([0.2, 0.8, 0.0], dtype=np.float32)]),
+        identity_memory_client=memory,
+        adaptive_update_coordinator=coordinator,
+    )
+
+    service.resolve_turn_owner(
+        audio_pcm16=_pcm16_with_amplitude(1200, duration_s=1.0),
+        primary_face_person_id="alice",
+        visible_face_person_ids=("alice",),
+        face_evidence={
+            "face_score_margin": 0.31,
+            "recognized_count": 1,
+            "unknown_count": 0,
+        },
+    )
+
     assert len(coordinator.observations) == 1
     observation = coordinator.observations[0]
     assert observation.modality == "voice"
     assert observation.person_id == "alice"
     assert observation.model == "fake-ecapa"
-    assert observation.evidence["owner_source"] == "face"
+    assert observation.evidence["owner_source"] == "audio_face_agree"
     assert observation.evidence["primary_face_person_id"] == "alice"
+    assert observation.evidence["audio_speaker_id"] == "alice"
     assert observation.evidence["recognized_count"] == 1
     assert observation.evidence["unknown_count"] == 0
     assert observation.metadata["source"] == "turn_audio"

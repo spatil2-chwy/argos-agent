@@ -69,16 +69,15 @@ FaceNet or ECAPA embedding and Tailwag stores the first durable reference sample
 After that, Argos may offer additional embeddings only when ownership evidence is
 cross-modal safe:
 
-- voice observations can be offered when a clean face owner confirms the speaker,
-  or when face and voice agree
+- voice observations can be offered only when face and voice agree
 - face observations can be offered only when face and voice agree
 - voice-only ownership does not self-train voice
-- face-only ownership does not self-train face
+- face-only ownership does not self-train face or voice
 
 Argos does not store durable sample counts or update centroids. It only keeps a
-session-local cooldown/completion cache in
-`argos_src/identity_memory/biometric_updates.py` so it does not repeatedly ask
-Tailwag to update a reference that Tailwag already reported as complete.
+session-local completion cache in
+`argos_src/identity_memory/biometric_updates.py` so it can offer every
+cross-modal-safe turn until Tailwag reports that the reference is complete.
 
 Tailwag returns update result fields such as `accepted`, `status`, `reason`,
 `sample_count`, `target_sample_count`, and `similarity`. Argos logs those as the

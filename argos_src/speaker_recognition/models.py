@@ -15,7 +15,7 @@ class SpeakerRecognitionPolicy:
     """Pure runtime settings for speaker matching and voice enrollment."""
 
     backend: str = "speechbrain_ecapa"
-    query_match_threshold: float = 0.40
+    query_match_threshold: float = 0.50
     query_margin_threshold: float = 0.20
     explicit_prompt_after_silent_failures: int = 2
     max_clipped_fraction: float = 0.02

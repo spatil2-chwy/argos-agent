@@ -36,7 +36,7 @@ def test_coordinator_suppresses_after_tailwag_reports_complete():
             )
         ]
     )
-    coordinator = AdaptiveBiometricUpdateCoordinator(memory, cooldown_sec=0.0)
+    coordinator = AdaptiveBiometricUpdateCoordinator(memory)
     observation = AdaptiveBiometricObservation(
         modality="face",
         person_id="person_alice",
@@ -65,7 +65,7 @@ def test_coordinator_routes_voice_observation():
             )
         ]
     )
-    coordinator = AdaptiveBiometricUpdateCoordinator(memory, cooldown_sec=0.0)
+    coordinator = AdaptiveBiometricUpdateCoordinator(memory)
 
     result = coordinator.submit_sync(
         AdaptiveBiometricObservation(
@@ -83,3 +83,41 @@ def test_coordinator_routes_voice_observation():
     assert result.accepted is True
     assert memory.voice_calls[0]["person_id"] == "person_alice"
     assert memory.voice_calls[0]["metadata"] == {"source": "turn_audio"}
+
+
+def test_coordinator_default_allows_repeated_updates_until_complete():
+    memory = _FakeIdentityMemory(
+        [
+            SimpleNamespace(
+                accepted=True,
+                status="updated",
+                reason="updated",
+                sample_count=2,
+                target_sample_count=5,
+                similarity=0.91,
+            ),
+            SimpleNamespace(
+                accepted=True,
+                status="updated",
+                reason="updated",
+                sample_count=3,
+                target_sample_count=5,
+                similarity=0.92,
+            ),
+        ]
+    )
+    coordinator = AdaptiveBiometricUpdateCoordinator(memory)
+    observation = AdaptiveBiometricObservation(
+        modality="voice",
+        person_id="person_alice",
+        embedding=[0.1, 0.9],
+        model="ecapa",
+        evidence={"owner_id": "person_alice"},
+        metadata={"source": "turn_audio"},
+    )
+
+    coordinator.submit(observation)
+    coordinator.submit(observation)
+    coordinator._executor.shutdown(wait=True)
+
+    assert len(memory.voice_calls) == 2
