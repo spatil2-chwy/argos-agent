@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,6 +71,29 @@ def _float(row: dict[str, str], key: str) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+def _int(row: dict[str, str], key: str) -> int | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _decode_b64_text(value: str | None) -> str:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return ""
+    try:
+        return base64.b64decode(rendered, validate=True).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except (binascii.Error, ValueError):
+        return ""
 
 
 def _event_label(row: dict[str, str]) -> str:
@@ -304,6 +329,34 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
     }
 
 
+def _model_prompt_from_response_create(
+    row: dict[str, str],
+    request_index: int,
+) -> dict[str, Any] | None:
+    prompt = _decode_b64_text(row.get("model_prompt_b64"))
+    dynamic_context = _decode_b64_text(row.get("model_dynamic_context_b64"))
+    delivery_instructions = _decode_b64_text(row.get("model_delivery_instructions_b64"))
+    if not prompt and not dynamic_context and not delivery_instructions:
+        return None
+    return {
+        "request_index": request_index,
+        "ts": row.get("ts"),
+        "req_id": row.get("req_id", ""),
+        "prompt": prompt,
+        "dynamic_context": dynamic_context,
+        "delivery_instructions": delivery_instructions,
+        "prompt_chars": _int(row, "model_prompt_chars"),
+        "static_prompt_chars": _int(row, "model_static_prompt_chars"),
+        "dynamic_context_chars": _int(row, "model_dynamic_context_chars"),
+        "delivery_instructions_chars": _int(row, "model_delivery_instructions_chars"),
+        "history_owner_key": row.get("model_history_owner_key", ""),
+        "history_item_count": _int(row, "model_history_item_count"),
+        "turn_history_item_count": _int(row, "model_turn_history_item_count"),
+        "history_item_ids": row.get("model_history_item_ids", ""),
+        "turn_history_item_ids": row.get("model_turn_history_item_ids", ""),
+    }
+
+
 def _biometric_update_title(row: dict[str, str]) -> str:
     modality = str(row.get("biometric_update_modality") or "reference").strip()
     status = str(row.get("biometric_update_status") or "unknown").strip()
@@ -370,9 +423,19 @@ class InteractionAccumulator:
         tool_calls_by_key: dict[str, dict[str, Any]] = {}
         counted_tool_keys: set[str] = set()
         estimated_exchange_cost = 0.0
+        model_prompts: list[dict[str, Any]] = []
+        response_create_count = 0
 
         for index, row in enumerate(self.rows):
             label = _event_label(row)
+            if label == "response_create":
+                response_create_count += 1
+                prompt_snapshot = _model_prompt_from_response_create(
+                    row,
+                    response_create_count,
+                )
+                if prompt_snapshot is not None:
+                    model_prompts.append(prompt_snapshot)
             openai_id = _openai_session_id(row)
             if openai_id:
                 openai_session_ids.add(openai_id)
@@ -571,6 +634,7 @@ class InteractionAccumulator:
             "tools": dict(tools),
             "tool_calls": list(tool_calls_by_key.values()),
             "costs": costs,
+            "model_prompts": model_prompts,
             "first_audio_latency_s": metrics.get("first_audio_latency_s"),
             "timeline": timeline,
         }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import base64
 import json
 import logging
 import os
@@ -103,6 +104,13 @@ __all__ = [
 ]
 
 PREFERENCE_IDLE_FLUSH_DELAY_SEC = 60.0
+
+
+def _log_text_b64(value: str) -> str:
+    rendered = str(value or "")
+    if not rendered:
+        return ""
+    return base64.b64encode(rendered.encode("utf-8")).decode("ascii")
 
 
 def _human_text_from_text_turn(text: str) -> str:
@@ -1531,7 +1539,7 @@ class RealtimeRobotAgent:
         )
         self._send_event({"type": "session.update", "session": session})
 
-    def _build_response_request(self, turn: QueuedTurn) -> dict[str, Any]:
+    def _build_response_instruction_snapshot(self, turn: QueuedTurn) -> dict[str, str]:
         dynamic_instructions = self._build_turn_instructions(turn)
         static_instructions = str(self.base_system_prompt or "").strip()
         dynamic_instructions = str(dynamic_instructions or "").strip()
@@ -1539,21 +1547,70 @@ class RealtimeRobotAgent:
             part for part in (static_instructions, dynamic_instructions) if part
         ]
         instructions = "\n\n".join(instruction_parts)
+        delivery_instructions = ""
         if turn.no_audio_retry_count > 0:
-            instructions = (
-                instructions
-                + "\n\n[DELIVERY] Respond with spoken audio for this turn. Do not return a silent text-only reply."
+            delivery_instructions = (
+                "[DELIVERY] Respond with spoken audio for this turn. Do not return a silent text-only reply."
             )
         if turn.incomplete_audio_continuation_count > 0:
-            instructions = (
-                instructions
-                + "\n\n[DELIVERY] Continue the current answer naturally from exactly where you left off. Do not restart, repeat, or summarize what you already said."
+            delivery_instructions = "\n\n".join(
+                part
+                for part in (
+                    delivery_instructions,
+                    "[DELIVERY] Continue the current answer naturally from exactly where you left off. Do not restart, repeat, or summarize what you already said.",
+                )
+                if part
             )
+        if delivery_instructions:
+            instructions = "\n\n".join(
+                part for part in (instructions, delivery_instructions) if part
+            )
+        return {
+            "instructions": instructions,
+            "static_instructions": static_instructions,
+            "dynamic_instructions": dynamic_instructions,
+            "delivery_instructions": delivery_instructions,
+        }
+
+    def _build_response_request(self, turn: QueuedTurn) -> dict[str, Any]:
+        instruction_snapshot = self._build_response_instruction_snapshot(turn)
         return realtime_response_payload(
-            instructions=instructions,
+            instructions=instruction_snapshot["instructions"],
             output_modalities=["audio"],
             max_output_tokens=self.realtime_profile.max_output_tokens,
         )
+
+    def _model_prompt_log_fields(
+        self,
+        turn: QueuedTurn,
+        instruction_snapshot: dict[str, str],
+    ) -> dict[str, Any]:
+        history_item_ids = list(getattr(self, "_history_item_order", ()) or ())
+        turn_history_item_ids = sorted(str(item_id) for item_id in turn.history_item_ids)
+        instructions = instruction_snapshot.get("instructions", "")
+        static_instructions = instruction_snapshot.get("static_instructions", "")
+        dynamic_instructions = instruction_snapshot.get("dynamic_instructions", "")
+        delivery_instructions = instruction_snapshot.get("delivery_instructions", "")
+        fields: dict[str, Any] = {
+            "model_prompt_b64": _log_text_b64(instructions),
+            "model_prompt_chars": len(instructions),
+            "model_static_prompt_chars": len(static_instructions),
+            "model_dynamic_context_b64": _log_text_b64(dynamic_instructions),
+            "model_dynamic_context_chars": len(dynamic_instructions),
+            "model_history_owner_key": self._history_owner_key_for_turn(turn),
+            "model_history_item_count": len(history_item_ids),
+            "model_turn_history_item_count": len(turn_history_item_ids),
+        }
+        if delivery_instructions:
+            fields["model_delivery_instructions_b64"] = _log_text_b64(
+                delivery_instructions
+            )
+            fields["model_delivery_instructions_chars"] = len(delivery_instructions)
+        if history_item_ids:
+            fields["model_history_item_ids"] = ",".join(history_item_ids[-20:])
+        if turn_history_item_ids:
+            fields["model_turn_history_item_ids"] = ",".join(turn_history_item_ids)
+        return fields
 
     def _send_response_create(self, turn: QueuedTurn) -> None:
         if self._is_turn_terminal(turn):
@@ -1573,9 +1630,16 @@ class RealtimeRobotAgent:
             ),
         )
         self._queue_pending_response_turn(turn.req_id)
+        instruction_snapshot = self._build_response_instruction_snapshot(turn)
+        response_request = realtime_response_payload(
+            instructions=instruction_snapshot["instructions"],
+            output_modalities=["audio"],
+            max_output_tokens=self.realtime_profile.max_output_tokens,
+        )
         self._latency.emit(
             event="response_create",
             req_id=turn.req_id,
+            **self._model_prompt_log_fields(turn, instruction_snapshot),
             **self._exchange_log_fields(turn),
         )
         self.logger.info(
@@ -1586,7 +1650,7 @@ class RealtimeRobotAgent:
         self._send_event(
             {
                 "type": "response.create",
-                "response": self._build_response_request(turn),
+                "response": response_request,
             }
         )
 

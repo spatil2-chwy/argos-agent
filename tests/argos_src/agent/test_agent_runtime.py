@@ -1,3 +1,4 @@
+import base64
 import logging
 from collections import deque
 import importlib
@@ -1843,6 +1844,37 @@ def test_response_request_starts_with_base_prompt_before_dynamic_context():
     assert instructions.startswith("STATIC RULES\n\n")
     assert "[CURRENT TIME]" in instructions
     assert instructions.index("STATIC RULES") < instructions.index("[CURRENT TIME]")
+
+
+def test_response_create_logs_model_prompt_snapshot():
+    agent = _make_agent()
+    agent.base_system_prompt = "STATIC RULES"
+    agent._current_office_location = "BOS3"
+    agent._history_item_order.extend(["prior-user-item", "current-user-item"])
+    turn = _make_turn("rt-prompt-log")
+    turn.history_item_ids.add("current-user-item")
+
+    agent._send_response_create(turn)
+
+    sent_request = agent._sent_events[-1]["response"]
+    response_log = next(
+        event for event in agent._latency.events if event.get("event") == "response_create"
+    )
+    logged_prompt = base64.b64decode(response_log["model_prompt_b64"]).decode("utf-8")
+    logged_dynamic = base64.b64decode(
+        response_log["model_dynamic_context_b64"]
+    ).decode("utf-8")
+    assert logged_prompt == sent_request["instructions"]
+    assert logged_prompt.startswith("STATIC RULES\n\n")
+    assert "[CURRENT OFFICE LOCATION] BOS3" in logged_dynamic
+    assert response_log["model_prompt_chars"] == len(sent_request["instructions"])
+    assert response_log["model_static_prompt_chars"] == len("STATIC RULES")
+    assert response_log["model_dynamic_context_chars"] == len(logged_dynamic)
+    assert response_log["model_history_owner_key"] == "owner:person-1"
+    assert response_log["model_history_item_count"] == 2
+    assert response_log["model_turn_history_item_count"] == 1
+    assert response_log["model_history_item_ids"] == "prior-user-item,current-user-item"
+    assert response_log["model_turn_history_item_ids"] == "current-user-item"
 
 
 def test_playback_watchdog_does_not_fire_while_playback_progress_is_recent():

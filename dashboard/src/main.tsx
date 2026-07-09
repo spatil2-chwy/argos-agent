@@ -10,6 +10,7 @@ import {
   Clock3,
   Database,
   Fingerprint,
+  FileText,
   MessagesSquare,
   Mic,
   Radio,
@@ -103,6 +104,24 @@ type ToolCall = {
   success?: string | boolean | null;
 };
 
+type ModelPrompt = {
+  request_index: number;
+  ts?: string | null;
+  req_id?: string | null;
+  prompt?: string;
+  dynamic_context?: string;
+  delivery_instructions?: string;
+  prompt_chars?: number | null;
+  static_prompt_chars?: number | null;
+  dynamic_context_chars?: number | null;
+  delivery_instructions_chars?: number | null;
+  history_owner_key?: string | null;
+  history_item_count?: number | null;
+  turn_history_item_count?: number | null;
+  history_item_ids?: string | null;
+  turn_history_item_ids?: string | null;
+};
+
 type LifecycleStage = {
   key: string;
   title: string;
@@ -134,6 +153,7 @@ type Exchange = {
   tools: Record<string, number>;
   tool_calls?: ToolCall[];
   costs: Record<string, number>;
+  model_prompts?: ModelPrompt[];
   first_audio_latency_s: number | null;
   conversation_segment_id?: string;
   conversation_segment_index?: number;
@@ -541,6 +561,54 @@ function ToolCallList({ calls }: { calls: ToolCall[] }) {
   );
 }
 
+function TextBlock({ label, text, collapsed = false }: { label: string; text?: string; collapsed?: boolean }) {
+  const rendered = String(text ?? "").trim();
+  if (!rendered) return null;
+  if (collapsed) {
+    return (
+      <details className="prompt-block prompt-block-collapsed">
+        <summary>{label}</summary>
+        <pre>{rendered}</pre>
+      </details>
+    );
+  }
+  return (
+    <div className="prompt-block">
+      <span>{label}</span>
+      <pre>{rendered}</pre>
+    </div>
+  );
+}
+
+function ModelPromptList({ prompts }: { prompts: ModelPrompt[] }) {
+  if (!prompts.length) return <span className="muted">none</span>;
+  return (
+    <div className="prompt-list">
+      {prompts.map((prompt) => (
+        <details className="prompt-snapshot" key={`${prompt.req_id ?? "prompt"}-${prompt.request_index}`} open={prompt.request_index === prompts.length}>
+          <summary>
+            <span>response.create {prompt.request_index}</span>
+            <small>{formatTime(prompt.ts)}</small>
+          </summary>
+          <KeyValueList
+            values={[
+              ["prompt_chars", prompt.prompt_chars],
+              ["static_prompt_chars", prompt.static_prompt_chars],
+              ["dynamic_context_chars", prompt.dynamic_context_chars],
+              ["history_owner", prompt.history_owner_key],
+              ["history_items", prompt.history_item_count],
+              ["turn_history_items", prompt.turn_history_item_count]
+            ]}
+          />
+          <TextBlock label="dynamic context" text={prompt.dynamic_context} />
+          <TextBlock label="delivery" text={prompt.delivery_instructions} />
+          <TextBlock label="full prompt" text={prompt.prompt} collapsed />
+        </details>
+      ))}
+    </div>
+  );
+}
+
 function OwnerResolution({ exchange }: { exchange?: Exchange }) {
   const context = exchange?.context ?? {};
   const owner = context.owner_id;
@@ -761,12 +829,12 @@ function App() {
       {apiError ? <div className="api-banner">API fallback: {apiError}</div> : null}
 
       <section className="metric-grid">
-        <MetricCard icon={<Radio size={20} />} label="Sessions" value={`${snapshot.summary.session_count}`} />
-        <MetricCard icon={<MessagesSquare size={20} />} label="Conversations" value={`${sessionSegments.length}`} />
-        <MetricCard icon={<Activity size={20} />} label="Exchanges" value={`${sessionExchanges.length}`} />
+        <MetricCard icon={<Radio size={20} />} label="All Sessions" value={`${snapshot.summary.session_count}`} />
+        <MetricCard icon={<MessagesSquare size={20} />} label="Conversations This Session" value={`${sessionSegments.length}`} />
+        <MetricCard icon={<Activity size={20} />} label="Exchanges This Session" value={`${sessionExchanges.length}`} />
         <MetricCard
           icon={<AlertTriangle size={20} />}
-          label="Errors"
+          label="Errors This Session"
           value={`${selectedErrorCount}`}
           tone="danger"
         />
@@ -986,6 +1054,13 @@ function App() {
             <div className="diagnostic-section">
               <h3>State axes</h3>
               <BarList values={selectedExchangeStateAxisCounts} />
+            </div>
+            <div className="diagnostic-section">
+              <div className="diagnostic-section-heading">
+                <h3>LLM prompt</h3>
+                <FileText size={16} />
+              </div>
+              <ModelPromptList prompts={selectedExchange?.model_prompts ?? []} />
             </div>
             <div className="diagnostic-section">
               <h3>Raw lifecycle rows</h3>

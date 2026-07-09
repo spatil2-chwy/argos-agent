@@ -1,3 +1,5 @@
+import base64
+
 from argos_src.observability.dashboard_data import (
     build_dashboard_snapshot,
     parse_latency_line,
@@ -7,6 +9,10 @@ from argos_src.observability.dashboard_data import (
 
 def _row(line: str) -> dict[str, str]:
     return parse_latency_line(line)
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
@@ -270,6 +276,48 @@ def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
         "audio_commit",
         "model_requested",
         "response_usage",
+    ]
+
+
+def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
+    prompt = "STATIC RULES\n\n[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
+    dynamic = "[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | event=response_create | "
+            "run_id=run-live | exchange_id=ex-prompt | exchange_index=1 | req_id=rt-prompt | "
+            "turn_kind=human_audio | model_prompt_b64="
+            f"{_b64(prompt)} | model_prompt_chars={len(prompt)} | "
+            f"model_static_prompt_chars=12 | model_dynamic_context_b64={_b64(dynamic)} | "
+            f"model_dynamic_context_chars={len(dynamic)} | "
+            "model_history_owner_key=owner:person-1 | model_history_item_count=3 | "
+            "model_turn_history_item_count=1 | "
+            "model_history_item_ids=item-a,item-b,item-c | "
+            "model_turn_history_item_ids=item-c"
+        )
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    exchange = snapshot["exchanges"][0]
+    assert exchange["model_prompts"] == [
+        {
+            "request_index": 1,
+            "ts": "2026-07-07 10:00:00.000",
+            "req_id": "rt-prompt",
+            "prompt": prompt,
+            "dynamic_context": dynamic,
+            "delivery_instructions": "",
+            "prompt_chars": len(prompt),
+            "static_prompt_chars": 12,
+            "dynamic_context_chars": len(dynamic),
+            "delivery_instructions_chars": None,
+            "history_owner_key": "owner:person-1",
+            "history_item_count": 3,
+            "turn_history_item_count": 1,
+            "history_item_ids": "item-a,item-b,item-c",
+            "turn_history_item_ids": "item-c",
+        }
     ]
 
 

@@ -89,6 +89,14 @@ in raw diagnostics but does not show it in the main people panel because
 face-resolved owners may have `0.000` audio confidence while still being validly
 resolved from face context.
 
+`response_create` rows also carry an operator prompt snapshot for the dashboard.
+The full `response.create.instructions` string and dynamic context block are
+logged as base64 fields so markdown tables, pipes, and newlines do not corrupt
+the pipe-separated latency log. The dashboard decodes these into each exchange's
+diagnostics panel. History content remains owned by the live Realtime session,
+so the snapshot exposes the owner-scoped history key plus known history item
+counts and item ids rather than reconstructing server-side conversation text.
+
 Adaptive biometric update attempts emit `component=identity_memory` with
 `event=adaptive_biometric_update`. When the event is associated with a turn, the
 dashboard shows a "Biometric reference update" lifecycle stage with:
