@@ -104,6 +104,22 @@ dashboard shows a "Biometric reference update" lifecycle stage with:
 These fields are not prompt context. They are operator visibility into Tailwag's
 reference-update decision.
 
+Face enrollment consistency failures expose operator diagnostics through the
+normal tool-result row. When `enroll_visible_person` fails with
+`failure_reason=embedding_inconsistent`, the row may include flattened
+`tool_enrollment_*` fields such as:
+
+- `tool_enrollment_accepted_frames`
+- `tool_enrollment_consistent_frames`
+- `tool_enrollment_required_frames`
+- `tool_enrollment_similarity_threshold`
+- `tool_enrollment_best_failed_similarity`
+- `tool_enrollment_best_failed_shortfall`
+- `tool_enrollment_similarities`
+
+These explain whether enrollment barely missed the threshold or whether the face
+embeddings were unstable across the burst.
+
 When an error terminates an exchange, the terminal row carries generic
 `error_source`, `error_type`, `error_code`, and `error_message` fields when
 available. Realtime server failures also preserve provider-specific

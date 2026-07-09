@@ -242,6 +242,26 @@ Every failure includes `failure_reason`. Some responses also include
 | `user_rejected_preview` | `user_rejected_preview` | The person rejected the face-capture preview. | Confirms the capture was not saved and asks whether to retry. |
 | `enrolled` | none | Enrollment succeeded. | Includes `person_id` and `next_step_hint`. |
 
+When `failure_reason="embedding_inconsistent"`, the response also includes
+`enrollment_diagnostics` so operators can see how far the burst missed the
+policy:
+
+```json
+{
+  "accepted_frame_count": 5,
+  "consistent_frame_count": 1,
+  "required_stable_frames": 3,
+  "min_embedding_similarity": 0.7,
+  "best_failed_similarity": 0.58,
+  "best_failed_shortfall": 0.12,
+  "similarities_to_reference": [1.0, 0.58, 0.42]
+}
+```
+
+The dashboard exposes the same signal as flattened `tool_enrollment_*` fields on
+the `enroll_visible_person` tool-result row, including consistent/required frame
+counts, threshold, best failed similarity, shortfall, and reference similarities.
+
 On success, the tool returns:
 
 ```json

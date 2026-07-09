@@ -742,6 +742,52 @@ class FaceRecognitionService:
             "Please face me directly and hold still for a second.",
         )
 
+    @classmethod
+    def _enrollment_similarity_diagnostics(
+        cls,
+        *,
+        accepted_faces: list[dict[str, Any]],
+        reference_item: dict[str, Any],
+        threshold: float,
+    ) -> dict[str, Any]:
+        reference_face = reference_item["face"]
+        similarities: list[float] = []
+        failed_similarities: list[float] = []
+        consistent_count = 0
+        for item in accepted_faces:
+            face = item["face"]
+            similarity = cls._embedding_similarity(
+                reference_face["embedding"],
+                face["embedding"],
+            )
+            rounded_similarity = round(float(similarity), 3)
+            similarities.append(rounded_similarity)
+            if similarity >= threshold:
+                consistent_count += 1
+            else:
+                failed_similarities.append(float(similarity))
+
+        best_failed_similarity = (
+            max(failed_similarities) if failed_similarities else None
+        )
+        return {
+            "burst_frames": ENROLLMENT_BURST_FRAMES,
+            "required_stable_frames": ENROLLMENT_REQUIRED_STABLE_FRAMES,
+            "accepted_frame_count": len(accepted_faces),
+            "consistent_frame_count": consistent_count,
+            "min_embedding_similarity": round(float(threshold), 3),
+            "similarities_to_reference": similarities,
+            "best_failed_similarity": round(best_failed_similarity, 3)
+            if best_failed_similarity is not None
+            else None,
+            "best_failed_shortfall": round(
+                max(0.0, float(threshold) - best_failed_similarity),
+                3,
+            )
+            if best_failed_similarity is not None
+            else None,
+        }
+
     @staticmethod
     def _embedding_similarity(left: Any, right: Any) -> float:
         left_vec = np.asarray(left, dtype=np.float32).reshape(-1)
@@ -1359,6 +1405,7 @@ class FaceRecognitionService:
         person_id: str = "",
         next_step_hint: str = "",
         failure_reason: str = "",
+        enrollment_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "success": success,
@@ -1373,6 +1420,8 @@ class FaceRecognitionService:
             payload["next_step_hint"] = next_step_hint
         if failure_reason:
             payload["failure_reason"] = failure_reason
+        if enrollment_diagnostics:
+            payload["enrollment_diagnostics"] = enrollment_diagnostics
         return payload
 
     def enroll_visible_person(
@@ -1644,6 +1693,11 @@ class FaceRecognitionService:
             ),
         )
         reference_face = reference_item["face"]
+        similarity_threshold = getattr(
+            self,
+            "_enrollment_policy",
+            DEFAULT_FACE_ENROLLMENT_POLICY,
+        ).min_embedding_similarity
         consistent_faces = [
             item["face"]
             for item in accepted_faces
@@ -1651,19 +1705,24 @@ class FaceRecognitionService:
                 reference_face["embedding"],
                 item["face"]["embedding"],
             )
-            >= getattr(
-                self,
-                "_enrollment_policy",
-                DEFAULT_FACE_ENROLLMENT_POLICY,
-            ).min_embedding_similarity
+            >= similarity_threshold
         ]
         if len(consistent_faces) < ENROLLMENT_REQUIRED_STABLE_FRAMES:
             reason, guidance = self._quality_response_for_reason("embedding_inconsistent")
+            diagnostics = self._enrollment_similarity_diagnostics(
+                accepted_faces=accepted_faces,
+                reference_item=reference_item,
+                threshold=float(similarity_threshold),
+            )
             logger.info(
-                "Enrollment burst rejected reason=%s accepted=%s consistent=%s",
+                "Enrollment burst rejected reason=%s accepted=%s consistent=%s threshold=%.3f best_failed_similarity=%s shortfall=%s similarities=%s",
                 reason,
                 len(accepted_faces),
                 len(consistent_faces),
+                float(similarity_threshold),
+                diagnostics.get("best_failed_similarity"),
+                diagnostics.get("best_failed_shortfall"),
+                diagnostics.get("similarities_to_reference"),
             )
             return (
                 None,
@@ -1672,6 +1731,7 @@ class FaceRecognitionService:
                     status="retry_quality",
                     message=guidance,
                     failure_reason=reason,
+                    enrollment_diagnostics=diagnostics,
                 ),
             )
         averaged_embedding = self._average_embeddings(

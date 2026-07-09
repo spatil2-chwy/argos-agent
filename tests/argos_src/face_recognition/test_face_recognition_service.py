@@ -1440,6 +1440,15 @@ def test_enroll_visible_person_rejects_inconsistent_face_embeddings(monkeypatch)
 
     assert result["success"] is False
     assert result["status"] == "retry_quality"
+    assert result["failure_reason"] == "embedding_inconsistent"
+    diagnostics = result["enrollment_diagnostics"]
+    assert diagnostics["accepted_frame_count"] == 5
+    assert diagnostics["consistent_frame_count"] == 1
+    assert diagnostics["required_stable_frames"] == 3
+    assert diagnostics["min_embedding_similarity"] == 0.7
+    assert diagnostics["similarities_to_reference"] == [1.0, 0.0, 0.0, -1.0, 0.0]
+    assert diagnostics["best_failed_similarity"] == 0.0
+    assert diagnostics["best_failed_shortfall"] == 0.7
     assert service.identity_memory_client.enrollments == []
 
 

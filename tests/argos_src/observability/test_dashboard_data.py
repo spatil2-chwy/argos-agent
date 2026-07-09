@@ -209,6 +209,37 @@ def test_dashboard_snapshot_groups_consecutive_exchanges_by_owner_segment() -> N
     assert [exchange["conversation_segment_index"] for exchange in exchanges] == [1, 2, 1, 1]
 
 
+def test_dashboard_snapshot_exposes_enrollment_embedding_diagnostics() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=tool | event=tool_result | "
+            "tool=enroll_visible_person | call_id=call-enroll | tool_success=False | "
+            "tool_result_preview={\"success\":false,\"failure_reason\":\"embedding_inconsistent\"} | "
+            "tool_enrollment_failure_reason=embedding_inconsistent | "
+            "tool_enrollment_accepted_frames=5 | "
+            "tool_enrollment_consistent_frames=1 | "
+            "tool_enrollment_required_frames=3 | "
+            "tool_enrollment_similarity_threshold=0.700 | "
+            "tool_enrollment_best_failed_similarity=0.580 | "
+            "tool_enrollment_best_failed_shortfall=0.120 | "
+            "tool_enrollment_similarities=1.0,0.58,0.42 | "
+            "session_id=s-1 | req_id=rt-enroll"
+        )
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    interaction = snapshot["interactions"][0]
+    tool_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "tool_finished")
+    assert tool_stage["details"]["tool_enrollment_failure_reason"] == "embedding_inconsistent"
+    assert tool_stage["details"]["tool_enrollment_accepted_frames"] == "5"
+    assert tool_stage["details"]["tool_enrollment_consistent_frames"] == "1"
+    assert tool_stage["details"]["tool_enrollment_required_frames"] == "3"
+    assert tool_stage["details"]["tool_enrollment_best_failed_similarity"] == "0.580"
+    assert tool_stage["details"]["tool_enrollment_best_failed_shortfall"] == "0.120"
+    assert tool_stage["details"]["tool_enrollment_similarities"] == "1.0,0.58,0.42"
+
+
 def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
     rows = [
         _row(

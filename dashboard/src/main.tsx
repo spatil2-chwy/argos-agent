@@ -340,7 +340,19 @@ const stageDetailKeys: Record<string, string[]> = {
   model_requested: ["pending_internal_events"],
   first_audio: ["duration_s"],
   tool_requested: ["tool", "call_id", "tool_arguments_json"],
-  tool_finished: ["tool", "tool_success", "tool_result_preview"],
+  tool_finished: [
+    "tool",
+    "tool_success",
+    "tool_enrollment_failure_reason",
+    "tool_enrollment_accepted_frames",
+    "tool_enrollment_consistent_frames",
+    "tool_enrollment_required_frames",
+    "tool_enrollment_similarity_threshold",
+    "tool_enrollment_best_failed_similarity",
+    "tool_enrollment_best_failed_shortfall",
+    "tool_enrollment_similarities",
+    "tool_result_preview"
+  ],
   response_done: ["response_status"],
   response_usage: [
     "estimated_cost_usd",
