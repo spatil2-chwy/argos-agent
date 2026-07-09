@@ -10,8 +10,7 @@ This repository is a realtime robot voice-agent stack. Treat changes as potentia
   - `docs/prompting_and_history.md`
   - `docs/face_recognition.md`
   - `docs/speaker_recognition.md`
-  - `docs/identity_store.md`
-  - `docs/memory_store.md`
+  - `docs/identity_memory.md`
   - `docs/observability.md`
 - Use `source setup_shell.sh` as the canonical local environment setup when running project commands.
 - Use `python3`, not `python`, for local Python commands in this environment unless a project script explicitly says otherwise.
@@ -34,6 +33,6 @@ This repository is a realtime robot voice-agent stack. Treat changes as potentia
 ## Validation Bias
 
 - For realtime turn/audio/playback changes, include tests under `tests/argos_src/agent/` and `tests/argos_src/runtime/` when relevant.
-- For face/speaker/identity/memory changes, include tests under `tests/argos_src/face_recognition/`, `tests/argos_src/speaker_recognition/`, `tests/argos_src/memory/`, and identity tests when relevant.
+- For face/speaker/identity/memory changes, include tests under `tests/argos_src/face_recognition/`, `tests/argos_src/speaker_recognition/`, and `tests/argos_src/tools/common/memory/` when relevant.
 - For provider/tool/profile changes, include provider API, tool ID, manifest, and profile config tests when relevant.
 - For observability changes, include pricing/log parser/report tests when relevant.

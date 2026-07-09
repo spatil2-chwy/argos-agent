@@ -19,7 +19,7 @@ description: Create or materially edit Argos presentations as polished browser-o
 Load only the sources needed for the claims being made:
 - Overall system: `README.md`, `docs/architecture.md`, `docs/realtime_turn_flow.md`, `docs/launch.md`.
 - Voice/realtime behavior: `docs/voice.md`, `docs/prompting_and_history.md`, `docs/observability.md`.
-- Human identity and memory: `docs/face_recognition.md`, `docs/speaker_recognition.md`, `docs/identity_store.md`, `docs/memory_store.md`, `docs/employee_directory.md`, `docs/slack_memory.md`.
+- Human identity and memory: `docs/face_recognition.md`, `docs/speaker_recognition.md`, `docs/identity_memory.md`.
 - Display and attention: `docs/interaction_display.md`, `docs/attention_gate.md`.
 - Evidence and diagnostics: `scripts/labs/README.md`, `var/labs/**`, `var/eval/**`, `data_collection/**`, plus user-supplied media or reports.
 - Implementation detail: scoped files under `argos_src/`, `config/profiles/`, `resources/`, and `scripts/labs/`.

@@ -117,8 +117,9 @@ changes future navigation and docking behavior.
 ## Optional Tailwag Memory Tool
 
 `memory.search_semantic` is model-visible only when the active profile enables
-it and `memory.enabled` creates a Tailwag provider. The runtime tool searches
-episodes and extracted memory items scoped to the current resolved `owner_id`.
+it and `identity_memory.enabled` creates a Tailwag-backed identity-memory
+client. The runtime tool searches episodes and extracted memory items scoped to
+the current resolved `owner_id`.
 If no current owner is recognized, the tool returns an error instead of running
 a broad unscoped search.
 

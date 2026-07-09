@@ -135,10 +135,10 @@ Typical fields are:
 - `stream_id`
 - `ignored_reason`
 
-These records are meant for debugging and future evaluation dashboards. They
+These records are meant for debugging and dashboard diagnostics. They
 complement the latency markers rather than replacing them. The main dashboard
 attaches state rows with the same `req_id` to their owning exchange for
-Diagnostics, but it does not show a state trajectory as a first-class operator
+diagnostics, but it does not show a state trajectory as a first-class operator
 panel.
 
 Robot arbitration transitions currently cover patrol resume suppression/allow

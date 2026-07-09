@@ -8,8 +8,7 @@ Read this with:
 - `argos_src/speaker_recognition/service.py`
 - `argos_src/speaker_recognition/policy.py`
 - `argos_src/speaker_recognition/backend.py`
-- `argos_src/identity/embeddings/speaker_store.py`
-- `argos_src/speaker_recognition/manage_voice.py`
+- `argos_src/identity_memory/tailwag_package.py`
 
 This document explains the Argos speaker path:
 
@@ -17,7 +16,7 @@ This document explains the Argos speaker path:
 2. how post-registration voice enrollment works
 3. what preprocessing happens before ECAPA embeddings
 4. how audio ownership and strict face ownership interact
-5. how to inspect saved voice references and delete a whole identity
+5. where saved voice references live
 
 ## Mental Model
 
@@ -53,7 +52,7 @@ successful face enrollment
 | File | Responsibility |
 |---|---|
 | `argos_src/agent/control/audio_runtime.py` | Captures mic audio, resamples to 16 kHz, buffers turn audio, and triggers speaker resolution at audio commit. |
-| `argos_src/agent/agent_runtime.py` | Owns pending voice-enrollment state, audio ownership logs, and post-turn voice enrollment. |
+| `argos_src/agent/agent_runtime.py` | Owns pending voice-enrollment state, audio ownership logs, and post-turn voice enrollment helpers. |
 | `argos_src/agent/control/tool_runtime.py` | Arms pending voice enrollment after `enroll_visible_person` succeeds. |
 | `argos_src/speaker_recognition/service.py` | Main orchestration layer for query embedding lookup and voice reference storage. |
 | `argos_src/speaker_recognition/policy.py` | Clip stats, minimal safety gates, and owner-resolution rules. |
@@ -92,28 +91,34 @@ This is not a full diarization pipeline and does not do:
 - chunk averaging at query time
 - multi-speaker segmentation
 
-This default came from `argos-perception-eval` cross validation on collected
-robot audio: raw ECAPA embeddings with four-clip person centroids produced
-44/45 correct rankings. A conservative `top_score >= 0.5` and `margin >= 0.3`
-rule had no false accepts but rejected many correct clips, so the runtime uses
-`top_score >= 0.4` and `margin >= 0.2` as the starting policy.
+This raw-audio default came from `argos-perception-eval` cross validation on
+collected robot audio. Current production thresholding is owned by Tailwag, not
+by local Argos profile keys.
 
 ### 3. Query scoring
 
-For query ownership, Argos embeds any captured speaker turn with audio. The
-default profile sets:
+For query ownership, Argos embeds any captured speaker turn with audio and calls
+Tailwag `search_voice(..., limit=2)`.
 
-- `query_match_threshold: 0.40`
-- `query_margin_threshold: 0.20`
+Tailwag owns:
 
-`resolve_owner_id()` requires the top audio match to clear both the score
-threshold and the margin threshold. If audio is ambiguous but the face scene has
-a strict owner candidate, ownership falls back to face rather than accepting the
-ambiguous audio match.
+- voice thresholds
+- margin policy
+- consent and archived-person filtering
+- whether a voice candidate is recognized or rejected
 
 ### 4. Owner resolution
 
-After embedding and scoring, the runtime combines audio evidence with the face scene.
+After voice search, Argos passes Tailwag:
+
+- the recognized voice candidate, if any
+- top score, runner-up score, margin, status, and reason
+- the strict primary face candidate frozen at speech start
+- visible face candidates frozen at speech start
+
+Tailwag `resolve_turn_owner()` combines that evidence and returns the final
+owner result. If Tailwag is unavailable or errors, Argos falls back to strict
+face-only ownership.
 
 Possible outcomes:
 
@@ -162,29 +167,38 @@ The current enrollment gates are:
 
 - reject empty audio
 - maximum clipped fraction: `0.02`
-- reject updates whose embedding is inconsistent with the existing reference
+- Tailwag may accept, merge, or reject repeated references
 
-If the clip passes, Argos saves or updates one normalized voice reference
-centroid for that person.
+Argos does not locally compare new voice embeddings against existing references.
+If the clip passes local gates, Argos sends the normalized embedding to Tailwag.
 
 ## Storage Model
 
-The speaker embedding store keeps one reusable reference embedding per `person_id`.
+Durable voice references live in `tailwag-memory`, reached through
+`identity_memory_client` and `argos_src/identity_memory/tailwag_package.py`.
+Argos does not maintain a separate in-repo speaker-reference database.
 
-Metadata saved alongside it includes:
+When `SpeakerRecognitionService.try_store_reference()` enrolls a voice
+reference, it sends:
 
-- `model_name`
-- `created_at`
+- `person_id`
+- normalized ECAPA `embedding`
+- backend `model`
+- `consent_status: consented`
+
+Metadata sent alongside it includes:
+
 - `query_duration_s`
 - `rms_level`
-- `clip_count`
-- `total_voiced_sec`
-- `mean_rms_level`
+- `clipped_fraction`
+- `attempt_kind`
 
 Important detail:
 
-- saving a new reference for the same `person_id` updates the stored centroid
-- repeated consistent enrollment clips are averaged together
+- whether repeated enrollment updates are accepted, averaged, or rejected is
+  owned by Tailwag's biometric store
+- Argos still rejects empty clips and clips above `max_clipped_fraction` before
+  sending an enrollment request
 
 ## Current Preprocessing Choices
 
@@ -228,21 +242,23 @@ speech-start scene is what allows face ownership instead of dropping to
 ## Managing Saved Voice References
 
 Inspect and manage durable voice references with Tailwag tooling from
-`tailwag-memory`.
+`tailwag-memory`. There is no current repo-local voice-management command.
 
 ## Useful Logs
 
 The main runtime lines to watch are:
 
-- `Speaker recognition has no enrolled voice references yet`
+- `Speaker recognition has no identity-memory client; using strict face ownership.`
 - `Speaker resolution initial ...`
+- `Voice enrollment armed ...`
 - `Voice enrollment attempting ...`
+- `Voice enrollment audio stats ...`
 - `Voice enrollment saved ...`
 - `Voice enrollment skipped ...`
 
 Those tell you whether the current problem is:
 
-- no saved voice reference yet
+- Tailwag identity-memory integration is unavailable
 - weak query ownership
 - enrollment quality rejection
 - or a successful save followed by later audio matching

@@ -456,11 +456,9 @@ Attention gate settings:
 | `min_abs_pitch_deg: 0.0` | Minimum up/down head angle. | Keep low unless the camera geometry needs a pitch band. |
 
 The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
-replace FaceNet and does not add a second face detector. Pose limits are
-interpolated between near and distant settings using face `depth_m` when present,
-or face bbox area ratio when depth is unavailable. This lets a mounted RealSense
-camera treat a person standing around two meters back differently from a close
-webcam-like face crop. If `sixdrepnet` is not
+replace FaceNet and does not add a second face detector. It uses one absolute
+bbox-area threshold and one fixed yaw/pitch/roll threshold set; it does not vary
+pose limits by distance or optical-axis offset. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
 presence snapshot includes:

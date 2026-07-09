@@ -3,7 +3,8 @@
 This is the high-level map of the current Argos stack. The deeper component docs are:
 
 - `realtime_turn_flow.md`
-- `realtime_control_refactor_plan.md`
+- `realtime_state_model.md`
+- `realtime_state_machine_diagram.md`
 - `prompting_and_history.md`
 - `robot_tools.md`
 - `attention_gate.md`
@@ -61,8 +62,9 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `resources/`
   Prompt files, wake-word ONNX models, and navigation-location JSON.
 - `var/`
-  Ignored local runtime state for identity, face, speaker, and other local
-  runtime stores. Social/context memory lives in Tailwag.
+  Ignored local runtime state for logs, lab artifacts, generated knowledge
+  indexes, and other local runtime outputs. Durable identity, biometrics,
+  and social/context memory live in Tailwag.
 - `scripts/labs/`
   Operator/lab tools that exercise runtime services without starting the agent.
 
@@ -78,7 +80,7 @@ camera + optional depth
     -> FaceEventBridge publish / proactive FACE_EVENT
     -> RealtimeRobotAgent turn snapshot + prompt context
     -> preference segment buffering
-    -> TailwagMemoryProvider
+    -> Tailwag identity-memory client
     -> Tailwag episode + person context
 ```
 
@@ -161,7 +163,7 @@ Used for:
 
 Every response combines:
 
-1. static system prompt from `static_interaction_prompt.md`
+1. static system prompt from the selected profile's `realtime.prompt_file`
 2. dynamic instructions attached on `response.create`
 3. rolling Realtime session history
 

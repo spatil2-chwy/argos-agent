@@ -47,3 +47,17 @@ The remaining identity-memory profile keys are advanced switches with defaults:
 Removed Argos sections include `identity_store`, `employee_directory`, `memory`,
 and `slack_memory`. Face and speaker recognition no longer accept local database
 paths for biometric storage.
+
+## Runtime Memory Search
+
+Profiles may expose Tailwag semantic search through the public tool ID
+`memory.search_semantic`, which resolves to the runtime tool
+`search_memory_semantic`. The tool schema exposes only:
+
+- `query`
+- `limit`
+
+The LLM does not pass a `person_id`. Argos scopes the search to the current
+resolved turn owner from request context, and the tool returns an error when no
+recognized owner is available. Search itself is read-only from Argos' point of
+view; episode ingestion, extraction, archival, and repair remain Tailwag-owned.

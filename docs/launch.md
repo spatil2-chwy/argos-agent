@@ -122,7 +122,7 @@ python3 run_profile.py --profile static_interaction
 Before any structural cleanup, these are the baseline behaviors worth protecting:
 
 1. Normal wake-word turn reaches `recording_started`, `response_create`, and `playback_completed`.
-2. Face presence can open passive listening when the robot is idle.
+2. Attention-gated face presence can open passive listening when the robot is idle.
 3. A tool call completes and the follow-up assistant response still plays.
 4. Speaking over the robot interrupts playback cleanly.
 5. A recognized-speaker conversation still flushes preference extraction on idle or shutdown.
@@ -224,7 +224,7 @@ tooling.
 After bring-up, these are the highest-value manual checks:
 
 1. Wake-word turn from idle: say the wake word and ask a short question.
-2. Face-presence turn: stand in view and speak without the wake word.
+2. Attention-gated face turn: stand in view, face the camera, and speak without the wake word.
 3. Internal-event turn: trigger a non-motion provider event, or a nav/battery event only with operator approval.
 4. Tool call: ask for something that should call a known non-navigation tool, like visual inspection; use motion/trick tools only with operator approval.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.

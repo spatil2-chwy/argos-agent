@@ -17,7 +17,6 @@ Start with these in order:
 - `realtime_turn_flow.md`: websocket session lifecycle, turn queue, event coalescing, playback, interruptions, watchdogs, and edge cases.
 - `realtime_state_model.md`: typed control-plane axes, states, triggers, and dashboard-facing state event semantics.
 - `realtime_state_machine_diagram.md`: Mermaid flowcharts for the state axes, engagement reducer, human audio turns, internal event turns, and tool/playback branches.
-- `realtime_control_refactor_plan.md`: completed refactor phases, invariants, validation gates, and remaining hardening notes.
 - `prompting_and_history.md`: static prompt, dynamic turn instructions, Realtime history items, tool outputs, and owner-scoped history.
 - `observability.md`: latency log format, realtime markers, cost/usage events, CLI helpers, and FastAPI/Vite dashboard.
 - `attention_gate.md`: head-pose attention signal and passive microphone admission.

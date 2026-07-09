@@ -15,7 +15,8 @@ Useful tuning examples:
 
 Default mode is a dry-run diagnostic: it captures frames, runs the same
 registration preprocessing, and prints quality metrics without saving a person.
-Pass `--enroll` to actually write a face reference to the configured DB.
+Pass `--enroll` to write a face reference through the configured
+identity-memory client.
 """
 
 from __future__ import annotations

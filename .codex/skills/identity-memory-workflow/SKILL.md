@@ -13,10 +13,8 @@ Read the relevant docs:
 
 - `docs/face_recognition.md`
 - `docs/speaker_recognition.md`
-- `docs/identity_store.md`
-- `docs/memory_store.md`
+- `docs/identity_memory.md`
 - `docs/prompting_and_history.md`
-- `docs/slack_memory.md` when Slack memory is touched
 
 ## Preserve
 
@@ -40,6 +38,5 @@ Read the relevant docs:
 ```bash
 python3 -B -m pytest tests/argos_src/face_recognition
 python3 -B -m pytest tests/argos_src/speaker_recognition
-python3 -B -m pytest tests/argos_src/memory
-python3 -B -m pytest tests/argos_src/test_identity_management.py
+python3 -B -m pytest tests/argos_src/tools/common/memory
 ```

@@ -166,4 +166,11 @@ def test_try_store_reference_enrolls_voice_reference_in_tailwag():
     assert result.saved is True
     assert memory.enrollments[0]["person_id"] == "alice"
     assert memory.enrollments[0]["model"] == "fake-ecapa"
-    assert memory.enrollments[0]["metadata"]["query_duration_s"] == 2.5
+    metadata = memory.enrollments[0]["metadata"]
+    assert metadata["query_duration_s"] == 2.5
+    assert metadata["rms_level"] == 1200.0
+    assert metadata["clipped_fraction"] == 0.0
+    assert metadata["attempt_kind"] == "silent"
+    assert "clip_count" not in metadata
+    assert "total_voiced_sec" not in metadata
+    assert "mean_rms_level" not in metadata

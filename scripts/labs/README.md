@@ -22,6 +22,7 @@ poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
 poetry run python -m scripts.labs.enrollment_audio_collection --help
 poetry run python -m scripts.labs.openai_say_lab --help
+poetry run python -m scripts.labs.list_openai_models --help
 poetry run python -m scripts.labs.agent_state_machine_lab --help
 ```
 
@@ -115,8 +116,9 @@ Registration quality dry run:
 poetry run python -m scripts.labs.face_registration_lab --frames 5
 ```
 
-Dry-run and enrollment previews are saved under `scripts/labs/face_preview` by
-default. Use `--preview-dir /path/to/dir` to choose another folder.
+Dry-run and enrollment previews are saved under scripts/labs/face_preview by
+default; the lab creates that ignored preview directory on demand. Use
+`--preview-dir /path/to/dir` to choose another folder.
 
 With depth enabled, each diagnostic frame waits until a synced RGBD pair arrives.
 Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
@@ -157,12 +159,11 @@ when face recognition has a known person:
 poetry run python -m scripts.labs.attention_display_lab
 ```
 
-To test frame-window identity voting, require two recognized hits in the last
-five fresh face-loop snapshots:
+Run without publishing to the interaction display and stop after 30 seconds:
 
 ```bash
 poetry run python -m scripts.labs.attention_display_lab \
-  --recognition-window-frames 5 --recognition-window-min-matches 2
+  --display off --duration-sec 30 --print-json
 ```
 
 Owner-turn centering dry run. Press Enter for each sample; it captures the
@@ -182,10 +183,12 @@ poetry run python -m scripts.labs.owner_turn_calibration_lab --move \
   --camera-yaw-offset-deg -4.0 --turn-gain 0.8
 ```
 
-Realtime state machine report from latency logs:
+Offline realtime state-machine report. This runs synthetic admission,
+engagement, and event-coalescer cases against the selected profile:
 
 ```bash
-poetry run python -m scripts.labs.agent_state_machine_lab --log-path logs/latency.log
+poetry run python -m scripts.labs.agent_state_machine_lab
+poetry run python -m scripts.labs.agent_state_machine_lab --output var/labs/state_machine/report.json
 ```
 
 One-off OpenAI speech without starting the realtime agent:
@@ -203,4 +206,11 @@ poetry run python -m scripts.labs.openai_say_lab \
   --voice marin \
   --instructions "Sound warm, concise, and a little excited." \
   --play
+```
+
+OpenAI API-key model visibility check. This is an operator sanity helper, not an
+agent-module simulator, and it makes a network request to the OpenAI API:
+
+```bash
+poetry run python -m scripts.labs.list_openai_models --match realtime --details
 ```
