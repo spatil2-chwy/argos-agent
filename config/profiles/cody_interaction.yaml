@@ -87,7 +87,7 @@ face_recognition:
     min_brightness: 35.0
     max_brightness: 220.0
     min_contrast: 15.5
-    min_embedding_similarity: 0.70
+    min_embedding_similarity: 0.60
   attention_gate:
     enabled: true
     min_face_area: 1300

@@ -55,7 +55,7 @@ class FaceEnrollmentPolicy:
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    min_embedding_similarity: float = 0.70
+    min_embedding_similarity: float = 0.60
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()

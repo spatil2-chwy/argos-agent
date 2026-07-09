@@ -188,7 +188,7 @@ class FaceEnrollmentPolicy:
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    min_embedding_similarity: float = 0.70
+    min_embedding_similarity: float = 0.60
 ```
 
 `_assess_enrollment_face_quality()` can reject an enrollment frame for:
@@ -251,7 +251,7 @@ policy:
   "accepted_frame_count": 5,
   "consistent_frame_count": 1,
   "required_stable_frames": 3,
-  "min_embedding_similarity": 0.7,
+  "min_embedding_similarity": 0.6,
   "best_failed_similarity": 0.58,
   "best_failed_shortfall": 0.12,
   "similarities_to_reference": [1.0, 0.58, 0.42]

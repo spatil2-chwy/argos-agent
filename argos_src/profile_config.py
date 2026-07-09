@@ -311,7 +311,7 @@ class ScenarioProfile:
                 min_brightness=35.0,
                 max_brightness=220.0,
                 min_contrast=15.5,
-                min_embedding_similarity=0.70,
+                min_embedding_similarity=0.60,
             ),
             owner_turn=FaceOwnerTurnProfile(
                 enabled=False,
@@ -1181,7 +1181,7 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
         min_embedding_similarity=_pop_float(
             enrollment_policy_data,
             "min_embedding_similarity",
-            default=0.70,
+            default=0.60,
         ),
     )
     if enrollment_policy.min_face_area < 1:
