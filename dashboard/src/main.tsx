@@ -581,7 +581,6 @@ function TextBlock({ label, text, collapsed = false }: { label: string; text?: s
 }
 
 function ModelPromptList({ prompts }: { prompts: ModelPrompt[] }) {
-  if (!prompts.length) return <span className="muted">none</span>;
   return (
     <div className="prompt-list">
       {prompts.map((prompt) => (
@@ -927,7 +926,12 @@ function App() {
                       >
                         <div>
                           <strong>{exchange.label}</strong>
-                          <span>{formatTime(exchange.started_at)} human {"->"} Tailwag</span>
+                          <span>
+                            {formatTime(exchange.started_at)} human {"->"} Tailwag
+                            {(exchange.model_prompts?.length ?? 0) > 0 ? (
+                              <b className="prompt-badge">Prompt</b>
+                            ) : null}
+                          </span>
                         </div>
                         <StatusPill status={exchange.status} />
                       </button>
@@ -1055,13 +1059,15 @@ function App() {
               <h3>State axes</h3>
               <BarList values={selectedExchangeStateAxisCounts} />
             </div>
-            <div className="diagnostic-section">
-              <div className="diagnostic-section-heading">
-                <h3>LLM prompt</h3>
-                <FileText size={16} />
+            {(selectedExchange?.model_prompts?.length ?? 0) > 0 ? (
+              <div className="diagnostic-section">
+                <div className="diagnostic-section-heading">
+                  <h3>LLM prompt</h3>
+                  <FileText size={16} />
+                </div>
+                <ModelPromptList prompts={selectedExchange?.model_prompts ?? []} />
               </div>
-              <ModelPromptList prompts={selectedExchange?.model_prompts ?? []} />
-            </div>
+            ) : null}
             <div className="diagnostic-section">
               <h3>Raw lifecycle rows</h3>
               {(selectedExchange?.timeline ?? []).slice(0, 20).map((item) => (

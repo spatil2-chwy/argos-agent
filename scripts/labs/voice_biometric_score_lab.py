@@ -27,6 +27,10 @@ VOICE_THRESHOLD = 0.50
 VOICE_MARGIN_THRESHOLD = 0.20
 
 
+def _neo4j_cosine_to_raw(score: Any) -> float:
+    return (float(score or 0.0) * 2.0) - 1.0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -145,7 +149,15 @@ def _neo4j_vector_rows(
             "site_code": str(site_code or "").strip() or None,
         },
     )
-    return [dict(row) for row in rows]
+    rendered_rows: list[dict[str, Any]] = []
+    for row in rows:
+        rendered = dict(row)
+        rendered["raw_cosine_estimate"] = round(
+            _neo4j_cosine_to_raw(rendered.get("neo4j_score")),
+            6,
+        )
+        rendered_rows.append(rendered)
+    return rendered_rows
 
 
 def _reference_rows(
@@ -214,15 +226,40 @@ def _decision_summary(search: dict[str, Any], direct_rows: list[dict[str, Any]])
     direct_margin = max(0.0, direct_top - direct_runner_up)
     tailwag_candidates = search.get("candidates") or []
     tailwag_top = tailwag_candidates[0] if tailwag_candidates else {}
+    tailwag_top_score = float(search.get("top_score", 0.0) or 0.0)
+    tailwag_runner_up_score = float(search.get("runner_up_score", 0.0) or 0.0)
+    has_tailwag_runner_up = len(tailwag_candidates) > 1
     return {
         "tailwag_status": search.get("status"),
         "tailwag_reason": search.get("reason"),
         "tailwag_recognized": bool(search.get("recognized")),
         "tailwag_top_person_id": tailwag_top.get("person_id"),
-        "tailwag_top_score": search.get("top_score"),
-        "tailwag_runner_up_score": search.get("runner_up_score"),
+        "tailwag_top_score": tailwag_top_score,
+        "tailwag_top_score_raw_cosine_estimate": round(
+            _neo4j_cosine_to_raw(tailwag_top_score),
+            6,
+        ),
+        "tailwag_runner_up_score": tailwag_runner_up_score,
+        "tailwag_runner_up_score_raw_cosine_estimate": (
+            round(_neo4j_cosine_to_raw(tailwag_runner_up_score), 6)
+            if has_tailwag_runner_up
+            else None
+        ),
         "tailwag_margin": search.get("margin"),
+        "tailwag_margin_raw_cosine_estimate": (
+            round(
+                _neo4j_cosine_to_raw(tailwag_top_score)
+                - _neo4j_cosine_to_raw(tailwag_runner_up_score),
+                6,
+            )
+            if has_tailwag_runner_up
+            else None
+        ),
         "tailwag_threshold": search.get("threshold"),
+        "tailwag_threshold_raw_cosine_estimate": round(
+            _neo4j_cosine_to_raw(search.get("threshold")),
+            6,
+        ),
         "tailwag_margin_threshold": search.get("margin_threshold"),
         "direct_top_person_id": top.get("person_id"),
         "direct_top_cosine": round(direct_top, 6),
@@ -230,11 +267,17 @@ def _decision_summary(search: dict[str, Any], direct_rows: list[dict[str, Any]])
         "direct_margin": round(direct_margin, 6),
         "single_reference_margin_warning": len(direct_rows) == 1,
         "note": (
-            "With only one active voice reference, Tailwag's runner-up score is 0, "
-            "so the margin gate cannot distinguish impostors; only the top-score "
-            "threshold is protecting the identity."
+            "Neo4j cosine vector-index scores are on a 0..1 scale. Convert them back "
+            "to raw cosine with raw = (score * 2) - 1 before comparing against eval "
+            "thresholds. With only one active voice reference, Tailwag's runner-up "
+            "score is 0, so the margin gate cannot distinguish impostors; only the "
+            "top-score threshold is protecting the identity."
             if len(direct_rows) == 1
-            else ""
+            else (
+                "Neo4j cosine vector-index scores are on a 0..1 scale. Convert them "
+                "back to raw cosine with raw = (score * 2) - 1 before comparing "
+                "against eval thresholds."
+            )
         ),
     }
 

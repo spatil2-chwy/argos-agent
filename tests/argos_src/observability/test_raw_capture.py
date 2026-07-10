@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import wave
 
+import numpy as np
+from PIL import Image
+
 from argos_src.observability.raw_capture import RawDataCaptureSink
+from argos_src.observability.raw_capture import RawFaceSnapshot
 
 
 def test_raw_capture_writes_exchange_audio_under_owner_conversation(tmp_path):
@@ -51,3 +55,31 @@ def test_raw_capture_writes_exchange_audio_under_owner_conversation(tmp_path):
         assert wav.getsampwidth() == 2
         assert wav.readframes(2) == b"\x01\x00\x02\x00"
 
+
+def test_raw_capture_saves_bgr_face_snapshot_as_viewable_rgb_jpeg(tmp_path):
+    sink = RawDataCaptureSink(tmp_path)
+    sink.start_session(run_id="run-test")
+    bgr_red = np.zeros((8, 8, 3), dtype=np.uint8)
+    bgr_red[:, :] = [0, 0, 255]
+
+    sink.save_exchange(
+        exchange_id="ex-one",
+        exchange_index=1,
+        owner_id="person-1",
+        owner_source="face",
+        face_snapshot=RawFaceSnapshot(
+            image=bgr_red,
+            faces=[],
+            camera_resource_id="head_realsense",
+            captured_at_unix_s=1.0,
+        ),
+    )
+    sink.close()
+
+    image_path = next(tmp_path.glob("run-test/conversations/*/exchanges/*/face_at_recording_start.jpg"))
+    decoded = Image.open(image_path).convert("RGB")
+
+    red, green, blue = decoded.getpixel((0, 0))
+    assert red > 240
+    assert green < 20
+    assert blue < 20

@@ -264,6 +264,47 @@ def test_image_snapshot_decodes_raw_array_payload():
     np.testing.assert_array_equal(frame.image, image)
 
 
+def test_image_snapshot_converts_rgb8_raw_payload_to_internal_bgr():
+    image_rgb = np.array([[[255, 0, 0], [0, 255, 0]]], dtype=np.uint8)
+    expected_bgr = np.array([[[0, 0, 255], [0, 255, 0]]], dtype=np.uint8)
+    session = _FakeZenohSession()
+    session.responses["camera.latest_image"] = {
+        "resource_id": "head_realsense",
+        "image": {
+            "encoding": "rgb8",
+            "dtype": "uint8",
+            "shape": [1, 2, 3],
+            "data_b64": base64.b64encode(image_rgb.tobytes()).decode("ascii"),
+        },
+    }
+    client = _client(session)
+
+    frame = client.get_latest_image(resource_id="head_realsense")
+
+    assert frame is not None
+    np.testing.assert_array_equal(frame.image, expected_bgr)
+
+
+def test_image_snapshot_preserves_bgr8_raw_payload():
+    image_bgr = np.array([[[0, 0, 255], [0, 255, 0]]], dtype=np.uint8)
+    session = _FakeZenohSession()
+    session.responses["camera.latest_image"] = {
+        "resource_id": "head_realsense",
+        "image": {
+            "encoding": "bgr8",
+            "dtype": "uint8",
+            "shape": [1, 2, 3],
+            "data_b64": base64.b64encode(image_bgr.tobytes()).decode("ascii"),
+        },
+    }
+    client = _client(session)
+
+    frame = client.get_latest_image(resource_id="head_realsense")
+
+    assert frame is not None
+    np.testing.assert_array_equal(frame.image, image_bgr)
+
+
 def test_provider_resource_battery_events_update_subscribers():
     session = _FakeZenohSession()
     client = _client(session)

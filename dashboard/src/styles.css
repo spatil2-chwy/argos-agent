@@ -311,6 +311,19 @@ button {
   font-size: 0.82rem;
 }
 
+.prompt-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--tailwag-border);
+  border-radius: 6px;
+  background: var(--tailwag-blue-100);
+  color: var(--tailwag-blue-900);
+  font-size: 0.68rem;
+  font-weight: 760;
+}
+
 .search-box {
   display: flex;
   align-items: center;

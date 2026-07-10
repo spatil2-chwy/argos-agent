@@ -302,6 +302,14 @@ gated_faces, rejected_count = filter_detections_by_depth(...)
 embedding = self.extract_face_embedding(image, detection)
 ```
 
+Argos normalizes provider camera frames to OpenCV-style BGR arrays before they
+reach the face pipeline. `pipeline.py` converts those BGR arrays to RGB PIL
+images immediately before MTCNN and FaceNet embedding. Raw RGB provider payloads
+must be tagged as `rgb8` or `color_space: rgb` so the transport can convert them
+to internal BGR first. Raw data capture writes RGB JPEG artifacts for operator
+inspection, but recognition and enrollment continue to use the normalized BGR
+frame internally.
+
 The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_face_area`
 (`1300` px in the static interaction profile). This keeps tiny distant faces from
 becoming recognized-person context while still allowing fisheye captures where

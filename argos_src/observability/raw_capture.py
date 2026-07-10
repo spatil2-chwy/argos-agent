@@ -304,9 +304,12 @@ def _write_wav(path: Path, audio_pcm16: bytes, *, sample_rate_hz: int) -> None:
 def _write_image(path: Path, image: Any) -> None:
     if image is None:
         return
-    import cv2
+    import numpy as np
+    from PIL import Image
 
-    ok, encoded = cv2.imencode(".jpg", image)
-    if not ok:
-        raise RuntimeError(f"Failed to encode image artifact: {path}")
-    path.write_bytes(encoded.tobytes())
+    array = np.asarray(image)
+    if array.ndim == 3 and array.shape[2] >= 3:
+        rgb = np.ascontiguousarray(array[..., [2, 1, 0]])
+    else:
+        rgb = np.ascontiguousarray(array)
+    Image.fromarray(rgb).save(path, format="JPEG")
