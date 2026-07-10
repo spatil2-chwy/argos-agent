@@ -232,6 +232,7 @@ class FaceRecognitionService:
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
         self._latest_loop_frame = None
+        self._latest_loop_faces: list[dict[str, Any]] = []
         self._latest_loop_frame_resource_id: str | None = None
         self._latest_loop_frame_at = 0.0
         self._loop_log_heartbeat_at: dict[str, float] = {}
@@ -354,12 +355,14 @@ class FaceRecognitionService:
         image,
         camera_resource_id: str,
         captured_at: float,
+        faces: list[dict[str, Any]] | None = None,
     ) -> None:
         """Store the most recent color frame seen by the background face loop."""
         if image is None:
             return
         with self._latest_loop_frame_lock:
             self._latest_loop_frame = image.copy()
+            self._latest_loop_faces = [dict(face) for face in (faces or [])]
             self._latest_loop_frame_resource_id = camera_resource_id
             self._latest_loop_frame_at = float(captured_at)
 
@@ -385,6 +388,30 @@ class FaceRecognitionService:
             if max_age_sec >= 0.0 and (time.time() - captured_at) > max_age_sec:
                 return None, None, None
             return image.copy(), cached_resource_id, captured_at
+
+    def get_cached_latest_detection_frame(
+        self,
+        *,
+        camera_resource_id: str | None = None,
+        max_age_sec: float = 2.0,
+    ) -> tuple[object | None, list[dict[str, Any]], str | None, float | None]:
+        """Return the latest cached face-loop frame and detector output."""
+        lock = getattr(self, "_latest_loop_frame_lock", None)
+        if lock is None:
+            return None, [], None, None
+
+        with lock:
+            image = getattr(self, "_latest_loop_frame", None)
+            cached_resource_id = getattr(self, "_latest_loop_frame_resource_id", None)
+            captured_at = float(getattr(self, "_latest_loop_frame_at", 0.0))
+            if image is None or cached_resource_id is None or captured_at <= 0.0:
+                return None, [], None, None
+            if camera_resource_id and camera_resource_id != cached_resource_id:
+                return None, [], None, None
+            if max_age_sec >= 0.0 and (time.time() - captured_at) > max_age_sec:
+                return None, [], None, None
+            faces = [dict(face) for face in getattr(self, "_latest_loop_faces", [])]
+            return image.copy(), faces, cached_resource_id, captured_at
 
     # ------------------------------------------------------------------
     # Detection + embedding
@@ -2096,10 +2123,11 @@ class FaceRecognitionService:
             )
             return
 
+        frame_captured_at = time.time()
         self._cache_latest_loop_frame(
             image=image,
             camera_resource_id=camera_resource_id,
-            captured_at=time.time(),
+            captured_at=frame_captured_at,
         )
         prepare_started = perf_now()
         prepared = self._prepare_faces_for_recognition_result(
@@ -2109,6 +2137,12 @@ class FaceRecognitionService:
         )
         prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
+        self._cache_latest_loop_frame(
+            image=image,
+            camera_resource_id=camera_resource_id,
+            captured_at=frame_captured_at,
+            faces=detected_faces,
+        )
         if not detected_faces:
             self._reset_unknown_stability()
             publish_started = perf_now()

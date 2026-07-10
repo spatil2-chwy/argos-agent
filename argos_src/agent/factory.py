@@ -219,6 +219,7 @@ def create_agent(
     map_locations_file: Optional[str] = None,
     startup_patrol_route: Optional[list[str]] = None,
     prompt_file: Optional[str] = None,
+    raw_data_capture: object | None = None,
 ) -> RealtimeRobotAgent:
     """Create the profile-driven realtime Argos agent runtime."""
     scenario_profile = _resolve_agent_profile(
@@ -476,6 +477,7 @@ def create_agent(
         speaker_service=speaker_service,
         identity_memory_client=identity_memory_client,
         adaptive_update_coordinator=adaptive_update_coordinator,
+        raw_data_capture=raw_data_capture,
         memory_context_compiler=memory_context_compiler,
         preference_extractor=preference_extractor,
         preference_extraction_enabled=(

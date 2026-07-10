@@ -406,6 +406,18 @@ class _FakeOwnerTurnController:
         self.cancellations.append({"req_id": req_id, "reason": reason})
 
 
+class _FakeRawDataCapture:
+    def __init__(self):
+        self.exchanges = []
+        self.closed = False
+
+    def save_exchange(self, **kwargs):
+        self.exchanges.append(kwargs)
+
+    def close(self):
+        self.closed = True
+
+
 class _FakeFaceService:
     def __init__(self, *, persons=None, snapshot=None):
         self._persons = list(persons or [])
@@ -594,6 +606,9 @@ def _make_agent():
     agent._recording_gesture_queue = queue.Queue()
     agent._recording_gesture_lock = threading.Lock()
     agent._recording_gesture_thread = None
+    agent._display_queue = queue.Queue()
+    agent._display_mode_lock = threading.Lock()
+    agent._display_mode = ""
     return agent
 
 
@@ -1209,6 +1224,32 @@ def test_audio_turn_uses_raw_speaker_audio_without_trim_pass():
 
     assert agent.speaker_service.trim_calls == []
     assert agent.speaker_service.resolve_calls[0]["audio_pcm16"] == b"\x01\x02"
+
+
+def test_audio_commit_queues_raw_exchange_artifacts_after_owner_resolution():
+    agent = _make_agent()
+    raw_capture = _FakeRawDataCapture()
+    agent.raw_data_capture = raw_capture
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-7",
+        visible_face_person_ids=("person-7",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=3,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+        face_evidence_fields={"face_match_status": "matched"},
+    )
+
+    assert len(raw_capture.exchanges) == 1
+    saved = raw_capture.exchanges[0]
+    assert saved["exchange_id"] == agent._current_exchange_id
+    assert saved["owner_id"] == "person-7"
+    assert saved["owner_source"] == "face"
+    assert saved["audio_pcm16"] == b"\x01\x02"
+    assert saved["sample_rate_hz"] == 16000
+    assert saved["metadata"]["face_match_status"] == "matched"
+    assert saved["metadata"]["capture_vad_positive_blocks"] == 3
 
 
 def test_output_audio_does_not_request_duplicate_owner_turn():

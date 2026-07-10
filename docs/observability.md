@@ -74,6 +74,43 @@ The stable join keys are:
 - `req_id`: Realtime request/turn id, kept for diagnostics.
 - `openai_session_id`: raw OpenAI Realtime session id, kept for diagnostics.
 
+## Raw POC Artifacts
+
+Raw turn artifacts are disabled by default. For POC data-quality runs, start the
+runtime with:
+
+```bash
+python3 run_profile.py --profile static_interaction --save-raw-data
+```
+
+The default output directory is `data_collection/raw_sessions/`, which is
+ignored by git. Override it with `--raw-data-dir`.
+
+The layout mirrors the dashboard's `run_id -> conversation -> exchange` model:
+
+```text
+data_collection/raw_sessions/<run_id>/
+  session.json
+  conversations/
+    conversation-001_owner_<person_id>/
+      exchanges/
+        0001_<exchange_id>/
+          manifest.json
+          input_audio_16khz_mono.wav
+          face_at_recording_start.jpg
+          face_at_recording_start.json
+```
+
+Per-exchange audio is the same 16 kHz mono PCM buffer used for speaker
+recognition. The face snapshot is the latest cached face-loop detection frame at
+recording start, including the raw camera frame plus the face boxes and
+recognition/attention metadata available for that turn.
+
+The writer is queue-backed and opt-in. If image encoding or disk writes fall
+behind, Argos drops raw artifact writes and logs the dropped count instead of
+blocking the microphone callback, response loop, or face-recognition control
+path.
+
 Identity and context fields such as `primary_face_person_id`,
 `audio_speaker_id`, `owner_id`, `owner_source`, `owner_confidence`,
 `audio_score`, `audio_runner_up_score`, `audio_score_margin`,

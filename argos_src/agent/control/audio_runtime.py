@@ -18,6 +18,7 @@ from argos_src.agent.realtime_turns import AUDIO_CHANNELS, TURN_PHASE_QUEUED, Qu
 from argos_src.agent.control.observers import safe_transition
 from argos_src.agent.control.types import CaptureState, StateAxis, StateTransition
 from argos_src.observability.observability import perf_now
+from argos_src.observability.raw_capture import RawFaceSnapshot
 from argos_src.runtime.audio_admission import resolve_record_admission
 from argos_src.speaker_recognition.policy import clip_stats
 
@@ -207,6 +208,31 @@ class AudioRuntime:
             float(payload.get("trimmed_clipped_fraction", 0.0) or 0.0),
             int(payload.get("capture_vad_positive_blocks", 0) or 0),
             int(payload.get("vad_window_samples", 0) or 0),
+        )
+
+    def _capture_raw_face_snapshot(self) -> RawFaceSnapshot | None:
+        if getattr(self, "raw_data_capture", None) is None:
+            return None
+        face_service = getattr(self, "face_service", None)
+        getter = getattr(face_service, "get_cached_latest_detection_frame", None)
+        if not callable(getter):
+            return None
+        try:
+            image, faces, resource_id, captured_at = getter(max_age_sec=2.0)
+        except Exception:
+            self.logger.debug("Raw face snapshot unavailable", exc_info=True)
+            return None
+        if image is None:
+            return None
+        try:
+            image = image.copy()
+        except Exception:
+            pass
+        return RawFaceSnapshot(
+            image=image,
+            faces=list(faces or []),
+            camera_resource_id=str(resource_id or ""),
+            captured_at_unix_s=float(captured_at or time.time()),
         )
 
     def _start_audio_streams(self) -> None:
@@ -427,6 +453,7 @@ class AudioRuntime:
         self._current_face_evidence_fields = (
             dict(face_evidence_getter() or {}) if callable(face_evidence_getter) else {}
         )
+        self._current_raw_face_snapshot = self._capture_raw_face_snapshot()
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
@@ -469,10 +496,12 @@ class AudioRuntime:
         primary_face_person_id = self._current_primary_face_person_id
         visible_face_person_ids = self._current_visible_face_person_ids
         face_evidence_fields = dict(getattr(self, "_current_face_evidence_fields", {}) or {})
+        raw_face_snapshot = getattr(self, "_current_raw_face_snapshot", None)
         capture_vad_positive_blocks = int(self._current_turn_vad_positive_blocks)
         self._current_primary_face_person_id = None
         self._current_visible_face_person_ids = ()
         self._current_face_evidence_fields = {}
+        self._current_raw_face_snapshot = None
         audio_pcm16 = b"".join(self._current_turn_audio_chunks)
         self._current_turn_audio_chunks = []
         self._current_turn_vad_positive_blocks = 0
@@ -499,6 +528,7 @@ class AudioRuntime:
                 capture_vad_positive_blocks,
                 speech_end_perf_s,
                 speech_end_unix_s,
+                raw_face_snapshot,
             ),
             daemon=True,
         ).start()
@@ -512,6 +542,7 @@ class AudioRuntime:
         capture_vad_positive_blocks: int,
         speech_end_perf_s: float,
         speech_end_unix_s: float,
+        raw_face_snapshot: RawFaceSnapshot | None = None,
     ) -> None:
         self._set_capture_state(CaptureState.COMMITTING, trigger="audio_commit_start")
         try:
@@ -652,6 +683,31 @@ class AudioRuntime:
             primary_face_person_id=primary_face_person_id,
             result=resolution,
         )
+        raw_capture = getattr(self, "raw_data_capture", None)
+        if raw_capture is not None:
+            try:
+                raw_capture.save_exchange(
+                    exchange_id=str(exchange_fields.get("exchange_id") or ""),
+                    exchange_index=int(exchange_fields.get("exchange_index") or 0),
+                    owner_id=str(resolution.owner_id or ""),
+                    owner_source=str(resolution.owner_source or ""),
+                    audio_pcm16=audio_pcm16,
+                    sample_rate_hz=VAD_SAMPLE_RATE,
+                    face_snapshot=raw_face_snapshot,
+                    metadata={
+                        "req_id": req_id,
+                        "primary_face_person_id": primary_face_person_id,
+                        "visible_face_person_ids": visible_face_person_ids,
+                        "audio_speaker_id": resolution.audio_speaker_id,
+                        "speaker_visible": resolution.speaker_visible,
+                        "capture_vad_positive_blocks": capture_vad_positive_blocks,
+                        "speech_end_unix_s": speech_end_unix_s,
+                        **dict(face_evidence_fields or {}),
+                        **dict(merged_meta or {}),
+                    },
+                )
+            except Exception:
+                self.logger.exception("Failed to queue raw exchange artifacts")
         self._latency.emit(
             event="exchange_context",
             req_id=req_id,

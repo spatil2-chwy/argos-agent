@@ -81,6 +81,15 @@ export OPENAI_API_KEY=...
 python3 run_profile.py --profile static_interaction
 ```
 
+For POC data-quality sessions, add raw artifact capture:
+
+```bash
+python3 run_profile.py --profile static_interaction --save-raw-data
+```
+
+Artifacts are written under `data_collection/raw_sessions/` by default, which is
+git-ignored. Use `--raw-data-dir /path/to/dir` to put them somewhere else.
+
 The profile selects `manifest: puffle` and resource IDs such as `base`,
 `arducam_001`, and `screen_001`. When the manifest leaves Zenoh endpoints empty,
 set `ARGOS_ZENOH_CONNECT=tcp/ROBOT_OR_PROVIDER_HOST:7447` if discovery is not

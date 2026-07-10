@@ -164,6 +164,7 @@ class RealtimeRobotAgent:
         state_observer: Any = None,
         identity_memory_client: Any = None,
         adaptive_update_coordinator: Any = None,
+        raw_data_capture: Any = None,
     ) -> None:
         self.logger = logging.getLogger("argos.agent_runtime")
         self.scenario_profile = scenario_profile
@@ -177,6 +178,7 @@ class RealtimeRobotAgent:
         self.speaker_service = speaker_service
         self.identity_memory_client = identity_memory_client
         self.adaptive_update_coordinator = adaptive_update_coordinator
+        self.raw_data_capture = raw_data_capture
         self.memory_context_compiler = memory_context_compiler
         self.preference_extractor = preference_extractor
         self.preference_extraction_enabled = preference_extraction_enabled
@@ -263,6 +265,7 @@ class RealtimeRobotAgent:
         self._current_primary_face_person_id: Optional[str] = None
         self._current_visible_face_person_ids: tuple[str, ...] = ()
         self._current_turn_audio_chunks: list[bytes] = []
+        self._current_raw_face_snapshot: Any = None
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
         self._recording_preroll_chunks: deque[tuple[float, bytes, bytes]] = deque()
@@ -326,6 +329,18 @@ class RealtimeRobotAgent:
         ]
         self._session_id = ""
         self._session_estimated_cost_usd = 0.0
+        if self.raw_data_capture is not None:
+            try:
+                self.raw_data_capture.start_session(
+                    run_id=self._run_id,
+                    metadata={
+                        "profile": getattr(scenario_profile, "name", ""),
+                        "profile_file": str(getattr(scenario_profile, "source_path", "") or ""),
+                        "model": getattr(self.realtime_profile, "model", ""),
+                    },
+                )
+            except Exception:
+                self.logger.exception("Failed to start raw data capture session")
 
     # ------------------------------------------------------------------
     # State/history runtime
@@ -783,6 +798,7 @@ class RealtimeRobotAgent:
         speech_end_perf_s: float,
         speech_end_unix_s: float,
         face_evidence_fields: dict[str, Any] | None = None,
+        raw_face_snapshot: Any = None,
     ) -> None:
         self._audio_controller()._commit_audio_turn(
             primary_face_person_id,
@@ -792,6 +808,7 @@ class RealtimeRobotAgent:
             capture_vad_positive_blocks,
             speech_end_perf_s,
             speech_end_unix_s,
+            raw_face_snapshot,
         )
 
     def _maybe_submit_adaptive_face_observation(
@@ -1146,6 +1163,11 @@ class RealtimeRobotAgent:
                     shutdown_battery()
             except Exception:
                 self.logger.exception("Failed to stop battery cache cleanly")
+        if getattr(self, "raw_data_capture", None) is not None:
+            try:
+                self.raw_data_capture.close()
+            except Exception:
+                self.logger.exception("Failed to close raw data capture cleanly")
 
         self.engagement.shutdown()
         shutdown_robot = getattr(self.robot_client, "shutdown", None)
