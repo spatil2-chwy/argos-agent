@@ -116,7 +116,6 @@ class SpeakerRecognitionService:
         try:
             search = identity_memory.search_voice(
                 embedding=query_embedding,
-                model=str(getattr(self.backend, "model_name", self.policy.backend) or self.policy.backend),
                 limit=2,
             )
             candidates = tuple(getattr(search, "candidates", ()) or ())
@@ -224,7 +223,6 @@ class SpeakerRecognitionService:
         result = identity_memory.enroll_voice_reference(
             person_id=str(person_id or "").strip(),
             embedding=embedding,
-            model=str(getattr(self.backend, "model_name", "unknown") or "unknown"),
             metadata={
                 "query_duration_s": stats.duration_s,
                 "rms_level": stats.rms_level,
@@ -293,7 +291,6 @@ class SpeakerRecognitionService:
                 modality="voice",
                 person_id=owner_id,
                 embedding=query_embedding,
-                model=str(getattr(self.backend, "model_name", self.policy.backend) or self.policy.backend),
                 evidence=evidence,
                 metadata={
                     "query_duration_s": stats.duration_s,

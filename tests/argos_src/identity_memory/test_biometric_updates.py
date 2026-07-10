@@ -41,7 +41,6 @@ def test_coordinator_suppresses_after_tailwag_reports_complete():
         modality="face",
         person_id="person_alice",
         embedding=[1.0, 0.0],
-        model="facenet-vggface2",
         evidence={"owner_id": "person_alice"},
     )
 
@@ -72,7 +71,6 @@ def test_coordinator_routes_voice_observation():
             modality="voice",
             person_id="person_alice",
             embedding=[0.1, 0.9],
-            model="ecapa",
             evidence={"owner_id": "person_alice"},
             metadata={"source": "turn_audio"},
         )
@@ -111,7 +109,6 @@ def test_coordinator_default_allows_repeated_updates_until_complete():
         modality="voice",
         person_id="person_alice",
         embedding=[0.1, 0.9],
-        model="ecapa",
         evidence={"owner_id": "person_alice"},
         metadata={"source": "turn_audio"},
     )

@@ -20,7 +20,6 @@ class AdaptiveBiometricObservation:
     modality: str
     person_id: str
     embedding: Any
-    model: str
     evidence: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     log_fields: dict[str, Any] = field(default_factory=dict)
@@ -70,7 +69,6 @@ class AdaptiveBiometricUpdateCoordinator:
                 result = self.identity_memory_client.observe_face_embedding(
                     person_id=person_id,
                     embedding=observation.embedding,
-                    model=observation.model,
                     evidence=dict(observation.evidence or {}),
                     metadata=dict(observation.metadata or {}),
                 )
@@ -78,7 +76,6 @@ class AdaptiveBiometricUpdateCoordinator:
                 result = self.identity_memory_client.observe_voice_embedding(
                     person_id=person_id,
                     embedding=observation.embedding,
-                    model=observation.model,
                     evidence=dict(observation.evidence or {}),
                     metadata=dict(observation.metadata or {}),
                 )

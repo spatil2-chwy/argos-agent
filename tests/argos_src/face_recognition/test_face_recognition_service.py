@@ -729,7 +729,7 @@ def test_build_scene_state_uses_tailwag_match_metadata(monkeypatch):
     observation = service.get_recent_face_observation("person-1", max_age_sec=999.0)
     assert observation is not None
     assert observation["person_id"] == "person-1"
-    assert observation["model"] == "facenet-vggface2"
+    assert "model" not in observation
     np.testing.assert_allclose(observation["embedding"], np.asarray([0.1, 0.2, 0.3], dtype=np.float32))
     assert observation["metadata"]["score"] == 0.93
 
@@ -1013,7 +1013,7 @@ def test_enroll_visible_person_seeds_verified_profile_fields(monkeypatch):
     assert result["status"] == "enrolled"
     enrollment = service.identity_memory_client.enrollments[0]
     assert enrollment["person_id"] == "person_spatil2"
-    assert enrollment["model"] == "facenet-vggface2"
+    assert "model" not in enrollment
     assert enrollment["metadata"] == {
         "official_name": "Sakshee Patil",
         "employee_name": "Sakshee Patil",

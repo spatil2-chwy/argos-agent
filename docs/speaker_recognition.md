@@ -183,7 +183,6 @@ reference, it sends:
 
 - `person_id`
 - normalized ECAPA `embedding`
-- backend `model`
 - `consent_status: consented`
 
 Metadata sent alongside it includes:

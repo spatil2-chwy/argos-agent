@@ -862,7 +862,6 @@ class RealtimeRobotAgent:
                 modality="face",
                 person_id=owner_id,
                 embedding=observation.get("embedding"),
-                model=str(observation.get("model") or "facenet-vggface2"),
                 evidence=evidence,
                 metadata={
                     **metadata,

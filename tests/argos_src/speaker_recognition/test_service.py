@@ -118,7 +118,7 @@ def test_resolve_turn_owner_uses_tailwag_search_and_face_fallback():
         visible_face_person_ids=("alice",),
     )
 
-    assert memory.voice_searches[0]["model"] == "fake-ecapa"
+    assert "model" not in memory.voice_searches[0]
     assert memory.owner_requests[0]["voice_candidate"] is None
     assert result.audio_speaker_id is None
     assert result.owner_id == "alice"
@@ -261,7 +261,6 @@ def test_voice_adaptive_update_uses_audio_face_agreement():
     observation = coordinator.observations[0]
     assert observation.modality == "voice"
     assert observation.person_id == "alice"
-    assert observation.model == "fake-ecapa"
     assert observation.evidence["owner_source"] == "audio_face_agree"
     assert observation.evidence["primary_face_person_id"] == "alice"
     assert observation.evidence["audio_speaker_id"] == "alice"
@@ -316,7 +315,7 @@ def test_try_store_reference_enrolls_voice_reference_in_tailwag():
 
     assert result.saved is True
     assert memory.enrollments[0]["person_id"] == "alice"
-    assert memory.enrollments[0]["model"] == "fake-ecapa"
+    assert "model" not in memory.enrollments[0]
     metadata = memory.enrollments[0]["metadata"]
     assert metadata["query_duration_s"] == 2.5
     assert metadata["rms_level"] == 1200.0

@@ -160,11 +160,10 @@ class TailwagPackageIdentityMemoryClient:
         del site_code, current_person_id
         return ()
 
-    def search_face(self, *, embedding: Any, model: str, limit: int = 2) -> BiometricSearchResult:
+    def search_face(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
         try:
             result = self._client().search_face(
                 embedding=_embedding_list(embedding),
-                model=model,
                 limit=limit,
                 site_code=self.site_code or None,
             )
@@ -178,14 +177,12 @@ class TailwagPackageIdentityMemoryClient:
         *,
         person_id: str,
         embedding: Any,
-        model: str,
         metadata: dict[str, Any] | None = None,
         consent_status: str = "consented",
     ) -> BiometricEnrollmentResult:
         result = self._client().enroll_face_reference(
             person_id=person_id,
             embedding=_embedding_list(embedding),
-            model=model,
             metadata=dict(metadata or {}),
             consent_status=consent_status,
         )
@@ -196,7 +193,6 @@ class TailwagPackageIdentityMemoryClient:
         *,
         person_id: str,
         embedding: Any,
-        model: str,
         evidence: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> BiometricUpdateResult:
@@ -204,7 +200,6 @@ class TailwagPackageIdentityMemoryClient:
             result = self._client().observe_face_embedding(
                 person_id=str(person_id or "").strip(),
                 embedding=_embedding_list(embedding),
-                model=model,
                 evidence=dict(evidence or {}),
                 metadata=dict(metadata or {}),
             )
@@ -219,11 +214,10 @@ class TailwagPackageIdentityMemoryClient:
                 modality="face",
             )
 
-    def search_voice(self, *, embedding: Any, model: str, limit: int = 2) -> BiometricSearchResult:
+    def search_voice(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
         try:
             result = self._client().search_voice(
                 embedding=_embedding_list(embedding),
-                model=model,
                 limit=limit,
                 site_code=self.site_code or None,
             )
@@ -237,14 +231,12 @@ class TailwagPackageIdentityMemoryClient:
         *,
         person_id: str,
         embedding: Any,
-        model: str,
         metadata: dict[str, Any] | None = None,
         consent_status: str = "consented",
     ) -> BiometricEnrollmentResult:
         result = self._client().enroll_voice_reference(
             person_id=person_id,
             embedding=_embedding_list(embedding),
-            model=model,
             metadata=dict(metadata or {}),
             consent_status=consent_status,
         )
@@ -255,7 +247,6 @@ class TailwagPackageIdentityMemoryClient:
         *,
         person_id: str,
         embedding: Any,
-        model: str,
         evidence: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> BiometricUpdateResult:
@@ -263,7 +254,6 @@ class TailwagPackageIdentityMemoryClient:
             result = self._client().observe_voice_embedding(
                 person_id=str(person_id or "").strip(),
                 embedding=_embedding_list(embedding),
-                model=model,
                 evidence=dict(evidence or {}),
                 metadata=dict(metadata or {}),
             )

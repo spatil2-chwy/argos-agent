@@ -965,7 +965,6 @@ class FaceRecognitionService:
             return None, {"status": "rejected", "reason": "identity_memory_unavailable"}
         result = identity_memory.search_face(
             embedding=face["embedding"],
-            model="facenet-vggface2",
             limit=2,
         )
         matches = [
@@ -1825,7 +1824,6 @@ class FaceRecognitionService:
         result = identity_memory.enroll_face_reference(
             person_id=person_id,
             embedding=candidate.averaged_embedding,
-            model="facenet-vggface2",
             metadata=metadata,
             consent_status="consented",
         )
@@ -2480,7 +2478,6 @@ class FaceRecognitionService:
             self._recent_face_observations[rendered] = {
                 "person_id": rendered,
                 "embedding": vector,
-                "model": "facenet-vggface2",
                 "metadata": dict(metadata or {}),
                 "observed_at": time.time(),
             }
