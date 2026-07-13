@@ -37,7 +37,7 @@ class _Response:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def test_http_display_command_posts_to_request_operation():
+def test_http_display_command_posts_to_display():
     calls = []
 
     def fake_urlopen(request, timeout):
@@ -59,7 +59,7 @@ def test_http_display_command_posts_to_request_operation():
 
     assert result == {"ok": True}
     request, _timeout = calls[-1]
-    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/request/command"
+    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/display"
     assert request.get_method() == "POST"
     assert json.loads(request.data.decode("utf-8")) == {
         "type": "face",
@@ -95,7 +95,7 @@ def test_http_health_and_state_use_operational_get_endpoints():
     ]
 
 
-def test_http_display_image_posts_to_request_operation():
+def test_http_display_image_posts_to_image_endpoint():
     calls = []
 
     def fake_urlopen(request, timeout):
@@ -121,7 +121,7 @@ def test_http_display_image_posts_to_request_operation():
 
     assert result == {"ok": True}
     request, _timeout = calls[-1]
-    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/request/image"
+    assert request.full_url == f"http://localhost:4173/{RESOURCE_PREFIX}/image"
     assert request.get_method() == "POST"
     assert json.loads(request.data.decode("utf-8")) == {
         "dataUrl": "data:image/png;base64,abc",
@@ -130,12 +130,16 @@ def test_http_display_image_posts_to_request_operation():
     }
 
 
-def test_http_display_await_response_posts_to_request_operation():
-    calls = []
+def test_http_display_await_response_matches_request_id():
+    paths = []
+    responses = [
+        {"requestId": "other", "accepted": False},
+        {"requestId": "capture-1", "accepted": True, "action": "accept"},
+    ]
 
     def fake_urlopen(request, timeout):
-        calls.append((request, timeout))
-        return _Response({"requestId": "capture-1", "accepted": True, "action": "accept"})
+        paths.append(request.full_url)
+        return _Response(responses.pop(0))
 
     client = HttpProviderClient(
         base_url="http://localhost:4173",
@@ -153,15 +157,30 @@ def test_http_display_await_response_posts_to_request_operation():
 
     assert result["accepted"] is True
     assert result["action"] == "accept"
-    request, timeout = calls[-1]
-    assert timeout == pytest.approx(0.2)
-    assert request.full_url == (
-        f"http://localhost:4173/{RESOURCE_PREFIX}/request/await_response"
+    assert paths == [
+        f"http://localhost:4173/{RESOURCE_PREFIX}/response",
+        f"http://localhost:4173/{RESOURCE_PREFIX}/response",
+    ]
+
+
+def test_http_display_await_response_times_out():
+    def fake_urlopen(request, timeout):
+        return _Response({"requestId": "other", "accepted": False})
+
+    client = HttpProviderClient(
+        base_url="http://localhost:4173",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
+        urlopen_fn=fake_urlopen,
     )
-    assert json.loads(request.data.decode("utf-8")) == {
-        "requestId": "capture-1",
-        "poll_sec": 0.001,
-    }
+
+    with pytest.raises(ProviderTimeout):
+        client.request(
+            resource_id=RESOURCE_ID,
+            operation=OP_DISPLAY_AWAIT_RESPONSE,
+            args={"requestId": "capture-1", "poll_sec": 0.001},
+            timeout_ms=1,
+        )
 
 
 def test_http_provider_maps_408_response_to_timeout():
