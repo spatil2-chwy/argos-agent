@@ -159,10 +159,13 @@ def test_voice_capture_displays_prompt_as_message_and_recording_as_subtitle(
     )
 
     assert result["accepted"] is True
-    assert prompt in display.messages[0]
-    assert lab.VOICE_PROMPT_GUIDANCE in display.messages[0]
+    assert display.messages[0] == "Voice 1/5\nSilence.\nGet ready."
     assert any(prompt in message for message in display.messages)
-    assert any(lab.VOICE_PROMPT_GUIDANCE in message for message in display.messages)
+    assert any("Start speaking now." in message for message in display.messages)
+    assert any(
+        message == "Submitting audio 1/5...\nSilence." for message in display.messages
+    )
+    assert all(lab.VOICE_PROMPT_GUIDANCE not in message for message in display.messages)
     assert display.subtitles == [("Recording audio 1/5", 15000)]
     assert all(prompt not in text for text, _ in display.subtitles)
     assert all(lab.VOICE_PROMPT_GUIDANCE not in text for text, _ in display.subtitles)

@@ -73,6 +73,9 @@ VOICE_PROMPTS = (
 )
 
 VOICE_PROMPT_GUIDANCE = "Say what you see on screen, or say any sentence you want."
+VOICE_COUNTDOWN_DETAIL = "Silence.\nGet ready."
+VOICE_LISTENING_DETAIL = "Start speaking now."
+VOICE_SUBMITTING_DETAIL = "Silence."
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -254,6 +257,14 @@ def _show_subtitle(display: Any | None, text: str, *, duration_ms: int = 15000) 
         display.show_subtitle(text, duration_ms=duration_ms)
     except Exception:
         logger.debug("Display subtitle failed", exc_info=True)
+
+
+def _voice_sample_title(sample_number: int, total: int) -> str:
+    return f"Voice {sample_number}/{total}"
+
+
+def _voice_sentence_detail(prompt: str) -> str:
+    return f"{VOICE_LISTENING_DETAIL}\n\n{str(prompt or '').strip()}"
 
 
 def _countdown(display: Any | None, seconds: int) -> None:
@@ -527,22 +538,29 @@ def _capture_voice_sample(
     speaker_service: Any,
 ) -> dict[str, Any]:
     print(f"[voice] Read: {prompt}")
-    display_prompt = f"{VOICE_PROMPT_GUIDANCE}\n\n{prompt}"
-    _show(display, f"Voice {sample_number}/{total}", display_prompt)
+    title = _voice_sample_title(sample_number, total)
+    sentence_detail = _voice_sentence_detail(prompt)
+    _show(display, title, VOICE_COUNTDOWN_DETAIL)
     _countdown(display, int(args.voice_countdown_sec))
-    _show(display, f"Voice {sample_number}/{total}", display_prompt)
+    _show(display, title, sentence_detail)
 
     def _show_recording() -> None:
-        _show(display, f"Voice {sample_number}/{total}", display_prompt)
+        _show(display, title, sentence_detail)
         _show_subtitle(display, f"Recording audio {sample_number}/{total}")
 
     capture = _capture_microphone_utterance_raw(
         config,
         vad=vad,
-        on_listening=(lambda: _show(display, f"Voice {sample_number}/{total}", display_prompt)),
+        on_listening=(lambda: _show(display, title, sentence_detail)),
         on_recording_start=_show_recording,
         on_recording_stop=(
-            (lambda reason: _show(display, f"Saving audio {sample_number}/{total}...", reason))
+            (
+                lambda reason: _show(
+                    display,
+                    f"Submitting audio {sample_number}/{total}...",
+                    VOICE_SUBMITTING_DETAIL,
+                )
+            )
             if display is not None
             else None
         ),
@@ -616,11 +634,11 @@ def _collect_voice_samples(
     _show(
         display,
         "Voice enrollment",
-        f"Now I need {target} voice recordings. {VOICE_PROMPT_GUIDANCE}",
+        f"I need {target} voice recordings.\nSpeak only after the countdown.",
     )
     voice_intro = (
-        f"{VOICE_PROMPT_GUIDANCE}\n\n"
-        f"Once you accept, the {target} recordings will happen one after another."
+        f"I need {target} voice recordings.\n\n"
+        "After each countdown, the sentence will appear. Start speaking then."
     )
     print(f"\nVoice enrollment: {voice_intro}")
     if not _review_prompt(
