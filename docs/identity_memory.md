@@ -42,8 +42,10 @@ The remaining identity-memory profile keys are advanced switches with defaults:
   for Tailwag-owned retention policy.
 - `record_live_episodes`: defaults to `true`; controls whether resolved live
   turn segments are sent to Tailwag as episodes.
-- `extract_live_turn_memory`: defaults to `true`; controls whether Tailwag
-  extracts semantic memory from recorded live episodes.
+- `extract_live_turn_memory`: defaults to `false`; controls whether Tailwag
+  extracts semantic memory from recorded live episodes. Leave this off for
+  lower live-turn latency, and opt in only when episode sends should also run
+  Tailwag memory extraction.
 
 Removed Argos sections include `identity_store`, `employee_directory`, `memory`,
 and `slack_memory`. Face and speaker recognition no longer accept local database

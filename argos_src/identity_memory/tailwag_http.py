@@ -44,7 +44,7 @@ class TailwagHttpIdentityMemoryClient:
         site_code: str = "",
         place_room_id: str = DEFAULT_PLACE_ROOM,
         retention_class: str = DEFAULT_RETENTION_CLASS,
-        extract_live_turn_memory: bool = True,
+        extract_live_turn_memory: bool = False,
     ) -> None:
         self._provider_client = provider_client
         self._resource_id = str(resource_id or "").strip()
@@ -412,7 +412,7 @@ class TailwagHttpIdentityMemoryClient:
         del reason
         self._reset_active_episode()
 
-    def record_episode(self, episode: Any, *, extract_memory: bool = True) -> Any:
+    def record_episode(self, episode: Any, *, extract_memory: bool = False) -> Any:
         return self._request(
             "memory.episodes_record",
             {

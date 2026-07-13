@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from argos_src.agent.preference_types import PreferenceSegment, PreferenceSegmentTurn
 from argos_src.identity_memory.tailwag_http import TailwagHttpIdentityMemoryClient
 
 
@@ -58,10 +59,27 @@ class _StrictProviderClient:
             }
         if operation in {"memory.identity_verified_profile", "memory.people_profile"}:
             return None
+        if operation == "memory.episodes_record":
+            return {"episode_id": (args or {}).get("episode", {}).get("id", "")}
         raise AssertionError(f"Unexpected operation: {operation}")
 
     def shutdown(self):
         return None
+
+
+def _segment() -> PreferenceSegment:
+    return PreferenceSegment(
+        segment_id="segment-1",
+        person_id="person-1",
+        turns=(
+            PreferenceSegmentTurn(
+                turn_id="turn-1",
+                person_id="person-1",
+                user_text="I like short demos.",
+                assistant_text="Got it.",
+            ),
+        ),
+    )
 
 
 def test_tailwag_search_calls_match_http_provider_contract():
@@ -147,3 +165,67 @@ def test_tailwag_optional_profiles_preserve_http_null_results():
         "memory.identity_verified_profile",
         "memory.people_profile",
     ]
+
+
+def test_tailwag_record_episode_defaults_to_no_memory_extraction():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    result = client.record_episode({"id": "episode-1", "turns": []})
+
+    assert result == {"episode_id": "episode-1"}
+    assert provider.calls == [
+        (
+            "memory.episodes_record",
+            {
+                "resource_id": "memory",
+                "episode": {"id": "episode-1", "turns": []},
+                "extract_memory": False,
+            },
+        )
+    ]
+
+
+def test_tailwag_record_episode_explicit_true_opts_in_to_memory_extraction():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    client.record_episode({"id": "episode-1", "turns": []}, extract_memory=True)
+
+    assert provider.calls[0][1]["extract_memory"] is True
+
+
+def test_tailwag_live_episode_ingestion_defaults_to_no_memory_extraction():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    client.extract_and_store_segment(_segment(), reason="turn_complete")
+
+    assert provider.calls[0][0] == "memory.episodes_record"
+    assert provider.calls[0][1]["extract_memory"] is False
+    assert provider.calls[0][1]["episode"]["participants"] == [
+        {"id": "person-1", "role": "speaker", "source": "live_chat"}
+    ]
+
+
+def test_tailwag_live_episode_ingestion_explicit_true_opts_in_to_memory_extraction():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+        extract_live_turn_memory=True,
+    )
+
+    client.extract_and_store_segment(_segment(), reason="turn_complete")
+
+    assert provider.calls[0][0] == "memory.episodes_record"
+    assert provider.calls[0][1]["extract_memory"] is True

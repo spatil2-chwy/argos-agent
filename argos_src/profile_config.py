@@ -150,7 +150,7 @@ class IdentityMemoryProfile:
     place_room_id: str = "realtime"
     retention_class: str = "standard"
     record_live_episodes: bool = True
-    extract_live_turn_memory: bool = True
+    extract_live_turn_memory: bool = False
 
 
 @dataclass(frozen=True)
@@ -1386,7 +1386,7 @@ def _parse_identity_memory(data: dict[str, Any]) -> IdentityMemoryProfile:
         place_room_id=place_room_id,
         retention_class=retention_class,
         record_live_episodes=_pop_bool(data, "record_live_episodes", default=True),
-        extract_live_turn_memory=_pop_bool(data, "extract_live_turn_memory", default=True),
+        extract_live_turn_memory=_pop_bool(data, "extract_live_turn_memory", default=False),
     )
     _reject_unknown(data, "identity_memory")
     return profile

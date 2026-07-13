@@ -356,6 +356,9 @@ These transcripts are used for:
 - debugging
 - Tailwag realtime episode ingestion
 
+Episode ingestion records the conversation transcript for Tailwag, but Tailwag
+semantic memory extraction is a separate opt-in live-turn setting.
+
 They are not inserted as separate extra history items.
 
 ## What Is Not Stored in History
