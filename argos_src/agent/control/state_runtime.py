@@ -485,11 +485,6 @@ class AgentStateRuntime:
 
     def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
         new_owner_key = self._history_owner_key_for_turn(turn)
-        if getattr(turn, "source_is_internal", False):
-            if not getattr(self, "_active_history_owner_key", ""):
-                self._active_history_owner_key = new_owner_key
-            return
-
         old_owner_key = str(getattr(self, "_active_history_owner_key", "") or "")
         if old_owner_key == new_owner_key:
             return

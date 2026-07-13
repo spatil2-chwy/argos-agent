@@ -226,12 +226,27 @@ def test_anonymous_to_owner_clears_anonymous_history_and_keeps_memory_context() 
     assert current_turn.context_snapshot.memory_context_blocks == ("About: likes tea",)
 
 
-def test_internal_event_does_not_rotate_current_owner_session() -> None:
+def test_internal_anonymous_event_rotates_current_owner_session() -> None:
     runtime = FakeRuntime()
     runtime._active_history_owner_key = "owner:A"
     old_turn = make_turn("old", owner_id="A", finalized=True)
     register_turn_item(runtime, old_turn, "old-user")
     internal_turn = make_turn("internal", owner_id=None, source_is_internal=True)
+    runtime._turns_by_req_id[internal_turn.req_id] = internal_turn
+
+    runtime._maybe_rotate_history_for_turn(internal_turn)
+
+    assert deleted_item_ids(runtime) == ["old-user"]
+    assert runtime._active_history_owner_key == "anonymous"
+    assert list(runtime._history_item_order) == []
+
+
+def test_internal_same_owner_event_keeps_current_owner_session() -> None:
+    runtime = FakeRuntime()
+    runtime._active_history_owner_key = "owner:A"
+    old_turn = make_turn("old", owner_id="A", finalized=True)
+    register_turn_item(runtime, old_turn, "old-user")
+    internal_turn = make_turn("internal", owner_id="A", source_is_internal=True)
     runtime._turns_by_req_id[internal_turn.req_id] = internal_turn
 
     runtime._maybe_rotate_history_for_turn(internal_turn)

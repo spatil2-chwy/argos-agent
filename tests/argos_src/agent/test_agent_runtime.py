@@ -2577,6 +2577,45 @@ def test_internal_text_turn_uses_system_role_message():
     assert followups == [turn.req_id]
 
 
+def test_internal_recognized_face_event_resolves_owner_context():
+    agent = _make_agent()
+    person = SimpleNamespace(
+        person_id="person-9",
+        name="Alex",
+        interaction_count=1,
+        confidence=0.9,
+        bbox_area=100,
+        timestamp=1.0,
+        memory_profile_lines=(),
+        preferred_language="",
+        potential_followups=(),
+        visible=True,
+    )
+    agent.face_service = _FakeFaceService(
+        persons=[person],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+
+    agent.enqueue_internal_event(
+        "FACE_EVENT: recognized person 'Alex' appeared in front of you.",
+        metadata={
+            "internal": True,
+            "internal_event": "face",
+            "face_status": "recognized",
+            "person_id": "person-9",
+            "person_name": "Alex",
+            "req_id": "evt-face-alex",
+        },
+    )
+
+    turn = agent._turn_queue.get_nowait()
+
+    assert turn.source_is_internal is True
+    assert turn.owner_id == "person-9"
+    assert turn.owner_source == "face"
+    assert turn.context_snapshot.owner_id == "person-9"
+
+
 def test_external_text_turn_resolves_single_visible_owner_for_live_chat_memory():
     agent = _make_agent()
     person = SimpleNamespace(

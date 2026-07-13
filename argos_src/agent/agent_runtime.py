@@ -1313,7 +1313,27 @@ class RealtimeRobotAgent:
             meta["turn_kind"] = "internal_text" if bool(meta.get("internal", False)) else "human_text"
         context = self._capture_turn_context()
         resolution = None
-        if not bool(meta.get("internal", False)):
+        if bool(meta.get("internal", False)):
+            internal_owner_id = ""
+            if (
+                str(meta.get("internal_event") or "").strip() == "face"
+                and str(meta.get("face_status") or "").strip() == "recognized"
+            ):
+                internal_owner_id = str(meta.get("person_id") or "").strip()
+            if internal_owner_id:
+                resolution = self._face_owner_resolution(
+                    primary_face_person_id=internal_owner_id,
+                    visible_face_person_ids=(internal_owner_id,),
+                )
+                context = self._capture_turn_context(
+                    primary_face_person_id=internal_owner_id,
+                    audio_speaker_id=resolution.audio_speaker_id,
+                    owner_id=resolution.owner_id,
+                    owner_source=resolution.owner_source,
+                    owner_confidence=resolution.owner_confidence,
+                    speaker_visible=resolution.speaker_visible,
+                )
+        else:
             resolution = self._face_owner_resolution(
                 primary_face_person_id=context.primary_face_person_id,
             )

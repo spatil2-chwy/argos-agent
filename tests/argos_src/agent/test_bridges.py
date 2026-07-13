@@ -115,6 +115,7 @@ def test_face_bridge_requires_attention_when_configured(monkeypatch):
 
     assert len(submitted) == 1
     assert "recognized person 'Sakshee' appeared" in submitted[0][0]
+    assert submitted[0][1]["person_id"] == "p1"
     assert wake_calls == ["wake"]
 
 

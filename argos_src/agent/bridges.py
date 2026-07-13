@@ -108,7 +108,11 @@ class FaceEventBridge:
             return
 
     def _enqueue_face_event(
-        self, text: str, face_status: str, name: str = ""
+        self,
+        text: str,
+        face_status: str,
+        name: str = "",
+        person_id: str = "",
     ) -> None:
         nav_active = self._nav_state.get_active_goal() is not None
         self._coalescer.submit(
@@ -118,6 +122,7 @@ class FaceEventBridge:
                 "internal_event": "face",
                 "source": "face_recognition",
                 "face_status": face_status,
+                "person_id": person_id,
                 "person_name": name,
                 "nav_active": nav_active,
             },
@@ -266,6 +271,7 @@ class FaceEventBridge:
                     "in front of you.",
                     face_status="recognized",
                     name=p.name,
+                    person_id=p.person_id,
                 )
 
         self._previous_ids = ids_now

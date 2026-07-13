@@ -373,8 +373,8 @@ This is one of the biggest simplifications of the rewrite: repeated situational 
 
 ## Owner-Scoped History Reset
 
-The runtime rotates Realtime history on external human turns when the resolved
-owner key changes:
+The runtime rotates Realtime history before any model response when the turn's
+resolved owner key changes:
 
 - `owner:<person_id>` for recognized owners
 - `anonymous` when no owner is safely resolved
