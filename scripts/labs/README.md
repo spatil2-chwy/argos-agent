@@ -80,7 +80,12 @@ This guided lab uses the interaction display for phase accept/reject prompts,
 instructions, countdowns, and recording state. It is dry-run by default. With
 `--commit`, the first accepted face and voice embedding creates a Tailwag
 reference, and the next accepted samples update that same reference toward
-Tailwag's target sample count.
+Tailwag's target sample count. The selected profile must provide a
+`resources.identity_memory` manifest resource with `memory.identity`, and the
+Tailwag HTTP provider must be running with any required auth environment such as
+`TAILWAG_API_BEARER_TOKEN`. `--provider-transport` can override capture/display
+providers for lab smoke tests, but identity memory always uses the selected
+manifest's Tailwag provider route.
 
 ## Structured perception labs + eval
 
