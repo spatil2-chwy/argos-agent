@@ -81,6 +81,15 @@ export OPENAI_API_KEY=...
 python3 run_profile.py --profile static_interaction
 ```
 
+For POC data-quality sessions, add raw artifact capture:
+
+```bash
+python3 run_profile.py --profile static_interaction --save-raw-data
+```
+
+Artifacts are written under `data_collection/raw_sessions/` by default, which is
+git-ignored. Use `--raw-data-dir /path/to/dir` to put them somewhere else.
+
 The profile selects `manifest: puffle` and resource IDs such as `base`,
 `arducam_001`, and `screen_001`. When the manifest leaves Zenoh endpoints empty,
 set `ARGOS_ZENOH_CONNECT=tcp/ROBOT_OR_PROVIDER_HOST:7447` if discovery is not
@@ -122,7 +131,7 @@ python3 run_profile.py --profile static_interaction
 Before any structural cleanup, these are the baseline behaviors worth protecting:
 
 1. Normal wake-word turn reaches `recording_started`, `response_create`, and `playback_completed`.
-2. Face presence can open passive listening when the robot is idle.
+2. Attention-gated face presence can open passive listening when the robot is idle.
 3. A tool call completes and the follow-up assistant response still plays.
 4. Speaking over the robot interrupts playback cleanly.
 5. A recognized-speaker conversation still flushes preference extraction on idle or shutdown.
@@ -204,26 +213,9 @@ face-capture preview on the Puffle screen and saves only after Accept.
 
 ## Identity and Voice References
 
-Identities are shared across face and speaker recognition. Use the identity CLI
-when you want to delete a person completely.
-
-Manage identities and linked embeddings:
-
-```bash
-cd ~/argos-agent
-source setup_shell.sh
-python3 -m argos_src.identity.manage_identity --list
-python3 -m argos_src.identity.manage_identity --show "Your Name"
-python3 -m argos_src.identity.manage_identity --delete "Your Name"
-```
-
-The identity CLI accepts either:
-
-- a human name / alias from the identity store, or
-- a raw `person_id`
-
-Use [speaker_recognition.md](/home/spatil2/argos-agent/docs/speaker_recognition.md) if
-you need to inspect saved voice-reference metadata.
+Identities, face references, voice references, Slack ingestion, and durable
+memory are owned by Tailwag. Use Tailwag CLI tooling from `tailwag-memory` when
+you need to inspect or delete a person completely.
 
 ## Camera Preview
 
@@ -235,14 +227,13 @@ robot client.
 
 Run the targeted regression tests before live robot checks. For any smoke test
 that can move the robot, confirm clear space, battery state, a working stop path,
-and operator approval. For destructive local identity/biometric cleanup, use the
-guarded reset guidance in `identity_store.md`; Tailwag memory is external and
-must be reset with Tailwag tooling.
+and operator approval. For destructive identity/biometric cleanup, use Tailwag
+tooling.
 
 After bring-up, these are the highest-value manual checks:
 
 1. Wake-word turn from idle: say the wake word and ask a short question.
-2. Face-presence turn: stand in view and speak without the wake word.
+2. Attention-gated face turn: stand in view, face the camera, and speak without the wake word.
 3. Internal-event turn: trigger a non-motion provider event, or a nav/battery event only with operator approval.
 4. Tool call: ask for something that should call a known non-navigation tool, like visual inspection; use motion/trick tools only with operator approval.
 5. Interruption: speak while the robot is talking and confirm playback stops cleanly.
@@ -260,9 +251,9 @@ python3 -B -m pytest \
   tests/argos_src/test_argos_profile_config.py
 ```
 
-Employee-directory and RapidFuzz lab coverage lives in
-`tests/scripts/labs/test_rapidfuzz_employee_lab.py` and
-`tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`.
+Employee-directory resolution is covered through
+`tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`
+and Tailwag tests in `tailwag-memory`.
 
 ## Logs and Observability
 

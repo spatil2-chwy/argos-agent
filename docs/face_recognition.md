@@ -9,7 +9,7 @@ Read this with:
 - `argos_src/face_recognition/presence_cache.py`
 - `argos_src/tools/unitree_go2/vision/enroll_visible_person.py`
 - `argos_src/tools/unitree_go2/vision/resolve_employee_identity.py`
-- `argos_src/employee_directory/service.py`
+- `argos_src/identity_memory/tailwag_package.py`
 - `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
@@ -65,7 +65,7 @@ owner policy       -> owner_id for the turn
 | `presence_cache.py` | Stores current visible people, strict primary face identity, and `/go2/face_presence` snapshot. |
 | `enroll_visible_person.py` | LLM tool wrapper for safe live enrollment. The LLM passes only name and optional username. |
 | `resolve_employee_identity.py` | LLM tool for employee-directory lookup before enrollment. |
-| `employee_directory/service.py` | Loads Snowflake rows and locally rehydrates the verified profile during enrollment. |
+| `identity_memory/tailwag_package.py` | Calls Tailwag for directory lookup, biometric search/enrollment, encounters, and prompt context. |
 | `control/tool_runtime.py` | Arms voice enrollment after face enrollment succeeds. |
 
 ## Live Enrollment Flow
@@ -188,7 +188,7 @@ class FaceEnrollmentPolicy:
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    min_embedding_similarity: float = 0.70
+    min_embedding_similarity: float = 0.60
 ```
 
 `_assess_enrollment_face_quality()` can reject an enrollment frame for:
@@ -242,6 +242,26 @@ Every failure includes `failure_reason`. Some responses also include
 | `user_rejected_preview` | `user_rejected_preview` | The person rejected the face-capture preview. | Confirms the capture was not saved and asks whether to retry. |
 | `enrolled` | none | Enrollment succeeded. | Includes `person_id` and `next_step_hint`. |
 
+When `failure_reason="embedding_inconsistent"`, the response also includes
+`enrollment_diagnostics` so operators can see how far the burst missed the
+policy:
+
+```json
+{
+  "accepted_frame_count": 5,
+  "consistent_frame_count": 1,
+  "required_stable_frames": 3,
+  "min_embedding_similarity": 0.6,
+  "best_failed_similarity": 0.58,
+  "best_failed_shortfall": 0.12,
+  "similarities_to_reference": [1.0, 0.58, 0.42]
+}
+```
+
+The dashboard exposes the same signal as flattened `tool_enrollment_*` fields on
+the `enroll_visible_person` tool-result row, including consistent/required frame
+counts, threshold, best failed similarity, shortfall, and reference similarities.
+
 On success, the tool returns:
 
 ```json
@@ -282,16 +302,31 @@ gated_faces, rejected_count = filter_detections_by_depth(...)
 embedding = self.extract_face_embedding(image, detection)
 ```
 
+Argos normalizes provider camera frames to OpenCV-style BGR arrays before they
+reach the face pipeline. `pipeline.py` converts those BGR arrays to RGB PIL
+images immediately before MTCNN and FaceNet embedding. Raw RGB provider payloads
+must be tagged as `rgb8`, `format: rgb8`, `pixel_format: rgb8`, or
+`color_space: rgb` so the transport can convert them to internal BGR first. Raw
+data capture writes RGB JPEG artifacts for operator inspection, but recognition
+and enrollment continue to use the normalized BGR frame internally.
+
 The minimum recognition face area currently follows `FaceEnrollmentPolicy.min_face_area`
 (`1300` px in the static interaction profile). This keeps tiny distant faces from
 becoming recognized-person context while still allowing fisheye captures where
 valid nearby faces are smaller than RealSense crops.
 
-Recognition accepts the top database match only when similarity is at least
-`recognition_threshold` (`0.6` in the static interaction profile) and the
-top-vs-runner-up similarity margin is at least `recognition_margin_threshold`
-(`0.20`). This keeps low-confidence and ambiguous matches out of the live
-person context.
+Recognition sends FaceNet vectors to Tailwag. Tailwag owns biometric reference
+search, thresholds, margin policy, consent filtering, and archived-person
+filtering, then returns the accepted/rejected diagnostics that Argos logs and
+shows on the dashboard.
+
+For adaptive reference updates, the face loop only caches the most recent
+accepted face embedding for each recognized person in process memory. It does not
+write or update biometric storage directly. After speaker resolution, Argos
+offers that cached face observation to Tailwag only when the final owner source
+is `audio_face_agree`. Tailwag decides whether the observation is close enough to
+the current `FaceReference` aggregate and whether the reference has already
+reached its target sample count.
 
 What recognition does not do:
 
@@ -300,6 +335,7 @@ What recognition does not do:
 - no contrast gate
 - no frontal-face enrollment policy
 - no 5-frame burst consistency check
+- no prompt-visible biometric update notes
 
 That split is intentional. Enrollment should save only good references.
 Recognition should still recognize a real person when they move, turn slightly, or
@@ -402,8 +438,6 @@ Main config lives in:
 face_recognition:
   enabled: true
   loop_interval_sec: 0.3
-  recognition_threshold: 0.6
-  recognition_margin_threshold: 0.20
   depth_gate:
     enabled: false
     sync_slop_sec: 0.12
@@ -459,11 +493,9 @@ Attention gate settings:
 | `min_abs_pitch_deg: 0.0` | Minimum up/down head angle. | Keep low unless the camera geometry needs a pitch band. |
 
 The attention gate uses 6DRepNet on the existing MTCNN face crops. It does not
-replace FaceNet and does not add a second face detector. Pose limits are
-interpolated between near and distant settings using face `depth_m` when present,
-or face bbox area ratio when depth is unavailable. This lets a mounted RealSense
-camera treat a person standing around two meters back differently from a close
-webcam-like face crop. If `sixdrepnet` is not
+replace FaceNet and does not add a second face detector. It uses one absolute
+bbox-area threshold and one fixed yaw/pitch/roll threshold set; it does not vary
+pose limits by distance or optical-axis offset. If `sixdrepnet` is not
 installed or the model cannot initialize, attention returns
 `sixdrepnet_unavailable` and passive attention admission remains closed. The
 presence snapshot includes:
@@ -542,7 +574,6 @@ poetry run pytest \
   tests/argos_src/face_recognition/test_enrollment_display_review.py \
   tests/argos_src/tools/unitree_go2/vision/test_enroll_visible_person_tool.py \
   tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py \
-  tests/scripts/labs/test_rapidfuzz_employee_lab.py \
   tests/argos_src/speaker_recognition/test_policy.py \
   tests/argos_src/speaker_recognition/test_service.py \
   tests/argos_src/agent/test_agent_runtime.py
@@ -597,14 +628,5 @@ cd ~/argos-agent
 python3 run_profile.py --profile static_interaction
 ```
 
-Manage identities:
-
-```bash
-cd ~/argos-agent
-python3 -m argos_src.identity.manage_identity --list
-python3 -m argos_src.identity.manage_identity --show "Your Name"
-python3 -m argos_src.identity.manage_identity --delete "Your Name"
-```
-
-`argos_src.identity.manage_identity --delete` removes the identity row plus linked face
-and speaker embeddings.
+Manage durable identities, face references, and voice references with Tailwag
+tooling from `tailwag-memory`.

@@ -101,11 +101,12 @@ python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
 `setup_shell.sh` activates the Argos Poetry environment and exposes the repo
 root on `PYTHONPATH`. It does not source ROS.
 
-Tailwag-backed memory also requires the `tailwag-memory` package to be installed
-in the active Argos environment. For local development with the sibling checkout:
+Tailwag-backed memory is declared as a Poetry path dependency at
+`../tailwag-memory`. Keep that sibling checkout present before running
+`poetry install`. If you need to reinstall it manually from the Argos virtualenv:
 
 ```bash
-python3 -m pip install -e /Users/aaggarwal1/Desktop/code/tailwag-memory
+python3 -m pip install -e ../tailwag-memory
 ```
 
 ### 4. Configure Argos
@@ -129,7 +130,7 @@ export SLACK_BOT_TOKEN=...
 ```
 
 Tailwag-backed memory requires Tailwag runtime configuration when
-`memory.enabled: true`:
+`identity_memory.enabled: true`:
 
 ```bash
 export NEO4J_URI=bolt://localhost:7687

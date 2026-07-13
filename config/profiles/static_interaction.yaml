@@ -34,10 +34,9 @@ tools:
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
 
-employee_directory:
+identity_memory:
   enabled: true
-  site_code: "BOS3"
-  email_domain: chewy.com
+  site_code: BOS3
 
 knowledge_bases:
   - kind: whoami_query
@@ -51,38 +50,9 @@ knowledge_bases:
     description: Search Puffle's robot identity and embodiment knowledge base. Use this for detailed or technical factual questions about what kind of robot you are, your hardware, sensors, privacy and data handling, face recognition, memory fields, speech pipeline, and current system capabilities or limits like "whats the black thing on your head?" or "how do you hear and speak?". For quick playful self-introductions, answer directly without this tool.
     k: 4
 
-identity_store:
-  db_path: var/identity/identity.sqlite3
-
-memory:
-  enabled: true
-  retention_class: standard
-  place_room_id: realtime
-  extract_live_turn_memory: true
-
-slack_memory:
-  enabled: false
-  start_with_agent: false
-  bot_token_env: SLACK_BOT_TOKEN
-  poll_interval_sec: 1800.0
-  state_path: .tailwag/slack-state.json
-  backfill_hours: 2.0
-  force_backfill: false
-  active_thread_hours: 24.0
-  history_limit: 50
-  reply_limit: 200
-  extract_memory: true
-  include_email: true
-  channels:
-    - name: robotics_internal_team
-      channel_id: C0896C8CE83
-
 face_recognition:
   enabled: true
-  db_path: var/face_recognition
   loop_interval_sec: 0.05
-  recognition_threshold: 0.6
-  recognition_margin_threshold: 0.20
   recognition_stability:
     window_frames: 3
     min_hits: 1
@@ -117,7 +87,7 @@ face_recognition:
     min_brightness: 35.0
     max_brightness: 220.0
     min_contrast: 15.5
-    min_embedding_similarity: 0.70
+    min_embedding_similarity: 0.60
   attention_gate:
     enabled: true
     min_face_area: 1300
@@ -125,8 +95,6 @@ face_recognition:
     max_abs_pitch_deg: 18.0
     max_abs_roll_deg: 90.0
     min_abs_pitch_deg: 0.0
-  preference_extraction:
-    enabled: true
   proactive_greeting:
     recognized_enabled: true
     unknown_enabled: true
@@ -136,9 +104,6 @@ face_recognition:
 
 speaker_recognition:
   enabled: true
-  query_match_threshold: 0.40
-  query_margin_threshold: 0.20
-  reference_update_threshold: 0.55
   max_clipped_fraction: 0.02
   explicit_prompt_after_silent_failures: 2
 

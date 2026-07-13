@@ -710,6 +710,33 @@ def _decode_image_payload(payload: Any) -> np.ndarray | None:
     array = np.frombuffer(data, dtype=dtype)
     if shape:
         array = array.reshape(shape)
+    return _normalize_decoded_color_array(
+        array,
+        encoding=encoding,
+        color_space=(
+            payload.get("color_space")
+            or payload.get("pixel_format")
+            or payload.get("format")
+        ),
+    )
+
+
+def _normalize_decoded_color_array(
+    array: np.ndarray,
+    *,
+    encoding: str,
+    color_space: Any = None,
+) -> np.ndarray:
+    """Return camera color arrays in Argos' internal BGR channel order."""
+    rendered_encoding = str(color_space or encoding or "").strip().lower()
+    if array.ndim != 3 or array.shape[2] < 3:
+        return array
+    if rendered_encoding in {"rgb", "rgb8"}:
+        return np.ascontiguousarray(array[..., [2, 1, 0]])
+    if rendered_encoding in {"rgba", "rgba8"}:
+        return np.ascontiguousarray(array[..., [2, 1, 0]])
+    if rendered_encoding in {"bgra", "bgra8"}:
+        return np.ascontiguousarray(array[..., :3])
     return array
 
 

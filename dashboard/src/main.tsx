@@ -8,6 +8,9 @@ import {
   ChevronDown,
   CircleDollarSign,
   Clock3,
+  Database,
+  Fingerprint,
+  FileText,
   MessagesSquare,
   Mic,
   Radio,
@@ -101,6 +104,26 @@ type ToolCall = {
   success?: string | boolean | null;
 };
 
+type ModelPrompt = {
+  request_index: number;
+  ts?: string | null;
+  req_id?: string | null;
+  prompt?: string;
+  dynamic_context?: string;
+  delivery_instructions?: string;
+  history_snapshot?: string;
+  prompt_chars?: number | null;
+  static_prompt_chars?: number | null;
+  dynamic_context_chars?: number | null;
+  delivery_instructions_chars?: number | null;
+  history_snapshot_chars?: number | null;
+  history_owner_key?: string | null;
+  history_item_count?: number | null;
+  turn_history_item_count?: number | null;
+  history_item_ids?: string | null;
+  turn_history_item_ids?: string | null;
+};
+
 type LifecycleStage = {
   key: string;
   title: string;
@@ -132,6 +155,7 @@ type Exchange = {
   tools: Record<string, number>;
   tool_calls?: ToolCall[];
   costs: Record<string, number>;
+  model_prompts?: ModelPrompt[];
   first_audio_latency_s: number | null;
   conversation_segment_id?: string;
   conversation_segment_index?: number;
@@ -216,6 +240,10 @@ const stageIcon: Record<string, React.ReactNode> = {
   identity: <UserRound size={18} />,
   owner_handoff: <MessagesSquare size={18} />,
   memory_flushed: <MessagesSquare size={18} />,
+  tailwag_episode_recorded: <Database size={18} />,
+  tailwag_episode_failed: <AlertTriangle size={18} />,
+  tailwag_episode_skipped: <Database size={18} />,
+  biometric_update: <Fingerprint size={18} />,
   model_requested: <Bot size={18} />,
   first_audio: <Volume2 size={18} />,
   tool_requested: <Wrench size={18} />,
@@ -337,10 +365,49 @@ const stageDetailKeys: Record<string, string[]> = {
     "memory_flush_reason",
     "memory_extraction_scheduled"
   ],
+  tailwag_episode_recorded: [
+    "tailwag_episode_id",
+    "tailwag_episode_extract_memory",
+    "tailwag_memory_result_count",
+    "tailwag_memory_created_count",
+    "tailwag_memory_addressed_count",
+    "tailwag_memory_supported_count",
+    "tailwag_memory_error_count"
+  ],
+  tailwag_episode_failed: ["tailwag_episode_error"],
+  tailwag_episode_skipped: [
+    "memory_person_id",
+    "memory_turn_count",
+    "memory_flush_reason",
+    "memory_extraction_enabled"
+  ],
+  biometric_update: [
+    "biometric_update_modality",
+    "biometric_update_person_id",
+    "biometric_update_accepted",
+    "biometric_update_status",
+    "biometric_update_reason",
+    "biometric_update_sample_count",
+    "biometric_update_target_sample_count",
+    "biometric_update_similarity",
+    "biometric_update_reference_id"
+  ],
   model_requested: ["pending_internal_events"],
   first_audio: ["duration_s"],
   tool_requested: ["tool", "call_id", "tool_arguments_json"],
-  tool_finished: ["tool", "tool_success", "tool_result_preview"],
+  tool_finished: [
+    "tool",
+    "tool_success",
+    "tool_enrollment_failure_reason",
+    "tool_enrollment_accepted_frames",
+    "tool_enrollment_consistent_frames",
+    "tool_enrollment_required_frames",
+    "tool_enrollment_similarity_threshold",
+    "tool_enrollment_best_failed_similarity",
+    "tool_enrollment_best_failed_shortfall",
+    "tool_enrollment_similarities",
+    "tool_result_preview"
+  ],
   response_done: ["response_status"],
   response_usage: [
     "estimated_cost_usd",
@@ -491,6 +558,55 @@ function ToolCallList({ calls }: { calls: ToolCall[] }) {
             </div>
           ) : null}
         </section>
+      ))}
+    </div>
+  );
+}
+
+function TextBlock({ label, text, collapsed = false }: { label: string; text?: string; collapsed?: boolean }) {
+  const rendered = String(text ?? "").trim();
+  if (!rendered) return null;
+  if (collapsed) {
+    return (
+      <details className="prompt-block prompt-block-collapsed">
+        <summary>{label}</summary>
+        <pre>{rendered}</pre>
+      </details>
+    );
+  }
+  return (
+    <div className="prompt-block">
+      <span>{label}</span>
+      <pre>{rendered}</pre>
+    </div>
+  );
+}
+
+function ModelPromptList({ prompts }: { prompts: ModelPrompt[] }) {
+  return (
+    <div className="prompt-list">
+      {prompts.map((prompt) => (
+        <details className="prompt-snapshot" key={`${prompt.req_id ?? "prompt"}-${prompt.request_index}`} open={prompt.request_index === prompts.length}>
+          <summary>
+            <span>response.create {prompt.request_index}</span>
+            <small>{formatTime(prompt.ts)}</small>
+          </summary>
+          <KeyValueList
+            values={[
+              ["prompt_chars", prompt.prompt_chars],
+              ["static_prompt_chars", prompt.static_prompt_chars],
+              ["dynamic_context_chars", prompt.dynamic_context_chars],
+              ["history_snapshot_chars", prompt.history_snapshot_chars],
+              ["history_owner", prompt.history_owner_key],
+              ["history_items", prompt.history_item_count],
+              ["turn_history_items", prompt.turn_history_item_count]
+            ]}
+          />
+          <TextBlock label="dynamic context" text={prompt.dynamic_context} />
+          <TextBlock label="conversation history" text={prompt.history_snapshot} />
+          <TextBlock label="delivery" text={prompt.delivery_instructions} />
+          <TextBlock label="full prompt" text={prompt.prompt} collapsed />
+        </details>
       ))}
     </div>
   );
@@ -716,12 +832,12 @@ function App() {
       {apiError ? <div className="api-banner">API fallback: {apiError}</div> : null}
 
       <section className="metric-grid">
-        <MetricCard icon={<Radio size={20} />} label="Sessions" value={`${snapshot.summary.session_count}`} />
-        <MetricCard icon={<MessagesSquare size={20} />} label="Conversations" value={`${sessionSegments.length}`} />
-        <MetricCard icon={<Activity size={20} />} label="Exchanges" value={`${sessionExchanges.length}`} />
+        <MetricCard icon={<Radio size={20} />} label="All Sessions" value={`${snapshot.summary.session_count}`} />
+        <MetricCard icon={<MessagesSquare size={20} />} label="Conversations This Session" value={`${sessionSegments.length}`} />
+        <MetricCard icon={<Activity size={20} />} label="Exchanges This Session" value={`${sessionExchanges.length}`} />
         <MetricCard
           icon={<AlertTriangle size={20} />}
-          label="Errors"
+          label="Errors This Session"
           value={`${selectedErrorCount}`}
           tone="danger"
         />
@@ -814,7 +930,12 @@ function App() {
                       >
                         <div>
                           <strong>{exchange.label}</strong>
-                          <span>{formatTime(exchange.started_at)} human {"->"} Tailwag</span>
+                          <span>
+                            {formatTime(exchange.started_at)} human {"->"} Tailwag
+                            {(exchange.model_prompts?.length ?? 0) > 0 ? (
+                              <b className="prompt-badge">Prompt</b>
+                            ) : null}
+                          </span>
                         </div>
                         <StatusPill status={exchange.status} />
                       </button>
@@ -942,6 +1063,15 @@ function App() {
               <h3>State axes</h3>
               <BarList values={selectedExchangeStateAxisCounts} />
             </div>
+            {(selectedExchange?.model_prompts?.length ?? 0) > 0 ? (
+              <div className="diagnostic-section">
+                <div className="diagnostic-section-heading">
+                  <h3>LLM prompt</h3>
+                  <FileText size={16} />
+                </div>
+                <ModelPromptList prompts={selectedExchange?.model_prompts ?? []} />
+              </div>
+            ) : null}
             <div className="diagnostic-section">
               <h3>Raw lifecycle rows</h3>
               {(selectedExchange?.timeline ?? []).slice(0, 20).map((item) => (

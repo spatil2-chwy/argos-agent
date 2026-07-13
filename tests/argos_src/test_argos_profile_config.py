@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from argos_src.profile_config import (
-    DEFAULT_FACE_DB_PATH,
     ProfileValidationError,
     _parse_profile as _raw_parse_profile,
     load_scenario_profile,
@@ -71,10 +70,7 @@ def test_manifest_profile_derives_robot_and_bridge_settings():
                     "identity.resolve_employee_identity",
                 ],
             },
-            "employee_directory": {
-                "enabled": True,
-                "site_code": "BOS3",
-            },
+            "identity_memory": {"enabled": True, "site_code": "BOS3"},
         },
         profile_path=Path("/tmp/manifest-profile.yaml"),
         framework_config={},
@@ -140,23 +136,19 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.face_recognition.enrollment_policy.min_face_area == 1300
     assert profile.face_recognition.enrollment_policy.min_brightness == pytest.approx(35.0)
     assert profile.face_recognition.enrollment_policy.min_contrast == pytest.approx(15.5)
-    assert profile.face_recognition.recognition_threshold == pytest.approx(0.6)
-    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.20)
-    assert profile.face_recognition.recognition_stability.window_frames == 5
-    assert profile.face_recognition.recognition_stability.min_hits == 2
+    assert profile.face_recognition.recognition_stability.window_frames == 3
+    assert profile.face_recognition.recognition_stability.min_hits == 1
     assert profile.face_recognition.proactive_greeting.require_attention is True
     assert profile.realtime.admission.open_on_face_presence is False
     assert profile.realtime.admission.open_on_attention_presence is True
     assert profile.realtime.admission.block_during_engaged is True
     assert profile.realtime.admission.open_on_interaction_states == ("alert",)
-    assert profile.memory.enabled is True
-    assert profile.memory.retention_class == "standard"
-    assert profile.memory.place_room_id == "realtime"
-    assert profile.memory.extract_live_turn_memory is True
-    assert profile.slack_memory.enabled is True
-    assert profile.slack_memory.include_email is True
-    assert profile.slack_memory.extract_memory is True
-    assert profile.slack_memory.channels[0].channel_id == "C0896C8CE83"
+    assert profile.identity_memory.enabled is True
+    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.site_code == "BOS3"
+    assert profile.identity_memory.retention_class == "standard"
+    assert profile.identity_memory.place_room_id == "realtime"
+    assert profile.identity_memory.extract_live_turn_memory is True
 
 
 def test_navigation_profile_extends_static_interaction_capabilities():
@@ -175,7 +167,7 @@ def test_navigation_profile_extends_static_interaction_capabilities():
     assert "navigation.navigate_relative" in profile.tools.enabled_tool_ids
     assert "dock.charging" in profile.tools.enabled_tool_ids
 
-    assert profile.employee_directory.enabled is True
+    assert profile.identity_memory.site_code == "BOS3"
     assert profile.face_recognition.enabled is True
     assert profile.speaker_recognition.enabled is True
     assert profile.realtime.admission.open_on_attention_presence is True
@@ -366,108 +358,120 @@ def test_unknown_gesture_preset_is_rejected():
         )
 
 
-def test_employee_directory_defaults_to_disabled():
+def test_identity_memory_defaults_to_tailwag_enabled():
     profile = _parse_profile(
-        {"name": "employee-directory-defaults"},
-        profile_path=Path("/tmp/employee-directory-defaults.yaml"),
+        {"name": "identity-memory-defaults"},
+        profile_path=Path("/tmp/identity-memory-defaults.yaml"),
         framework_config={},
     )
 
-    assert profile.employee_directory.enabled is False
-    assert profile.employee_directory.site_code == ""
-    assert profile.employee_directory.email_domain == ""
+    assert profile.identity_memory.enabled is True
+    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.site_code == ""
+    assert profile.identity_memory.place_room_id == "realtime"
+    assert profile.identity_memory.retention_class == "standard"
 
 
-def test_employee_directory_requires_site_code_when_enabled():
-    with pytest.raises(ProfileValidationError, match="employee_directory.site_code"):
+def test_identity_memory_rejects_unknown_backend():
+    with pytest.raises(ProfileValidationError, match="identity_memory.backend"):
         _parse_profile(
             {
-                "name": "employee-directory-enabled",
-                "employee_directory": {
+                "name": "identity-memory-backend",
+                "identity_memory": {
                     "enabled": True,
+                    "backend": "sqlite",
                 },
             },
-            profile_path=Path("/tmp/employee-directory-enabled.yaml"),
+            profile_path=Path("/tmp/identity-memory-backend.yaml"),
             framework_config={},
         )
 
 
-def test_employee_directory_rejects_unknown_keys():
+def test_identity_memory_rejects_timeout_ms():
+    with pytest.raises(ProfileValidationError, match="identity_memory"):
+        _parse_profile(
+            {
+                "name": "identity-memory-timeout",
+                "identity_memory": {
+                    "timeout_ms": 750,
+                },
+            },
+            profile_path=Path("/tmp/identity-memory-timeout.yaml"),
+            framework_config={},
+        )
+
+
+def test_legacy_employee_directory_section_is_rejected():
     with pytest.raises(ProfileValidationError, match="employee_directory"):
         _parse_profile(
             {
-                "name": "employee-directory-unknown",
+                "name": "employee-directory-legacy",
                 "employee_directory": {
-                    "enabled": False,
-                    "site_code": "",
-                    "extra": True,
+                    "enabled": True,
+                    "site_code": "BOS3",
                 },
             },
-            profile_path=Path("/tmp/employee-directory-unknown.yaml"),
+            profile_path=Path("/tmp/employee-directory-legacy.yaml"),
             framework_config={},
         )
 
 
-def test_employee_directory_tool_is_removed_when_directory_disabled():
+def test_identity_tool_is_removed_when_identity_memory_disabled():
     profile = _parse_profile(
         {
-            "name": "employee-directory-disabled-tool",
+            "name": "identity-memory-disabled-tool",
             "tools": {
                 "enabled_tool_ids": [
                     "identity.resolve_employee_identity",
                 ]
             },
-            "employee_directory": {
+            "identity_memory": {
                 "enabled": False,
-                "site_code": "",
             },
         },
-        profile_path=Path("/tmp/employee-directory-disabled-tool.yaml"),
+        profile_path=Path("/tmp/identity-memory-disabled-tool.yaml"),
         framework_config={},
     )
 
     assert profile.tools.enabled_tool_ids == ()
 
 
-def test_employee_directory_tool_is_kept_when_directory_enabled():
+def test_identity_tool_is_kept_when_identity_memory_enabled():
     profile = _parse_profile(
         {
-            "name": "employee-directory-enabled-tool",
+            "name": "identity-memory-enabled-tool",
             "tools": {
                 "enabled_tool_ids": [
                     "identity.resolve_employee_identity",
                 ]
             },
-            "employee_directory": {
+            "identity_memory": {
                 "enabled": True,
                 "site_code": "BOS3",
-                "email_domain": "Chewy.COM",
             },
         },
-        profile_path=Path("/tmp/employee-directory-enabled-tool.yaml"),
+        profile_path=Path("/tmp/identity-memory-enabled-tool.yaml"),
         framework_config={},
     )
 
     assert profile.tools.enabled_tool_ids == (
         "identity.resolve_employee_identity",
     )
-    assert profile.employee_directory.site_code == "BOS3"
-    assert profile.employee_directory.email_domain == "Chewy.COM"
+    assert profile.identity_memory.site_code == "BOS3"
 
 
-def test_face_db_path_resolves_from_repo_root_not_cwd():
-    profile = _parse_profile(
-        {
-            "name": "face-db-path",
-            "face_recognition": {
-                "db_path": "var/face_recognition",
+def test_face_db_path_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="face_recognition"):
+        _parse_profile(
+            {
+                "name": "face-db-path",
+                "face_recognition": {
+                    "db_path": "var/face_recognition",
+                },
             },
-        },
-        profile_path=Path("/tmp/face-db-path.yaml"),
-        framework_config={},
-    )
-
-    assert profile.face_recognition.db_path == DEFAULT_FACE_DB_PATH
+            profile_path=Path("/tmp/face-db-path.yaml"),
+            framework_config={},
+        )
 
 
 def test_face_owner_turn_profile_is_configurable():
@@ -601,7 +605,6 @@ def test_face_enrollment_policy_profile_is_configurable():
                     "min_contrast": 16.0,
                     "min_embedding_similarity": 0.74,
                 },
-                "recognition_margin_threshold": 0.18,
             },
         },
         profile_path=Path("/tmp/enrollment-policy.yaml"),
@@ -614,7 +617,6 @@ def test_face_enrollment_policy_profile_is_configurable():
     assert policy.max_brightness == pytest.approx(215.0)
     assert policy.min_contrast == pytest.approx(16.0)
     assert policy.min_embedding_similarity == pytest.approx(0.74)
-    assert profile.face_recognition.recognition_margin_threshold == pytest.approx(0.18)
 
 
 def test_face_recognition_rejects_provider_internal_camera_keys():
@@ -659,14 +661,15 @@ def test_face_recognition_rejects_provider_internal_camera_keys():
         )
 
 
-def test_memory_profile_parses_tailwag_runtime_switches():
+def test_identity_memory_profile_parses_tailwag_runtime_switches():
     profile = _parse_profile(
         {
             "name": "tailwag-memory",
-            "memory": {
+            "identity_memory": {
                 "enabled": True,
                 "retention_class": "priority",
                 "place_room_id": "robotics-lab",
+                "record_live_episodes": False,
                 "extract_live_turn_memory": False,
             },
         },
@@ -674,152 +677,63 @@ def test_memory_profile_parses_tailwag_runtime_switches():
         framework_config={},
     )
 
-    assert profile.memory.enabled is True
-    assert profile.memory.retention_class == "priority"
-    assert profile.memory.place_room_id == "robotics-lab"
-    assert profile.memory.extract_live_turn_memory is False
+    assert profile.identity_memory.enabled is True
+    assert profile.identity_memory.retention_class == "priority"
+    assert profile.identity_memory.place_room_id == "robotics-lab"
+    assert profile.identity_memory.record_live_episodes is False
+    assert profile.identity_memory.extract_live_turn_memory is False
 
 
-def test_runtime_state_defaults_live_outside_source_package():
+def test_identity_memory_defaults_replace_runtime_state_paths():
     profile = _parse_profile(
         {"name": "runtime-state-defaults"},
         profile_path=Path("/tmp/runtime-state-defaults.yaml"),
         framework_config={},
     )
 
-    repo_root = Path(__file__).resolve().parents[2]
-    assert profile.identity_store.db_path == str(
-        repo_root / "var" / "identity" / "identity.sqlite3"
-    )
-    assert profile.memory.enabled is True
-    assert profile.memory.retention_class == "standard"
-    assert profile.memory.place_room_id == "realtime"
-    assert profile.memory.extract_live_turn_memory is True
-    assert profile.face_recognition.db_path == str(repo_root / "var" / "face_recognition")
-    assert profile.speaker_recognition.policy.db_path == str(
-        repo_root / "var" / "speaker_recognition"
-    )
+    assert profile.identity_memory.enabled is True
+    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.retention_class == "standard"
+    assert profile.identity_memory.place_room_id == "realtime"
+    assert profile.identity_memory.record_live_episodes is True
+    assert profile.identity_memory.extract_live_turn_memory is True
 
 
-def test_explicit_runtime_state_paths_are_preserved():
-    profile = _parse_profile(
-        {
-            "name": "explicit-runtime-state",
-            "identity_store": {"db_path": "/tmp/argos/identity.sqlite3"},
-            "memory": {
-                "enabled": False,
-                "retention_class": "short_lived",
-                "place_room_id": "atrium",
-                "extract_live_turn_memory": False,
-            },
-            "face_recognition": {"db_path": "/tmp/argos/faces"},
-        },
-        profile_path=Path("/tmp/explicit-runtime-state.yaml"),
-        framework_config={},
-    )
-
-    assert profile.identity_store.db_path == "/tmp/argos/identity.sqlite3"
-    assert profile.memory.enabled is False
-    assert profile.memory.retention_class == "short_lived"
-    assert profile.memory.place_room_id == "atrium"
-    assert profile.memory.extract_live_turn_memory is False
-    assert profile.face_recognition.db_path == "/tmp/argos/faces"
-
-
-def test_slack_memory_profile_parses_channel_wiring():
-    profile = _parse_profile(
-        {
-            "name": "slack-memory",
-            "slack_memory": {
-                "enabled": True,
-                "start_with_agent": False,
-                "bot_token_env": "CHEWY_SLACK_BOT_TOKEN",
-                "poll_interval_sec": 900.0,
-                "state_path": ".tailwag/test-slack-state.json",
-                "backfill_hours": 2.5,
-                "force_backfill": True,
-                "active_thread_hours": 12.0,
-                "history_limit": 50,
-                "reply_limit": 25,
-                "extract_memory": False,
-                "include_email": True,
-                "channels": [
-                    {
-                        "name": "argos-test",
-                        "channel_id": "C123",
-                        "backfill_hours": 1.5,
-                    }
-                ],
-            },
-        },
-        profile_path=Path("/tmp/slack-memory.yaml"),
-        framework_config={},
-    )
-
-    assert profile.slack_memory.enabled is True
-    assert profile.slack_memory.start_with_agent is False
-    assert profile.slack_memory.bot_token_env == "CHEWY_SLACK_BOT_TOKEN"
-    assert profile.slack_memory.poll_interval_sec == 900.0
-    assert profile.slack_memory.state_path.endswith(".tailwag/test-slack-state.json")
-    assert profile.slack_memory.backfill_hours == pytest.approx(2.5)
-    assert profile.slack_memory.force_backfill is True
-    assert profile.slack_memory.active_thread_hours == pytest.approx(12.0)
-    assert profile.slack_memory.history_limit == 50
-    assert profile.slack_memory.reply_limit == 25
-    assert profile.slack_memory.extract_memory is False
-    assert profile.slack_memory.include_email is True
-    assert len(profile.slack_memory.channels) == 1
-    channel = profile.slack_memory.channels[0]
-    assert channel.name == "argos-test"
-    assert channel.channel_id == "C123"
-    assert channel.backfill_hours == pytest.approx(1.5)
-
-
-def test_slack_memory_requires_memory_enabled():
-    with pytest.raises(
-        ProfileValidationError,
-        match="slack_memory.enabled requires memory.enabled",
-    ):
+def test_legacy_identity_store_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="identity_store"):
         _parse_profile(
             {
-                "name": "slack-without-tailwag",
-                "memory": {"enabled": False},
-                "slack_memory": {
-                    "enabled": True,
-                    "channels": [{"name": "argos-test", "channel_id": "C123"}],
-                },
+                "name": "explicit-runtime-state",
+                "identity_store": {"db_path": "/tmp/argos/identity.sqlite3"},
             },
-            profile_path=Path("/tmp/slack-without-tailwag.yaml"),
+            profile_path=Path("/tmp/explicit-runtime-state.yaml"),
             framework_config={},
         )
 
 
-def test_slack_memory_channel_requires_name():
-    with pytest.raises(ProfileValidationError, match="slack_memory.channels"):
+def test_legacy_memory_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="memory"):
+        _parse_profile(
+            {
+                "name": "legacy-memory",
+                "memory": {"enabled": False},
+            },
+            profile_path=Path("/tmp/legacy-memory.yaml"),
+            framework_config={},
+        )
+
+
+def test_legacy_slack_memory_section_is_rejected():
+    with pytest.raises(ProfileValidationError, match="slack_memory"):
         _parse_profile(
             {
                 "name": "bad-slack-memory",
                 "slack_memory": {
                     "enabled": True,
-                    "channels": [{"channel_id": "C123"}],
+                    "channels": [{"name": "argos-test", "channel_id": "C123"}],
                 },
             },
             profile_path=Path("/tmp/bad-slack-memory.yaml"),
-            framework_config={},
-        )
-
-
-def test_enabled_slack_memory_channel_requires_channel_id():
-    with pytest.raises(ProfileValidationError, match="channel_id is required"):
-        _parse_profile(
-            {
-                "name": "bad-slack-memory-channel-id",
-                "slack_memory": {
-                    "enabled": True,
-                    "channels": [{"name": "argos-test"}],
-                },
-            },
-            profile_path=Path("/tmp/bad-slack-memory-channel-id.yaml"),
             framework_config={},
         )
 
@@ -839,26 +753,35 @@ def test_speaker_recognition_rejects_internal_backend_keys():
         )
 
 
-def test_speaker_recognition_threshold_knobs_are_configurable():
+def test_speaker_recognition_tailwag_owned_threshold_knobs_are_rejected():
+    with pytest.raises(ProfileValidationError, match="speaker_recognition"):
+        _parse_profile(
+            {
+                "name": "speaker-thresholds",
+                "speaker_recognition": {
+                    "enabled": True,
+                    "query_match_threshold": 0.81,
+                },
+            },
+            profile_path=Path("/tmp/speaker-thresholds.yaml"),
+            framework_config={},
+        )
+
+
+def test_speaker_recognition_audio_quality_knobs_are_configurable():
     profile = _parse_profile(
         {
-            "name": "speaker-thresholds",
+            "name": "speaker-audio-quality",
             "speaker_recognition": {
                 "enabled": True,
-                "query_match_threshold": 0.81,
-                "query_margin_threshold": 0.11,
-                "reference_update_threshold": 0.57,
                 "max_clipped_fraction": 0.05,
             },
         },
-        profile_path=Path("/tmp/speaker-thresholds.yaml"),
+        profile_path=Path("/tmp/speaker-audio-quality.yaml"),
         framework_config={},
     )
 
     policy = profile.speaker_recognition.policy
-    assert policy.query_match_threshold == pytest.approx(0.81)
-    assert policy.query_margin_threshold == pytest.approx(0.11)
-    assert policy.reference_update_threshold == pytest.approx(0.57)
     assert policy.max_clipped_fraction == pytest.approx(0.05)
 
 

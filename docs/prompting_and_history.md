@@ -2,7 +2,7 @@
 
 Read this with:
 
-- `resources/prompts/static_interaction_prompt.md`
+- the prompt file selected by `realtime.prompt_file` in the active profile
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
 - `argos_src/agent/control/tool_runtime.py`
@@ -35,9 +35,10 @@ Those layers are deliberately kept separate.
 
 ## Layer 1: Static System Prompt
 
-The static system prompt lives in:
+The static system prompt path comes from the selected profile's
+`realtime.prompt_file`. In the default `static_interaction` profile, it lives in:
 
-- `resources/prompts/static_interaction_prompt.md`
+- `resources/prompts/personality_test_prompt.md`
 
 It is loaded by `factory.py` and sent in `RealtimeRobotAgent._configure_session()` as:
 
@@ -105,9 +106,9 @@ even if a recognized person is visible. This avoids addressing a visible
 bystander as the speaker when someone else talks off-camera or speaker
 recognition is inconclusive.
 
-Those lines come from `TailwagMemoryProvider.person_context(...)`. Tailwag
-writes future-facing summaries so the realtime model can use them without seeing
-the original conversation.
+Those lines come from the Tailwag identity-memory client. Tailwag writes
+future-facing summaries so the realtime model can use them without seeing the
+original conversation.
 
 Two important design choices are hiding here.
 

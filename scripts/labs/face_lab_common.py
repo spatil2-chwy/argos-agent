@@ -32,7 +32,7 @@ from argos_src.face_recognition.face_recognition_service import (
     FaceRecognitionService,
 )
 from argos_src.provider_api.factory import create_provider_client
-from argos_src.profile_config import load_scenario_profile, resolve_repo_path
+from argos_src.profile_config import load_scenario_profile
 
 DEFAULT_PREVIEW_DIR = _REPO_ROOT / "scripts" / "labs" / "face_preview"
 
@@ -62,28 +62,6 @@ def add_profile_args(parser: argparse.ArgumentParser) -> None:
             "Override the profile provider transport for lab runs. "
             "Use 'fake' for no-hardware smoke tests."
         ),
-    )
-    parser.add_argument(
-        "--db-path",
-        default="",
-        help="Override face embedding DB path. Defaults to the selected profile.",
-    )
-    parser.add_argument(
-        "--identity-db-path",
-        default="",
-        help="Override identity DB path. Defaults to the selected profile.",
-    )
-    parser.add_argument(
-        "--recognition-threshold",
-        type=float,
-        default=None,
-        help="Override face_recognition.recognition_threshold.",
-    )
-    parser.add_argument(
-        "--recognition-margin-threshold",
-        type=float,
-        default=None,
-        help="Override face_recognition.recognition_margin_threshold.",
     )
     parser.add_argument(
         "--disable-depth",
@@ -141,23 +119,7 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
     profile = load_scenario_profile(args.profile)
     face = profile.face_recognition
     camera_resource_id = args.camera_resource or profile.resources.face_camera
-    db_path = str(resolve_repo_path(args.db_path)) if args.db_path else face.db_path
-    identity_db_path = (
-        str(resolve_repo_path(args.identity_db_path))
-        if args.identity_db_path
-        else profile.identity_store.db_path
-    )
     loop_interval_sec = float(face.loop_interval_sec)
-    recognition_threshold = (
-        float(args.recognition_threshold)
-        if args.recognition_threshold is not None
-        else float(face.recognition_threshold)
-    )
-    recognition_margin_threshold = (
-        float(args.recognition_margin_threshold)
-        if args.recognition_margin_threshold is not None
-        else float(face.recognition_margin_threshold)
-    )
     provider_transport = (
         str(args.provider_transport or "").strip()
         or profile.robot.bridge.transport
@@ -209,11 +171,7 @@ def load_face_runtime_config(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "profile_name": profile.name,
         "camera_resource_id": camera_resource_id,
-        "db_path": db_path,
-        "identity_db_path": identity_db_path,
         "loop_interval_sec": loop_interval_sec,
-        "recognition_threshold": recognition_threshold,
-        "recognition_margin_threshold": recognition_margin_threshold,
         "depth_settings": depth_settings,
         "provider_transport": provider_transport,
         "provider_id": profile.robot.bridge.provider_id,
@@ -249,10 +207,6 @@ def build_face_service(
     )
     robot_client.start()
     service = FaceRecognitionService(
-        db_path=config["db_path"],
-        identity_db_path=config["identity_db_path"],
-        recognition_threshold=config["recognition_threshold"],
-        recognition_margin_threshold=config["recognition_margin_threshold"],
         robot_client=robot_client,
         camera_resource_id=config["camera_resource_id"],
         camera_yaw_offset_rad=(

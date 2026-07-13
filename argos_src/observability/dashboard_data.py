@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,6 +71,29 @@ def _float(row: dict[str, str], key: str) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+def _int(row: dict[str, str], key: str) -> int | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _decode_b64_text(value: str | None) -> str:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return ""
+    try:
+        return base64.b64decode(rendered, validate=True).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except (binascii.Error, ValueError):
+        return ""
 
 
 def _event_label(row: dict[str, str]) -> str:
@@ -181,6 +206,23 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "memory_flush_reason",
         "memory_extraction_enabled",
         "memory_extraction_scheduled",
+        "tailwag_episode_id",
+        "tailwag_episode_extract_memory",
+        "tailwag_memory_result_count",
+        "tailwag_memory_created_count",
+        "tailwag_memory_addressed_count",
+        "tailwag_memory_supported_count",
+        "tailwag_memory_error_count",
+        "tailwag_episode_error",
+        "biometric_update_modality",
+        "biometric_update_person_id",
+        "biometric_update_accepted",
+        "biometric_update_status",
+        "biometric_update_reason",
+        "biometric_update_reference_id",
+        "biometric_update_sample_count",
+        "biometric_update_target_sample_count",
+        "biometric_update_similarity",
         "audio_score",
         "audio_runner_up_score",
         "audio_score_margin",
@@ -199,6 +241,14 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "tool_arguments_json",
         "tool_success",
         "tool_result_preview",
+        "tool_enrollment_failure_reason",
+        "tool_enrollment_accepted_frames",
+        "tool_enrollment_consistent_frames",
+        "tool_enrollment_required_frames",
+        "tool_enrollment_similarity_threshold",
+        "tool_enrollment_best_failed_similarity",
+        "tool_enrollment_best_failed_shortfall",
+        "tool_enrollment_similarities",
         "response_status",
         "terminal_status",
         "terminal_reason",
@@ -238,6 +288,13 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "exchange_context": ("identity", "Speaker and owner resolved"),
         "owner_handoff": ("owner_handoff", "Owner handoff"),
         "memory_segment_flushed": ("memory_flushed", "Memory segment flushed"),
+        "tailwag_episode_recorded": ("tailwag_episode_recorded", "Tailwag episode recorded"),
+        "tailwag_episode_failed": ("tailwag_episode_failed", "Tailwag episode failed"),
+        "tailwag_episode_skipped": ("tailwag_episode_skipped", "Tailwag episode skipped"),
+        "adaptive_biometric_update": (
+            "biometric_update",
+            "Biometric reference update",
+        ),
         "response_create": ("model_requested", "Model requested"),
         "first_audio_latency_s": ("first_audio", "First reply audio"),
         "tool_call_requested": ("tool_requested", "Tool requested"),
@@ -253,6 +310,15 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
     if mapped is None:
         return None
     key, title = mapped
+    if label == "adaptive_biometric_update":
+        title = _biometric_update_title(row)
+    if label == "tailwag_episode_recorded":
+        created = str(row.get("tailwag_memory_created_count") or "0").strip()
+        errors = str(row.get("tailwag_memory_error_count") or "0").strip()
+        title = f"Tailwag episode recorded: {created} memories, {errors} errors"
+    if label == "tailwag_episode_failed":
+        reason = str(row.get("tailwag_episode_error") or "unknown").strip()
+        title = f"Tailwag episode failed: {reason}"
     return {
         "key": key,
         "title": title,
@@ -261,6 +327,57 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "component": row.get("component", "unknown"),
         "details": _stage_details(row),
     }
+
+
+def _model_prompt_from_response_create(
+    row: dict[str, str],
+    request_index: int,
+) -> dict[str, Any] | None:
+    prompt = _decode_b64_text(row.get("model_prompt_b64"))
+    dynamic_context = _decode_b64_text(row.get("model_dynamic_context_b64"))
+    delivery_instructions = _decode_b64_text(row.get("model_delivery_instructions_b64"))
+    history_snapshot = _decode_b64_text(row.get("model_history_snapshot_b64"))
+    if not prompt and not dynamic_context and not delivery_instructions and not history_snapshot:
+        return None
+    return {
+        "request_index": request_index,
+        "ts": row.get("ts"),
+        "req_id": row.get("req_id", ""),
+        "prompt": prompt,
+        "dynamic_context": dynamic_context,
+        "delivery_instructions": delivery_instructions,
+        "history_snapshot": history_snapshot,
+        "prompt_chars": _int(row, "model_prompt_chars"),
+        "static_prompt_chars": _int(row, "model_static_prompt_chars"),
+        "dynamic_context_chars": _int(row, "model_dynamic_context_chars"),
+        "delivery_instructions_chars": _int(row, "model_delivery_instructions_chars"),
+        "history_snapshot_chars": _int(row, "model_history_snapshot_chars"),
+        "history_owner_key": row.get("model_history_owner_key", ""),
+        "history_item_count": _int(row, "model_history_item_count"),
+        "turn_history_item_count": _int(row, "model_turn_history_item_count"),
+        "history_item_ids": row.get("model_history_item_ids", ""),
+        "turn_history_item_ids": row.get("model_turn_history_item_ids", ""),
+    }
+
+
+def _biometric_update_title(row: dict[str, str]) -> str:
+    modality = str(row.get("biometric_update_modality") or "reference").strip()
+    status = str(row.get("biometric_update_status") or "unknown").strip()
+    reason = str(row.get("biometric_update_reason") or "").strip()
+    sample_count = str(row.get("biometric_update_sample_count") or "").strip()
+    target_count = str(row.get("biometric_update_target_sample_count") or "").strip()
+    count_suffix = (
+        f" ({sample_count}/{target_count})"
+        if sample_count and target_count and target_count != "0"
+        else ""
+    )
+    if status == "updated":
+        return f"Biometric {modality} update accepted{count_suffix}"
+    if status == "complete":
+        return f"Biometric {modality} update complete{count_suffix}"
+    if reason:
+        return f"Biometric {modality} update {status}: {reason}{count_suffix}"
+    return f"Biometric {modality} update {status}{count_suffix}"
 
 
 @dataclass
@@ -309,9 +426,19 @@ class InteractionAccumulator:
         tool_calls_by_key: dict[str, dict[str, Any]] = {}
         counted_tool_keys: set[str] = set()
         estimated_exchange_cost = 0.0
+        model_prompts: list[dict[str, Any]] = []
+        response_create_count = 0
 
         for index, row in enumerate(self.rows):
             label = _event_label(row)
+            if label == "response_create":
+                response_create_count += 1
+                prompt_snapshot = _model_prompt_from_response_create(
+                    row,
+                    response_create_count,
+                )
+                if prompt_snapshot is not None:
+                    model_prompts.append(prompt_snapshot)
             openai_id = _openai_session_id(row)
             if openai_id:
                 openai_session_ids.add(openai_id)
@@ -510,6 +637,7 @@ class InteractionAccumulator:
             "tools": dict(tools),
             "tool_calls": list(tool_calls_by_key.values()),
             "costs": costs,
+            "model_prompts": model_prompts,
             "first_audio_latency_s": metrics.get("first_audio_latency_s"),
             "timeline": timeline,
         }

@@ -75,14 +75,8 @@ class DisplayController:
                 host._display_queue.task_done()
 
     @staticmethod
-    def subtitle_window(text: str, *, max_chars: int = 180) -> str:
-        rendered = " ".join(str(text or "").split())
-        if len(rendered) <= max_chars:
-            return rendered
-        trimmed = rendered[-max_chars:]
-        if " " in trimmed:
-            trimmed = trimmed.split(" ", 1)[1]
-        return trimmed.strip()
+    def subtitle_window(text: str) -> str:
+        return " ".join(str(text or "").split())
 
     @staticmethod
     def apply_mode(display: Any, mode: str) -> None:

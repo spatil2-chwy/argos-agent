@@ -411,8 +411,6 @@ def main() -> int:
             "profile_arg": args.profile,
             "camera_resource_id": config["camera_resource_id"],
             "provider_transport": config["provider_transport"],
-            "db_path": config["db_path"],
-            "identity_db_path": config["identity_db_path"],
             "enabled_components": {
                 "face_detection": True,
                 "face_enrollment": _requested(args.mode, "face_enrollment"),
@@ -424,7 +422,6 @@ def main() -> int:
                 "audio_detection": False,
             },
             "thresholds": {
-                "recognition_threshold": config["recognition_threshold"],
                 "depth_gate": asdict(depth_settings) if depth_settings is not None else None,
                 "enrollment_policy": asdict(enrollment_policy),
                 "attention_gate": asdict(attention_settings)

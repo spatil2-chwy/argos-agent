@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import base64
 import json
 import logging
 import os
@@ -61,6 +62,7 @@ from argos_src.agent.control.types import (
 )
 from argos_src.agent.control.watchdog_runtime import TurnWatchdogRuntime
 from argos_src.agent.control.voice_command_runtime import VoiceCommandRuntime
+from argos_src.identity_memory.biometric_updates import AdaptiveBiometricObservation
 from argos_src.observability.state_observer import StructuredStateObserver
 from argos_src.agent.runtime_context import (
     format_current_office_location_block,
@@ -102,6 +104,80 @@ __all__ = [
 ]
 
 PREFERENCE_IDLE_FLUSH_DELAY_SEC = 60.0
+HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT = 3000
+
+
+def _log_text_b64(value: str) -> str:
+    rendered = str(value or "")
+    if not rendered:
+        return ""
+    return base64.b64encode(rendered.encode("utf-8")).decode("ascii")
+
+
+def _history_content_text(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        rendered_type = str(part.get("type", "") or "").strip()
+        text = str(part.get("text") or part.get("transcript") or "").strip()
+        if text:
+            parts.append(text)
+        elif rendered_type in {"input_audio", "audio"}:
+            parts.append("[audio input]")
+        elif rendered_type in {"input_image", "image"}:
+            parts.append("[image input]")
+        elif rendered_type:
+            parts.append(f"[{rendered_type}]")
+    return "\n".join(part for part in parts if part)
+
+
+def _history_snapshot_from_item(item: dict[str, Any]) -> dict[str, str]:
+    item_type = str(item.get("type", "") or "").strip()
+    role = str(item.get("role", "") or "").strip()
+    status = str(item.get("status", "") or "").strip()
+    text = ""
+    if item_type == "function_call_output":
+        call_id = str(item.get("call_id", "") or "").strip()
+        output = str(item.get("output", "") or "").strip()
+        text = "\n".join(
+            part
+            for part in (
+                f"call_id={call_id}" if call_id else "",
+                output,
+            )
+            if part
+        )
+    elif item_type == "function_call":
+        name = str(item.get("name", "") or "").strip()
+        call_id = str(item.get("call_id", "") or "").strip()
+        arguments = str(item.get("arguments", "") or "").strip()
+        text = "\n".join(
+            part
+            for part in (
+                f"name={name}" if name else "",
+                f"call_id={call_id}" if call_id else "",
+                f"arguments={arguments}" if arguments else "",
+            )
+            if part
+        )
+    else:
+        text = _history_content_text(item.get("content"))
+    return {
+        "type": item_type,
+        "role": role,
+        "status": status,
+        "text": text,
+    }
+
+
+def _bound_history_snapshot_text(value: str) -> str:
+    rendered = str(value or "").strip()
+    if len(rendered) <= HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT:
+        return rendered
+    return rendered[: HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT - 3].rstrip() + "..."
 
 
 def _human_text_from_text_turn(text: str) -> str:
@@ -110,6 +186,20 @@ def _human_text_from_text_turn(text: str) -> str:
     if marker not in rendered:
         return rendered
     return rendered.split(marker, 1)[1].strip()
+
+
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
 
 
 class RealtimeRobotAgent:
@@ -126,9 +216,6 @@ class RealtimeRobotAgent:
         coalescer: Optional[EventCoalescer] = None,
         face_service: Any = None,
         speaker_service: Any = None,
-        employee_directory_service: Any = None,
-        slack_memory_service: Any = None,
-        identity_store: Any = None,
         memory_context_compiler: Any = None,
         preference_extractor: Any = None,
         preference_extraction_enabled: bool = False,
@@ -142,6 +229,9 @@ class RealtimeRobotAgent:
         stand_tool_name: str = "move_robot",
         supports_navigation: bool = False,
         state_observer: Any = None,
+        identity_memory_client: Any = None,
+        adaptive_update_coordinator: Any = None,
+        raw_data_capture: Any = None,
     ) -> None:
         self.logger = logging.getLogger("argos.agent_runtime")
         self.scenario_profile = scenario_profile
@@ -153,9 +243,9 @@ class RealtimeRobotAgent:
         self.coalescer = coalescer
         self.face_service = face_service
         self.speaker_service = speaker_service
-        self.employee_directory_service = employee_directory_service
-        self.slack_memory_service = slack_memory_service
-        self.identity_store = identity_store
+        self.identity_memory_client = identity_memory_client
+        self.adaptive_update_coordinator = adaptive_update_coordinator
+        self.raw_data_capture = raw_data_capture
         self.memory_context_compiler = memory_context_compiler
         self.preference_extractor = preference_extractor
         self.preference_extraction_enabled = preference_extraction_enabled
@@ -172,7 +262,7 @@ class RealtimeRobotAgent:
         self._last_tool_summary: Optional[str] = None
         self._last_external_input_s = 0.0
         self._current_office_location = str(
-            getattr(getattr(scenario_profile, "employee_directory", None), "site_code", "")
+            getattr(getattr(scenario_profile, "identity_memory", None), "site_code", "")
             or ""
         ).strip()
 
@@ -242,6 +332,7 @@ class RealtimeRobotAgent:
         self._current_primary_face_person_id: Optional[str] = None
         self._current_visible_face_person_ids: tuple[str, ...] = ()
         self._current_turn_audio_chunks: list[bytes] = []
+        self._current_raw_face_snapshot: Any = None
         self._current_turn_vad_positive_blocks = 0
         self._candidate_voice_blocks = 0
         self._recording_preroll_chunks: deque[tuple[float, bytes, bytes]] = deque()
@@ -284,6 +375,7 @@ class RealtimeRobotAgent:
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
+        self._history_item_snapshots: dict[str, dict[str, str]] = {}
         self._history_index_store = OwnerScopedHistoryIndex(
             item_order=self._history_item_order,
             known_item_ids=self._known_history_item_ids,
@@ -305,6 +397,18 @@ class RealtimeRobotAgent:
         ]
         self._session_id = ""
         self._session_estimated_cost_usd = 0.0
+        if self.raw_data_capture is not None:
+            try:
+                self.raw_data_capture.start_session(
+                    run_id=self._run_id,
+                    metadata={
+                        "profile": getattr(scenario_profile, "name", ""),
+                        "profile_file": str(getattr(scenario_profile, "source_path", "") or ""),
+                        "model": getattr(self.realtime_profile, "model", ""),
+                    },
+                )
+            except Exception:
+                self.logger.exception("Failed to start raw data capture session")
 
     # ------------------------------------------------------------------
     # State/history runtime
@@ -566,11 +670,60 @@ class RealtimeRobotAgent:
             owner_req_id=owner_req_id,
         )
 
+    def _record_history_item_snapshot(self, item_id: str, item: dict[str, Any]) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is None:
+                snapshots = {}
+                self._history_item_snapshots = snapshots
+            existing = dict(snapshots.get(rendered, {}))
+            incoming = _history_snapshot_from_item(item)
+            for key, value in incoming.items():
+                if value or not existing.get(key):
+                    existing[key] = value
+            snapshots[rendered] = existing
+
+    def _update_history_item_snapshot(
+        self,
+        item_id: str,
+        *,
+        text: str = "",
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+    ) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is None:
+                snapshots = {}
+                self._history_item_snapshots = snapshots
+            snapshot = dict(snapshots.get(rendered, {}))
+            if text:
+                snapshot["text"] = str(text)
+            if item_type:
+                snapshot["type"] = str(item_type)
+            if role:
+                snapshot["role"] = str(role)
+            if status:
+                snapshot["status"] = str(status)
+            snapshots[rendered] = snapshot
+
     def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
         self._state_controller()._register_turn_history_item(turn, item_id)
 
     def _forget_history_item(self, turn: Optional[QueuedTurn], item_id: str) -> None:
         self._state_controller()._forget_history_item(turn, item_id)
+        rendered = str(item_id or "").strip()
+        if rendered:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is not None:
+                snapshots.pop(rendered, None)
 
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
         return self._state_controller()._history_owner_key_for_turn(turn)
@@ -762,6 +915,7 @@ class RealtimeRobotAgent:
         speech_end_perf_s: float,
         speech_end_unix_s: float,
         face_evidence_fields: dict[str, Any] | None = None,
+        raw_face_snapshot: Any = None,
     ) -> None:
         self._audio_controller()._commit_audio_turn(
             primary_face_person_id,
@@ -771,6 +925,68 @@ class RealtimeRobotAgent:
             capture_vad_positive_blocks,
             speech_end_perf_s,
             speech_end_unix_s,
+            raw_face_snapshot,
+        )
+
+    def _maybe_submit_adaptive_face_observation(
+        self,
+        *,
+        resolution: SpeakerResolutionResult,
+        face_evidence_fields: dict[str, Any],
+        log_fields: dict[str, Any] | None = None,
+    ) -> None:
+        coordinator = getattr(self, "adaptive_update_coordinator", None)
+        face_service = getattr(self, "face_service", None)
+        owner_id = str(getattr(resolution, "owner_id", "") or "").strip()
+        if (
+            coordinator is None
+            or face_service is None
+            or not owner_id
+            or str(getattr(resolution, "owner_source", "") or "") != "audio_face_agree"
+        ):
+            return
+        getter = getattr(face_service, "get_recent_face_observation", None)
+        if not callable(getter):
+            return
+        try:
+            observation = getter(owner_id)
+        except Exception:
+            self.logger.debug(
+                "Adaptive face observation unavailable owner_id=%s",
+                owner_id,
+                exc_info=True,
+            )
+            return
+        if not observation:
+            return
+        metadata = dict(observation.get("metadata") or {})
+        evidence = {
+            **dict(face_evidence_fields or {}),
+            "owner_id": owner_id,
+            "owner_source": str(getattr(resolution, "owner_source", "") or ""),
+            "primary_face_person_id": str(face_evidence_fields.get("face_match_person_id") or owner_id),
+            "audio_speaker_id": str(getattr(resolution, "audio_speaker_id", "") or "").strip(),
+            "face_margin": _safe_float(
+                face_evidence_fields.get("face_score_margin") or metadata.get("margin")
+            ),
+            "voice_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "audio_score_margin": float(getattr(resolution, "margin", 0.0) or 0.0),
+            "recognized_count": _safe_int(face_evidence_fields.get("recognized_count")),
+            "unknown_count": _safe_int(face_evidence_fields.get("unknown_count")),
+        }
+        coordinator.submit(
+            AdaptiveBiometricObservation(
+                modality="face",
+                person_id=owner_id,
+                embedding=observation.get("embedding"),
+                evidence=evidence,
+                metadata={
+                    **metadata,
+                    "source": "face_loop",
+                    "observed_at": float(observation.get("observed_at", 0.0) or 0.0),
+                },
+                log_fields=dict(log_fields or {}),
+            )
         )
 
     def _playback_callback(self, outdata: Any, frames: int, time_info: Any, status: Any) -> None:
@@ -924,8 +1140,8 @@ class RealtimeRobotAgent:
         )
 
     @staticmethod
-    def _display_subtitle_window(text: str, *, max_chars: int = 180) -> str:
-        return DisplayController.subtitle_window(text, max_chars=max_chars)
+    def _display_subtitle_window(text: str) -> str:
+        return DisplayController.subtitle_window(text)
 
     def _display_worker_loop(self) -> None:
         self._display_controller_runtime().worker_loop()
@@ -1044,16 +1260,11 @@ class RealtimeRobotAgent:
                 self.speaker_service.shutdown()
             except Exception:
                 self.logger.exception("Failed to stop speaker service cleanly")
-        if getattr(self, "employee_directory_service", None) is not None:
+        if getattr(self, "adaptive_update_coordinator", None) is not None:
             try:
-                self.employee_directory_service.shutdown()
+                self.adaptive_update_coordinator.close()
             except Exception:
-                self.logger.exception("Failed to stop employee directory cleanly")
-        if getattr(self, "slack_memory_service", None) is not None:
-            try:
-                self.slack_memory_service.shutdown()
-            except Exception:
-                self.logger.exception("Failed to stop Tailwag Slack memory service cleanly")
+                self.logger.exception("Failed to stop adaptive biometric updates cleanly")
         if getattr(self, "memory_context_compiler", None) is not None:
             try:
                 close_memory = getattr(self.memory_context_compiler, "close", None)
@@ -1068,6 +1279,11 @@ class RealtimeRobotAgent:
                     shutdown_battery()
             except Exception:
                 self.logger.exception("Failed to stop battery cache cleanly")
+        if getattr(self, "raw_data_capture", None) is not None:
+            try:
+                self.raw_data_capture.close()
+            except Exception:
+                self.logger.exception("Failed to close raw data capture cleanly")
 
         self.engagement.shutdown()
         shutdown_robot = getattr(self.robot_client, "shutdown", None)
@@ -1461,7 +1677,7 @@ class RealtimeRobotAgent:
         )
         self._send_event({"type": "session.update", "session": session})
 
-    def _build_response_request(self, turn: QueuedTurn) -> dict[str, Any]:
+    def _build_response_instruction_snapshot(self, turn: QueuedTurn) -> dict[str, str]:
         dynamic_instructions = self._build_turn_instructions(turn)
         static_instructions = str(self.base_system_prompt or "").strip()
         dynamic_instructions = str(dynamic_instructions or "").strip()
@@ -1469,21 +1685,96 @@ class RealtimeRobotAgent:
             part for part in (static_instructions, dynamic_instructions) if part
         ]
         instructions = "\n\n".join(instruction_parts)
+        delivery_instructions = ""
         if turn.no_audio_retry_count > 0:
-            instructions = (
-                instructions
-                + "\n\n[DELIVERY] Respond with spoken audio for this turn. Do not return a silent text-only reply."
+            delivery_instructions = (
+                "[DELIVERY] Respond with spoken audio for this turn. Do not return a silent text-only reply."
             )
         if turn.incomplete_audio_continuation_count > 0:
-            instructions = (
-                instructions
-                + "\n\n[DELIVERY] Continue the current answer naturally from exactly where you left off. Do not restart, repeat, or summarize what you already said."
+            delivery_instructions = "\n\n".join(
+                part
+                for part in (
+                    delivery_instructions,
+                    "[DELIVERY] Continue the current answer naturally from exactly where you left off. Do not restart, repeat, or summarize what you already said.",
+                )
+                if part
             )
+        if delivery_instructions:
+            instructions = "\n\n".join(
+                part for part in (instructions, delivery_instructions) if part
+            )
+        return {
+            "instructions": instructions,
+            "static_instructions": static_instructions,
+            "dynamic_instructions": dynamic_instructions,
+            "delivery_instructions": delivery_instructions,
+        }
+
+    def _build_response_request(self, turn: QueuedTurn) -> dict[str, Any]:
+        instruction_snapshot = self._build_response_instruction_snapshot(turn)
         return realtime_response_payload(
-            instructions=instructions,
+            instructions=instruction_snapshot["instructions"],
             output_modalities=["audio"],
             max_output_tokens=self.realtime_profile.max_output_tokens,
         )
+
+    def _model_history_snapshot_text(self, history_item_ids: list[str]) -> str:
+        if not history_item_ids:
+            return ""
+        snapshots = getattr(self, "_history_item_snapshots", {}) or {}
+        start_index = max(1, len(history_item_ids) - 19)
+        blocks: list[str] = []
+        for index, item_id in enumerate(history_item_ids[-20:], start=start_index):
+            snapshot = snapshots.get(item_id, {})
+            item_type = str(snapshot.get("type", "") or "item").strip()
+            role = str(snapshot.get("role", "") or "").strip()
+            status = str(snapshot.get("status", "") or "").strip()
+            title_parts = [f"{index}.", role or item_type, f"item_id={item_id}"]
+            if role and item_type:
+                title_parts.insert(2, f"type={item_type}")
+            if status:
+                title_parts.append(f"status={status}")
+            text = _bound_history_snapshot_text(snapshot.get("text", "") or "")
+            if not text:
+                text = "(content not available locally)"
+            blocks.append(" ".join(title_parts) + "\n" + text)
+        return "\n\n".join(blocks)
+
+    def _model_prompt_log_fields(
+        self,
+        turn: QueuedTurn,
+        instruction_snapshot: dict[str, str],
+    ) -> dict[str, Any]:
+        history_item_ids = list(getattr(self, "_history_item_order", ()) or ())
+        turn_history_item_ids = sorted(str(item_id) for item_id in turn.history_item_ids)
+        history_snapshot_text = self._model_history_snapshot_text(history_item_ids)
+        instructions = instruction_snapshot.get("instructions", "")
+        static_instructions = instruction_snapshot.get("static_instructions", "")
+        dynamic_instructions = instruction_snapshot.get("dynamic_instructions", "")
+        delivery_instructions = instruction_snapshot.get("delivery_instructions", "")
+        fields: dict[str, Any] = {
+            "model_prompt_b64": _log_text_b64(instructions),
+            "model_prompt_chars": len(instructions),
+            "model_static_prompt_chars": len(static_instructions),
+            "model_dynamic_context_b64": _log_text_b64(dynamic_instructions),
+            "model_dynamic_context_chars": len(dynamic_instructions),
+            "model_history_owner_key": self._history_owner_key_for_turn(turn),
+            "model_history_item_count": len(history_item_ids),
+            "model_turn_history_item_count": len(turn_history_item_ids),
+        }
+        if history_snapshot_text:
+            fields["model_history_snapshot_b64"] = _log_text_b64(history_snapshot_text)
+            fields["model_history_snapshot_chars"] = len(history_snapshot_text)
+        if delivery_instructions:
+            fields["model_delivery_instructions_b64"] = _log_text_b64(
+                delivery_instructions
+            )
+            fields["model_delivery_instructions_chars"] = len(delivery_instructions)
+        if history_item_ids:
+            fields["model_history_item_ids"] = ",".join(history_item_ids[-20:])
+        if turn_history_item_ids:
+            fields["model_turn_history_item_ids"] = ",".join(turn_history_item_ids)
+        return fields
 
     def _send_response_create(self, turn: QueuedTurn) -> None:
         if self._is_turn_terminal(turn):
@@ -1503,10 +1794,23 @@ class RealtimeRobotAgent:
             ),
         )
         self._queue_pending_response_turn(turn.req_id)
+        instruction_snapshot = self._build_response_instruction_snapshot(turn)
+        response_request = realtime_response_payload(
+            instructions=instruction_snapshot["instructions"],
+            output_modalities=["audio"],
+            max_output_tokens=self.realtime_profile.max_output_tokens,
+        )
         self._latency.emit(
             event="response_create",
             req_id=turn.req_id,
+            **self._model_prompt_log_fields(turn, instruction_snapshot),
             **self._exchange_log_fields(turn),
+            _console_omit_fields=(
+                "model_prompt_b64",
+                "model_dynamic_context_b64",
+                "model_delivery_instructions_b64",
+                "model_history_snapshot_b64",
+            ),
         )
         self.logger.info(
             "Queueing response.create req_id=%s pending_response_requests=%s",
@@ -1516,7 +1820,7 @@ class RealtimeRobotAgent:
         self._send_event(
             {
                 "type": "response.create",
-                "response": self._build_response_request(turn),
+                "response": response_request,
             }
         )
 

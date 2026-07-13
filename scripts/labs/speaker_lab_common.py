@@ -42,8 +42,6 @@ DEFAULT_SESSION_DIR = Path(tempfile.gettempdir()) / "argos_speaker_lab" / "defau
 class SpeakerLabConfig:
     profile_name: str
     session_dir: str
-    profile_speaker_db_path: str
-    speaker_db_path: str
     clips_dir: str
     reports_dir: str
     input_device: str | None
@@ -158,7 +156,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 def add_policy_override_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--query-match-threshold", type=float, default=None)
     parser.add_argument("--query-margin-threshold", type=float, default=None)
-    parser.add_argument("--reference-update-threshold", type=float, default=None)
     parser.add_argument("--max-clipped-fraction", type=float, default=None)
 
 
@@ -170,23 +167,18 @@ def build_lab_config(args: argparse.Namespace) -> SpeakerLabConfig:
     for attr in (
         "query_match_threshold",
         "query_margin_threshold",
-        "reference_update_threshold",
         "max_clipped_fraction",
     ):
         value = getattr(args, attr, None)
         if value is not None:
             replacements[attr] = value
     session_dir = Path(str(args.session_dir or DEFAULT_SESSION_DIR)).expanduser().resolve()
-    speaker_db_path = session_dir / "speaker_db"
     clips_dir = session_dir / "clips"
     reports_dir = session_dir / "reports"
-    profile_speaker_db_path = str(base_policy.db_path)
-    policy = replace(base_policy, db_path=str(speaker_db_path), **replacements)
+    policy = replace(base_policy, **replacements)
     return SpeakerLabConfig(
         profile_name=profile.name,
         session_dir=str(session_dir),
-        profile_speaker_db_path=profile_speaker_db_path,
-        speaker_db_path=str(speaker_db_path),
         clips_dir=str(clips_dir),
         reports_dir=str(reports_dir),
         input_device=(str(args.input_device).strip() or realtime.input_device),
@@ -218,7 +210,6 @@ def build_lab_config(args: argparse.Namespace) -> SpeakerLabConfig:
 
 def ensure_session_dirs(config: SpeakerLabConfig) -> None:
     Path(config.session_dir).mkdir(parents=True, exist_ok=True)
-    Path(config.speaker_db_path).mkdir(parents=True, exist_ok=True)
     Path(config.clips_dir).mkdir(parents=True, exist_ok=True)
     Path(config.reports_dir).mkdir(parents=True, exist_ok=True)
 
@@ -475,34 +466,16 @@ def diagnose_enrollment_attempt(
     raw_audio_pcm16: bytes,
     trimmed_audio_pcm16: bytes,
 ) -> dict[str, Any]:
-    existing = service.db.get_reference(person_id)
     trimmed_waveform = np.frombuffer(trimmed_audio_pcm16 or b"", dtype=np.int16).copy()
     rejection_reason = enrollment_rejection_reason(
         service.policy,
         audio_pcm16=trimmed_waveform,
     )
-    consistency_score = None
-    if (
-        existing is not None
-        and existing.get("embedding") is not None
-        and not rejection_reason
-        and trimmed_waveform.size > 0
-    ):
-        query_embedding = service.backend.embed_query_clip(
-            trimmed_waveform,
-            sample_rate=SAMPLE_RATE,
-        )
-        consistency_score = cosine_similarity(
-            np.asarray(existing["embedding"], dtype=np.float32),
-            query_embedding,
-        )
     result = service.try_store_reference(
         person_id=person_id,
         audio_pcm16=trimmed_audio_pcm16,
         attempt_kind="silent",
     )
-    stored = service.db.get_reference(person_id)
-    metadata = dict((stored or {}).get("metadata") or {})
     return {
         "person_id": person_id,
         "raw_stats": render_stats_payload(raw_audio_pcm16),
@@ -518,28 +491,13 @@ def diagnose_enrollment_attempt(
         "enrollment_gate": {
             "accepted": not bool(rejection_reason),
             "rejection_reason": rejection_reason or "",
-            "existing_reference_before_attempt": bool(existing),
-            "consistency_score_to_existing": (
-                round(float(consistency_score), 4)
-                if consistency_score is not None
-                else None
-            ),
-            "reference_update_threshold": float(service.policy.reference_update_threshold),
         },
         "service_result": {
             "saved": bool(result.saved),
             "reason": str(result.reason),
             "attempt_kind": str(result.attempt_kind),
         },
-        "stored_reference": {
-            "present": bool(stored),
-            "clip_count": metadata.get("clip_count"),
-            "query_duration_s": metadata.get("query_duration_s"),
-            "total_voiced_sec": metadata.get("total_voiced_sec"),
-            "rms_level": metadata.get("rms_level"),
-            "mean_rms_level": metadata.get("mean_rms_level"),
-            "model_name": metadata.get("model_name"),
-        },
+        "stored_reference": "tailwag_owned",
     }
 
 
@@ -553,29 +511,35 @@ def diagnose_recognition_attempt(
     top_k: int,
 ) -> dict[str, Any]:
     trimmed_waveform = np.frombuffer(trimmed_audio_pcm16 or b"", dtype=np.int16).copy()
-    references = service.db.get_reference_embeddings()
     scores_payload: list[dict[str, Any]] = []
     top_score = 0.0
     runner_up_score = 0.0
     top_person_id = None
     corroborated_by_face = False
-    if trimmed_waveform.size > 0 and references:
+    if trimmed_waveform.size > 0 and getattr(service, "identity_memory_client", None) is not None:
         query_embedding = service.backend.embed_query_clip(
             trimmed_waveform,
             sample_rate=SAMPLE_RATE,
         )
-        scored = service.backend.score_against_references(query_embedding, references)
-        for person_id, score in scored[: max(1, int(top_k))]:
+        search = service.identity_memory_client.search_voice(
+            embedding=query_embedding,
+            model=str(getattr(service.backend, "model_name", service.policy.backend) or service.policy.backend),
+            limit=max(1, int(top_k)),
+        )
+        candidates = tuple(getattr(search, "candidates", ()) or ())
+        for candidate in candidates[: max(1, int(top_k))]:
+            person_id = str(getattr(candidate, "person_id", "") or "")
+            score = float(getattr(candidate, "score", 0.0) or 0.0)
             scores_payload.append(
                 {
-                    "person_id": str(person_id),
+                    "person_id": person_id,
                     "score": round(float(score), 4),
                 }
             )
-        if scored:
-            top_person_id = str(scored[0][0])
-            top_score = float(scored[0][1])
-            runner_up_score = float(scored[1][1]) if len(scored) > 1 else 0.0
+        if candidates:
+            top_person_id = str(getattr(candidates[0], "person_id", "") or "")
+            top_score = float(getattr(search, "top_score", getattr(candidates[0], "score", 0.0)) or 0.0)
+            runner_up_score = float(getattr(search, "runner_up_score", 0.0) or 0.0)
             corroborated_by_face = top_person_id == str(primary_face_person_id or "").strip() or (
                 top_person_id in tuple(str(item or "").strip() for item in visible_face_person_ids)
             )
@@ -611,7 +575,7 @@ def diagnose_recognition_attempt(
                 for item in visible_face_person_ids
                 if str(item or "").strip()
             ],
-            "reference_count": int(len(references)),
+            "reference_count": len(scores_payload),
         },
         "resolution": {
             "audio_speaker_id": resolution.audio_speaker_id,
@@ -749,12 +713,6 @@ def session_summary_payload(config: SpeakerLabConfig, *, vad_impl: str) -> dict[
     return {
         "profile_name": config.profile_name,
         "session_dir": config.session_dir,
-        "profile_speaker_db_path": config.profile_speaker_db_path,
-        "speaker_db_path": config.speaker_db_path,
-        "speaker_db_isolated_from_agent": (
-            str(Path(config.speaker_db_path).expanduser().resolve())
-            != str(Path(config.profile_speaker_db_path).expanduser().resolve())
-        ),
         "clips_dir": config.clips_dir,
         "reports_dir": config.reports_dir,
         "input_device": config.input_device,

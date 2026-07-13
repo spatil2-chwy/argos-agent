@@ -31,6 +31,42 @@ def log_preview(value: object, *, limit: int = TOOL_LOG_PREVIEW_LIMIT) -> str:
     return rendered[: max(limit - 3, 0)] + "..."
 
 
+def enrollment_tool_log_fields(tool_name: str, content: object) -> dict[str, Any]:
+    """Extract bounded enrollment diagnostics for structured dashboard rows."""
+    if tool_name != "enroll_visible_person":
+        return {}
+    payload = parse_tool_output(content) or {}
+    diagnostics = payload.get("enrollment_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return {}
+    similarities = diagnostics.get("similarities_to_reference")
+    if isinstance(similarities, list):
+        rendered_similarities = ",".join(str(item) for item in similarities[:8])
+    else:
+        rendered_similarities = ""
+    fields = {
+        "tool_enrollment_failure_reason": payload.get("failure_reason"),
+        "tool_enrollment_accepted_frames": diagnostics.get("accepted_frame_count"),
+        "tool_enrollment_consistent_frames": diagnostics.get("consistent_frame_count"),
+        "tool_enrollment_required_frames": diagnostics.get("required_stable_frames"),
+        "tool_enrollment_similarity_threshold": diagnostics.get(
+            "min_embedding_similarity"
+        ),
+        "tool_enrollment_best_failed_similarity": diagnostics.get(
+            "best_failed_similarity"
+        ),
+        "tool_enrollment_best_failed_shortfall": diagnostics.get(
+            "best_failed_shortfall"
+        ),
+        "tool_enrollment_similarities": rendered_similarities,
+    }
+    return {
+        key: value
+        for key, value in fields.items()
+        if value not in (None, "")
+    }
+
+
 class ToolRuntime:
     """Execute model-requested tools and insert their outputs into the session."""
 
@@ -88,6 +124,7 @@ class ToolRuntime:
             call_id=pending.call_id,
             tool_success=parse_tool_output(content).get("success"),
             tool_result_preview=log_preview(content),
+            **enrollment_tool_log_fields(pending.tool_name, content),
             **(
                 host._exchange_log_fields(turn)
                 if callable(getattr(host, "_exchange_log_fields", None))

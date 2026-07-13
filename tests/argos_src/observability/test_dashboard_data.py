@@ -1,3 +1,5 @@
+import base64
+
 from argos_src.observability.dashboard_data import (
     build_dashboard_snapshot,
     parse_latency_line,
@@ -7,6 +9,10 @@ from argos_src.observability.dashboard_data import (
 
 def _row(line: str) -> dict[str, str]:
     return parse_latency_line(line)
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
@@ -50,6 +56,24 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
             "owner_source=audio | session_id=s-1 | req_id=rt-1"
         ),
         _row(
+            "ts=2026-07-07 10:00:00.760 | component=identity_memory | "
+            "event=adaptive_biometric_update | session_id=s-1 | req_id=rt-1 | "
+            "biometric_update_modality=voice | biometric_update_person_id=person-1 | "
+            "biometric_update_accepted=True | biometric_update_status=updated | "
+            "biometric_update_reason=updated | biometric_update_sample_count=2 | "
+            "biometric_update_target_sample_count=5 | biometric_update_similarity=0.910"
+        ),
+        _row(
+            "ts=2026-07-07 10:00:00.850 | component=identity_memory | "
+            "event=tailwag_episode_recorded | session_id=s-1 | req_id=rt-1 | "
+            "memory_segment_id=rt-pref | memory_person_id=person-1 | "
+            "memory_turn_count=1 | memory_flush_reason=shutdown | "
+            "tailwag_episode_id=argos:conversation:1 | "
+            "tailwag_episode_extract_memory=True | tailwag_memory_result_count=1 | "
+            "tailwag_memory_created_count=1 | tailwag_memory_addressed_count=0 | "
+            "tailwag_memory_supported_count=0 | tailwag_memory_error_count=0"
+        ),
+        _row(
             "ts=2026-07-07 10:00:01.000 | component=state | event=ignored | "
             "session_id=s-1 | axis=coalescer | trigger=timer_flush | "
             "ignored_reason=recording_active"
@@ -87,6 +111,21 @@ def test_dashboard_snapshot_groups_sessions_interactions_and_state() -> None:
     assert identity_stage["details"]["face_match_reason"] == "below_threshold"
     assert identity_stage["details"]["face_score"] == "0.420"
     assert identity_stage["details"]["face_score_margin"] == "0.110"
+    biometric_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "biometric_update")
+    assert biometric_stage["title"] == "Biometric voice update accepted (2/5)"
+    assert biometric_stage["details"]["biometric_update_modality"] == "voice"
+    assert biometric_stage["details"]["biometric_update_accepted"] == "True"
+    assert biometric_stage["details"]["biometric_update_sample_count"] == "2"
+    assert biometric_stage["details"]["biometric_update_target_sample_count"] == "5"
+    assert biometric_stage["details"]["biometric_update_similarity"] == "0.910"
+    tailwag_stage = next(
+        stage for stage in interaction["lifecycle"] if stage["key"] == "tailwag_episode_recorded"
+    )
+    assert tailwag_stage["title"] == "Tailwag episode recorded: 1 memories, 0 errors"
+    assert tailwag_stage["details"]["tailwag_episode_id"] == "argos:conversation:1"
+    assert tailwag_stage["details"]["tailwag_episode_extract_memory"] == "True"
+    assert tailwag_stage["details"]["tailwag_memory_created_count"] == "1"
+    assert tailwag_stage["details"]["tailwag_memory_error_count"] == "0"
     assert interaction["tools"] == {"capture_scene": 1}
     assert interaction["state_by_axis"] == [
         {
@@ -176,6 +215,37 @@ def test_dashboard_snapshot_groups_consecutive_exchanges_by_owner_segment() -> N
     assert [exchange["conversation_segment_index"] for exchange in exchanges] == [1, 2, 1, 1]
 
 
+def test_dashboard_snapshot_exposes_enrollment_embedding_diagnostics() -> None:
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=tool | event=tool_result | "
+            "tool=enroll_visible_person | call_id=call-enroll | tool_success=False | "
+            "tool_result_preview={\"success\":false,\"failure_reason\":\"embedding_inconsistent\"} | "
+            "tool_enrollment_failure_reason=embedding_inconsistent | "
+            "tool_enrollment_accepted_frames=5 | "
+            "tool_enrollment_consistent_frames=1 | "
+            "tool_enrollment_required_frames=3 | "
+            "tool_enrollment_similarity_threshold=0.700 | "
+            "tool_enrollment_best_failed_similarity=0.580 | "
+            "tool_enrollment_best_failed_shortfall=0.120 | "
+            "tool_enrollment_similarities=1.0,0.58,0.42 | "
+            "session_id=s-1 | req_id=rt-enroll"
+        )
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    interaction = snapshot["interactions"][0]
+    tool_stage = next(stage for stage in interaction["lifecycle"] if stage["key"] == "tool_finished")
+    assert tool_stage["details"]["tool_enrollment_failure_reason"] == "embedding_inconsistent"
+    assert tool_stage["details"]["tool_enrollment_accepted_frames"] == "5"
+    assert tool_stage["details"]["tool_enrollment_consistent_frames"] == "1"
+    assert tool_stage["details"]["tool_enrollment_required_frames"] == "3"
+    assert tool_stage["details"]["tool_enrollment_best_failed_similarity"] == "0.580"
+    assert tool_stage["details"]["tool_enrollment_best_failed_shortfall"] == "0.120"
+    assert tool_stage["details"]["tool_enrollment_similarities"] == "1.0,0.58,0.42"
+
+
 def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
     rows = [
         _row(
@@ -206,6 +276,53 @@ def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
         "audio_commit",
         "model_requested",
         "response_usage",
+    ]
+
+
+def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
+    prompt = "STATIC RULES\n\n[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
+    dynamic = "[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
+    history = "1. user type=message item_id=item-a\nHello Argos"
+    rows = [
+        _row(
+            "ts=2026-07-07 10:00:00.000 | component=realtime | event=response_create | "
+            "run_id=run-live | exchange_id=ex-prompt | exchange_index=1 | req_id=rt-prompt | "
+            "turn_kind=human_audio | model_prompt_b64="
+            f"{_b64(prompt)} | model_prompt_chars={len(prompt)} | "
+            f"model_static_prompt_chars=12 | model_dynamic_context_b64={_b64(dynamic)} | "
+            f"model_dynamic_context_chars={len(dynamic)} | "
+            f"model_history_snapshot_b64={_b64(history)} | "
+            f"model_history_snapshot_chars={len(history)} | "
+            "model_history_owner_key=owner:person-1 | model_history_item_count=3 | "
+            "model_turn_history_item_count=1 | "
+            "model_history_item_ids=item-a,item-b,item-c | "
+            "model_turn_history_item_ids=item-c"
+        )
+    ]
+
+    snapshot = build_dashboard_snapshot(rows)
+
+    exchange = snapshot["exchanges"][0]
+    assert exchange["model_prompts"] == [
+        {
+            "request_index": 1,
+            "ts": "2026-07-07 10:00:00.000",
+            "req_id": "rt-prompt",
+            "prompt": prompt,
+            "dynamic_context": dynamic,
+            "delivery_instructions": "",
+            "history_snapshot": history,
+            "prompt_chars": len(prompt),
+            "static_prompt_chars": 12,
+            "dynamic_context_chars": len(dynamic),
+            "delivery_instructions_chars": None,
+            "history_snapshot_chars": len(history),
+            "history_owner_key": "owner:person-1",
+            "history_item_count": 3,
+            "turn_history_item_count": 1,
+            "history_item_ids": "item-a,item-b,item-c",
+            "turn_history_item_ids": "item-c",
+        }
     ]
 
 

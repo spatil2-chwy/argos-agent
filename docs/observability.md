@@ -74,6 +74,43 @@ The stable join keys are:
 - `req_id`: Realtime request/turn id, kept for diagnostics.
 - `openai_session_id`: raw OpenAI Realtime session id, kept for diagnostics.
 
+## Raw POC Artifacts
+
+Raw turn artifacts are disabled by default. For POC data-quality runs, start the
+runtime with:
+
+```bash
+python3 run_profile.py --profile static_interaction --save-raw-data
+```
+
+The default output directory is `data_collection/raw_sessions/`, which is
+ignored by git. Override it with `--raw-data-dir`.
+
+The layout mirrors the dashboard's `run_id -> conversation -> exchange` model:
+
+```text
+data_collection/raw_sessions/<run_id>/
+  session.json
+  conversations/
+    conversation-001_owner_<person_id>/
+      exchanges/
+        0001_<exchange_id>/
+          manifest.json
+          input_audio_16khz_mono.wav
+          face_at_recording_start.jpg
+          face_at_recording_start.json
+```
+
+Per-exchange audio is the same 16 kHz mono PCM buffer used for speaker
+recognition. The face snapshot is the latest cached face-loop detection frame at
+recording start, including the raw camera frame plus the face boxes and
+recognition/attention metadata available for that turn.
+
+The writer is queue-backed and opt-in. If image encoding or disk writes fall
+behind, Argos drops raw artifact writes and logs the dropped count instead of
+blocking the microphone callback, response loop, or face-recognition control
+path.
+
 Identity and context fields such as `primary_face_person_id`,
 `audio_speaker_id`, `owner_id`, `owner_source`, `owner_confidence`,
 `audio_score`, `audio_runner_up_score`, `audio_score_margin`,
@@ -88,6 +125,51 @@ successful face ownership and failed visible-face matches such as
 in raw diagnostics but does not show it in the main people panel because
 face-resolved owners may have `0.000` audio confidence while still being validly
 resolved from face context.
+
+`response_create` rows also carry an operator prompt snapshot for the dashboard.
+The full `response.create.instructions` string, dynamic context block, and a
+bounded conversation-history snapshot are logged as base64 fields so markdown
+tables, pipes, and newlines do not corrupt the pipe-separated latency log. The
+stdout mirror omits these base64 prompt payloads so live terminal logs stay
+readable. The dashboard decodes the file fields into each exchange's
+diagnostics panel.
+
+History itself remains owned by the live Realtime session. The dashboard
+history snapshot mirrors the runtime's known item order at `response_create`
+time, including roles and locally known text/transcripts for the latest items.
+Audio-only, image-only, or server-owned content that is not available locally is
+labelled as such rather than reconstructed.
+
+Adaptive biometric update attempts emit `component=identity_memory` with
+`event=adaptive_biometric_update`. When the event is associated with a turn, the
+dashboard shows a "Biometric reference update" lifecycle stage with:
+
+- `biometric_update_modality`
+- `biometric_update_accepted`
+- `biometric_update_status`
+- `biometric_update_reason`
+- `biometric_update_sample_count`
+- `biometric_update_target_sample_count`
+- `biometric_update_similarity`
+
+These fields are not prompt context. They are operator visibility into Tailwag's
+reference-update decision.
+
+Face enrollment consistency failures expose operator diagnostics through the
+normal tool-result row. When `enroll_visible_person` fails with
+`failure_reason=embedding_inconsistent`, the row may include flattened
+`tool_enrollment_*` fields such as:
+
+- `tool_enrollment_accepted_frames`
+- `tool_enrollment_consistent_frames`
+- `tool_enrollment_required_frames`
+- `tool_enrollment_similarity_threshold`
+- `tool_enrollment_best_failed_similarity`
+- `tool_enrollment_best_failed_shortfall`
+- `tool_enrollment_similarities`
+
+These explain whether enrollment barely missed the threshold or whether the face
+embeddings were unstable across the burst.
 
 When an error terminates an exchange, the terminal row carries generic
 `error_source`, `error_type`, `error_code`, and `error_message` fields when
@@ -135,10 +217,10 @@ Typical fields are:
 - `stream_id`
 - `ignored_reason`
 
-These records are meant for debugging and future evaluation dashboards. They
+These records are meant for debugging and dashboard diagnostics. They
 complement the latency markers rather than replacing them. The main dashboard
 attaches state rows with the same `req_id` to their owning exchange for
-Diagnostics, but it does not show a state trajectory as a first-class operator
+diagnostics, but it does not show a state trajectory as a first-class operator
 panel.
 
 Robot arbitration transitions currently cover patrol resume suppression/allow

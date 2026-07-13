@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -16,7 +17,6 @@ import torch
 
 from argos_src.face_recognition.bearing import estimate_robot_yaw_error_rad, face_center_px
 from argos_src.face_recognition.constants import (
-    DEFAULT_FACE_DB_PATH,
     MIN_FACE_DETECTION_CONFIDENCE,
 )
 from argos_src.face_recognition.attention_gate import (
@@ -34,9 +34,6 @@ from argos_src.face_recognition.models import (
 from argos_src.face_recognition.pipeline import FaceEmbeddingPipeline, FacePipelineCudaUnavailable
 from argos_src.face_recognition.presence_cache import FacePresenceCache
 from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyze_face_scene
-from argos_src.face_recognition.store import FaceRecognitionStore
-from argos_src.identity.prompting import format_identity_profile_lines
-from argos_src.memory_provider.encounters import build_encounter_metadata
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
@@ -58,7 +55,7 @@ class FaceEnrollmentPolicy:
     min_brightness: float = 35.0
     max_brightness: float = 220.0
     min_contrast: float = 15.5
-    min_embedding_similarity: float = 0.70
+    min_embedding_similarity: float = 0.60
 
 
 DEFAULT_FACE_ENROLLMENT_POLICY = FaceEnrollmentPolicy()
@@ -182,20 +179,16 @@ class FaceRecognitionService:
     Pipeline:
     - MTCNN: face detection + alignment
     - InceptionResnetV1 (FaceNet, vggface2): 512-d face embeddings
-    - ChromaDB: persistent storage + similarity search
+    - Tailwag-owned biometric search and enrollment
     """
 
     def __init__(
         self,
-        db_path: str = DEFAULT_FACE_DB_PATH,
-        recognition_threshold: float = 0.6,
-        recognition_margin_threshold: float = 0.20,
         robot_client: Any | None = None,
         depth_gate_settings: Optional[DepthGateSettings] = None,
         attention_gate_settings: AttentionGateSettings | None = None,
         enrollment_policy: FaceEnrollmentPolicy | None = None,
-        identity_db_path: str | None = None,
-        identity_store: Any | None = None,
+        identity_memory_client: Any | None = None,
         memory_store: Any | None = None,
         site_code: str = "",
         camera_resource_id: str = "",
@@ -212,13 +205,7 @@ class FaceRecognitionService:
         self.resnet = None
 
         self.robot_client = robot_client
-        self._recognition_threshold = float(recognition_threshold)
-        self._recognition_margin_threshold = float(recognition_margin_threshold)
-        self.db = FaceRecognitionStore(
-            db_path=db_path,
-            identity_db_path=identity_db_path,
-            identity_store=identity_store,
-        )
+        self.identity_memory_client = identity_memory_client
         self.memory_store = memory_store
         self.site_code = str(site_code or "").strip()
         self._depth_gate_settings = depth_gate_settings
@@ -239,10 +226,13 @@ class FaceRecognitionService:
         self._attentive_unknown_stability_frames = 0
         self._presence_subscribers: list[Callable[[dict[str, Any]], None]] = []
         self._presence_subscribers_lock = threading.Lock()
+        self._recent_face_observations: dict[str, dict[str, Any]] = {}
+        self._recent_face_observations_lock = threading.Lock()
         self._loop_thread: Optional[threading.Thread] = None
         self._loop_stop = threading.Event()
         self._latest_loop_frame_lock = threading.Lock()
         self._latest_loop_frame = None
+        self._latest_loop_faces: list[dict[str, Any]] = []
         self._latest_loop_frame_resource_id: str | None = None
         self._latest_loop_frame_at = 0.0
         self._loop_log_heartbeat_at: dict[str, float] = {}
@@ -255,10 +245,10 @@ class FaceRecognitionService:
             else ""
         )
         logger.info(
-            "Face Recognition Service initialized (device=%s%s, enrolled=%s)",
+            "Face Recognition Service initialized (device=%s%s, identity_memory=%s)",
             self.device,
             gpu_name,
-            self.db.collection.count(),
+            type(identity_memory_client).__name__ if identity_memory_client is not None else "disabled",
         )
 
     def subscribe_presence(
@@ -365,12 +355,14 @@ class FaceRecognitionService:
         image,
         camera_resource_id: str,
         captured_at: float,
+        faces: list[dict[str, Any]] | None = None,
     ) -> None:
         """Store the most recent color frame seen by the background face loop."""
         if image is None:
             return
         with self._latest_loop_frame_lock:
             self._latest_loop_frame = image.copy()
+            self._latest_loop_faces = [dict(face) for face in (faces or [])]
             self._latest_loop_frame_resource_id = camera_resource_id
             self._latest_loop_frame_at = float(captured_at)
 
@@ -396,6 +388,30 @@ class FaceRecognitionService:
             if max_age_sec >= 0.0 and (time.time() - captured_at) > max_age_sec:
                 return None, None, None
             return image.copy(), cached_resource_id, captured_at
+
+    def get_cached_latest_detection_frame(
+        self,
+        *,
+        camera_resource_id: str | None = None,
+        max_age_sec: float = 2.0,
+    ) -> tuple[object | None, list[dict[str, Any]], str | None, float | None]:
+        """Return the latest cached face-loop frame and detector output."""
+        lock = getattr(self, "_latest_loop_frame_lock", None)
+        if lock is None:
+            return None, [], None, None
+
+        with lock:
+            image = getattr(self, "_latest_loop_frame", None)
+            cached_resource_id = getattr(self, "_latest_loop_frame_resource_id", None)
+            captured_at = float(getattr(self, "_latest_loop_frame_at", 0.0))
+            if image is None or cached_resource_id is None or captured_at <= 0.0:
+                return None, [], None, None
+            if camera_resource_id and camera_resource_id != cached_resource_id:
+                return None, [], None, None
+            if max_age_sec >= 0.0 and (time.time() - captured_at) > max_age_sec:
+                return None, [], None, None
+            faces = [dict(face) for face in getattr(self, "_latest_loop_faces", [])]
+            return image.copy(), faces, cached_resource_id, captured_at
 
     # ------------------------------------------------------------------
     # Detection + embedding
@@ -753,6 +769,52 @@ class FaceRecognitionService:
             "Please face me directly and hold still for a second.",
         )
 
+    @classmethod
+    def _enrollment_similarity_diagnostics(
+        cls,
+        *,
+        accepted_faces: list[dict[str, Any]],
+        reference_item: dict[str, Any],
+        threshold: float,
+    ) -> dict[str, Any]:
+        reference_face = reference_item["face"]
+        similarities: list[float] = []
+        failed_similarities: list[float] = []
+        consistent_count = 0
+        for item in accepted_faces:
+            face = item["face"]
+            similarity = cls._embedding_similarity(
+                reference_face["embedding"],
+                face["embedding"],
+            )
+            rounded_similarity = round(float(similarity), 3)
+            similarities.append(rounded_similarity)
+            if similarity >= threshold:
+                consistent_count += 1
+            else:
+                failed_similarities.append(float(similarity))
+
+        best_failed_similarity = (
+            max(failed_similarities) if failed_similarities else None
+        )
+        return {
+            "burst_frames": ENROLLMENT_BURST_FRAMES,
+            "required_stable_frames": ENROLLMENT_REQUIRED_STABLE_FRAMES,
+            "accepted_frame_count": len(accepted_faces),
+            "consistent_frame_count": consistent_count,
+            "min_embedding_similarity": round(float(threshold), 3),
+            "similarities_to_reference": similarities,
+            "best_failed_similarity": round(best_failed_similarity, 3)
+            if best_failed_similarity is not None
+            else None,
+            "best_failed_shortfall": round(
+                max(0.0, float(threshold) - best_failed_similarity),
+                3,
+            )
+            if best_failed_similarity is not None
+            else None,
+        }
+
     @staticmethod
     def _embedding_similarity(left: Any, right: Any) -> float:
         left_vec = np.asarray(left, dtype=np.float32).reshape(-1)
@@ -890,54 +952,75 @@ class FaceRecognitionService:
                 "name": str(match.get("name", "") or ""),
                 "person_id": str(match.get("person_id", "") or ""),
                 "similarity": similarity,
-                "threshold": float(getattr(self, "_recognition_threshold", 0.0) or 0.0),
+                "threshold": 0.0,
                 "runner_up_similarity": float(
                     match.get("runner_up_similarity", 0.0) or 0.0
                 ),
                 "margin": float(match.get("similarity_margin", 0.0) or 0.0),
-                "margin_threshold": float(
-                    getattr(self, "_recognition_margin_threshold", 0.0) or 0.0
-                ),
+                "margin_threshold": 0.0,
             }
 
-        matches = self.db.recognize_face(
-            face_embedding=face["embedding"],
-            threshold=-1.0,
-            top_k=2,
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return None, {"status": "rejected", "reason": "identity_memory_unavailable"}
+        result = identity_memory.search_face(
+            embedding=face["embedding"],
+            limit=2,
         )
+        matches = [
+            {
+                "person_id": candidate.person_id,
+                "name": candidate.display_name or candidate.person_id,
+                "similarity": float(candidate.score),
+                "metadata": dict(candidate.metadata or {}),
+            }
+            for candidate in tuple(getattr(result, "candidates", ()) or ())
+        ]
         if not matches:
             return None, {"status": "rejected", "reason": "no_db_match"}
         top_match = matches[0]
-        top_similarity = float(top_match.get("similarity", 0.0) or 0.0)
-        runner_up_similarity = (
-            float(matches[1].get("similarity", 0.0) or 0.0)
-            if len(matches) > 1
-            else 0.0
-        )
-        margin = top_similarity - runner_up_similarity
-        if top_similarity < self._recognition_threshold:
+        top_similarity = float(getattr(result, "top_score", 0.0) or top_match.get("similarity", 0.0) or 0.0)
+        runner_up_similarity = float(getattr(result, "runner_up_score", 0.0) or 0.0)
+        margin = float(getattr(result, "margin", top_similarity - runner_up_similarity) or 0.0)
+        result_status = str(getattr(result, "status", "") or "")
+        result_reason = str(getattr(result, "reason", "") or "")
+        threshold = float(getattr(result, "threshold", 0.0) or 0.0)
+        margin_threshold = float(getattr(result, "margin_threshold", 0.0) or 0.0)
+        if result_status != "accepted" and result_reason == "below_threshold":
             return None, {
                 "status": "rejected",
                 "reason": "below_threshold",
                 "name": str(top_match.get("name", "") or ""),
                 "person_id": str(top_match.get("person_id", "") or ""),
                 "similarity": top_similarity,
-                "threshold": float(self._recognition_threshold),
+                "threshold": threshold,
                 "runner_up_similarity": runner_up_similarity,
                 "margin": margin,
-                "margin_threshold": float(self._recognition_margin_threshold),
+                "margin_threshold": margin_threshold,
             }
-        if margin < self._recognition_margin_threshold:
+        if result_status != "accepted" and result_reason == "margin_too_small":
             return None, {
                 "status": "rejected",
                 "reason": "margin_too_small",
                 "name": str(top_match.get("name", "") or ""),
                 "person_id": str(top_match.get("person_id", "") or ""),
                 "similarity": top_similarity,
-                "threshold": float(self._recognition_threshold),
+                "threshold": threshold,
                 "runner_up_similarity": runner_up_similarity,
                 "margin": margin,
-                "margin_threshold": float(self._recognition_margin_threshold),
+                "margin_threshold": margin_threshold,
+            }
+        if result_status != "accepted":
+            return None, {
+                "status": "rejected",
+                "reason": result_reason or "no_match",
+                "name": str(top_match.get("name", "") or ""),
+                "person_id": str(top_match.get("person_id", "") or ""),
+                "similarity": top_similarity,
+                "threshold": threshold,
+                "runner_up_similarity": runner_up_similarity,
+                "margin": margin,
+                "margin_threshold": margin_threshold,
             }
         top_match["runner_up_similarity"] = runner_up_similarity
         top_match["similarity_margin"] = margin
@@ -947,10 +1030,10 @@ class FaceRecognitionService:
             "name": str(top_match.get("name", "") or ""),
             "person_id": str(top_match.get("person_id", "") or ""),
             "similarity": top_similarity,
-            "threshold": float(self._recognition_threshold),
+            "threshold": threshold,
             "runner_up_similarity": runner_up_similarity,
             "margin": margin,
-            "margin_threshold": float(self._recognition_margin_threshold),
+            "margin_threshold": margin_threshold,
         }
 
     def _recognize_face_match(self, face: dict[str, Any]) -> dict[str, Any] | None:
@@ -1014,44 +1097,9 @@ class FaceRecognitionService:
 
             current_ids.add(pid)
             face["recognized_name"] = match["name"]
-            should_record_interaction = self._presence_cache.should_record_interaction(
-                pid,
-                now,
-            )
             self._presence_cache.mark_person_seen(pid, now)
             meta = match["metadata"]
-            if should_record_interaction:
-                try:
-                    updated_meta = self.db.update_interaction(pid)
-                except Exception:
-                    logger.exception(
-                        "Failed to update interaction metadata for person_id=%s",
-                        pid,
-                    )
-                else:
-                    if updated_meta is not None:
-                        meta = {**dict(meta or {}), **dict(updated_meta or {})}
-                        memory_store = getattr(self, "memory_store", None)
-                        if memory_store is not None:
-                            try:
-                                site_code = str(getattr(self, "site_code", "") or "").strip()
-                                memory_store.record_encounter(
-                                    person_id=pid,
-                                    name=match["name"],
-                                    site_code=site_code,
-                                    metadata=build_encounter_metadata(
-                                        name=match["name"],
-                                        site_code=site_code,
-                                        identity_metadata=meta,
-                                    ),
-                                )
-                            except Exception:
-                                logger.exception(
-                                    "Failed to record encounter for person_id=%s",
-                                    pid,
-                                )
-                finally:
-                    self._presence_cache.mark_interaction_recorded(pid, now)
+            directory_profile_lines = _profile_directory_lines(meta)
             person = PersonContext(
                 person_id=pid,
                 name=match["name"],
@@ -1079,7 +1127,7 @@ class FaceRecognitionService:
                 head_yaw_deg=attention.yaw_deg,
                 head_pitch_deg=attention.pitch_deg,
                 head_roll_deg=attention.roll_deg,
-                directory_profile_lines=format_identity_profile_lines(meta),
+                directory_profile_lines=directory_profile_lines,
             )
             persons.append(person)
             candidates.append(
@@ -1095,6 +1143,26 @@ class FaceRecognitionService:
                 )
             )
             face["recognized_person_id"] = pid
+            self._remember_recent_face_observation(
+                person_id=pid,
+                embedding=face.get("embedding"),
+                metadata={
+                    "score": float(recognition.get("similarity", match["similarity"]) or 0.0),
+                    "runner_up_score": float(
+                        recognition.get("runner_up_similarity", 0.0) or 0.0
+                    ),
+                    "margin": float(recognition.get("margin", 0.0) or 0.0),
+                    "threshold": float(recognition.get("threshold", 0.0) or 0.0),
+                    "margin_threshold": float(
+                        recognition.get("margin_threshold", 0.0) or 0.0
+                    ),
+                    "bbox_area": int(bbox_area),
+                    "center_distance": float(center_distance),
+                    "depth_m": face.get("depth_m"),
+                    "attentive": bool(attention.attentive),
+                    "attention_confidence": float(attention.confidence),
+                },
+            )
 
         analysis = analyze_face_scene(candidates)
         return persons, unknown_count, current_ids, analysis
@@ -1330,21 +1398,7 @@ class FaceRecognitionService:
         for face in detected_faces:
             match = self._recognize_face_match(face)
             if match is not None:
-                now = time.time()
                 updated_meta = match["metadata"]
-                if self._presence_cache.should_record_interaction(match["person_id"], now):
-                    try:
-                        updated = self.db.update_interaction(match["person_id"])
-                    except Exception:
-                        logger.exception(
-                            "Failed to update interaction metadata for person_id=%s",
-                            match["person_id"],
-                        )
-                    else:
-                        if updated:
-                            updated_meta = {**dict(updated_meta or {}), **dict(updated or {})}
-                    finally:
-                        self._presence_cache.mark_interaction_recorded(match["person_id"], now)
                 result["people"].append({
                     "name": match["name"],
                     "person_id": match["person_id"],
@@ -1377,6 +1431,7 @@ class FaceRecognitionService:
         person_id: str = "",
         next_step_hint: str = "",
         failure_reason: str = "",
+        enrollment_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "success": success,
@@ -1391,6 +1446,8 @@ class FaceRecognitionService:
             payload["next_step_hint"] = next_step_hint
         if failure_reason:
             payload["failure_reason"] = failure_reason
+        if enrollment_diagnostics:
+            payload["enrollment_diagnostics"] = enrollment_diagnostics
         return payload
 
     def enroll_visible_person(
@@ -1662,6 +1719,11 @@ class FaceRecognitionService:
             ),
         )
         reference_face = reference_item["face"]
+        similarity_threshold = getattr(
+            self,
+            "_enrollment_policy",
+            DEFAULT_FACE_ENROLLMENT_POLICY,
+        ).min_embedding_similarity
         consistent_faces = [
             item["face"]
             for item in accepted_faces
@@ -1669,19 +1731,24 @@ class FaceRecognitionService:
                 reference_face["embedding"],
                 item["face"]["embedding"],
             )
-            >= getattr(
-                self,
-                "_enrollment_policy",
-                DEFAULT_FACE_ENROLLMENT_POLICY,
-            ).min_embedding_similarity
+            >= similarity_threshold
         ]
         if len(consistent_faces) < ENROLLMENT_REQUIRED_STABLE_FRAMES:
             reason, guidance = self._quality_response_for_reason("embedding_inconsistent")
+            diagnostics = self._enrollment_similarity_diagnostics(
+                accepted_faces=accepted_faces,
+                reference_item=reference_item,
+                threshold=float(similarity_threshold),
+            )
             logger.info(
-                "Enrollment burst rejected reason=%s accepted=%s consistent=%s",
+                "Enrollment burst rejected reason=%s accepted=%s consistent=%s threshold=%.3f best_failed_similarity=%s shortfall=%s similarities=%s",
                 reason,
                 len(accepted_faces),
                 len(consistent_faces),
+                float(similarity_threshold),
+                diagnostics.get("best_failed_similarity"),
+                diagnostics.get("best_failed_shortfall"),
+                diagnostics.get("similarities_to_reference"),
             )
             return (
                 None,
@@ -1690,6 +1757,7 @@ class FaceRecognitionService:
                     status="retry_quality",
                     message=guidance,
                     failure_reason=reason,
+                    enrollment_diagnostics=diagnostics,
                 ),
             )
         averaged_embedding = self._average_embeddings(
@@ -1736,17 +1804,42 @@ class FaceRecognitionService:
         self,
         candidate: FaceEnrollmentCandidate,
     ) -> dict[str, Any]:
-        person_id = self.db.add_person(
-            name=candidate.cleaned_name,
-            face_embedding=candidate.averaged_embedding,
-            metadata=candidate.verified_durable,
+        identity_memory = getattr(self, "identity_memory_client", None)
+        if identity_memory is None:
+            return self._enrollment_response(
+                success=False,
+                status="error",
+                message="Identity memory is unavailable, so I can't save this face yet.",
+                failure_reason="identity_memory_unavailable",
+            )
+        person_id = (
+            str(candidate.verified_durable.get("person_id") or "").strip()
+            or _person_id_from_profile(candidate.cleaned_name, candidate.verified_durable)
         )
+        metadata = {
+            **dict(candidate.verified_durable or {}),
+            "display_name": candidate.cleaned_name,
+            "name": candidate.cleaned_name,
+        }
+        result = identity_memory.enroll_face_reference(
+            person_id=person_id,
+            embedding=candidate.averaged_embedding,
+            metadata=metadata,
+            consent_status="consented",
+        )
+        if not getattr(result, "saved", False):
+            return self._enrollment_response(
+                success=False,
+                status="error",
+                message="I couldn't save the face reference.",
+                failure_reason=str(getattr(result, "reason", "") or "save_failed"),
+            )
         self._prime_presence_cache_after_enrollment(
             person_id=person_id,
             name=candidate.cleaned_name,
             face=candidate.reference_face,
             image_shape=candidate.image_shape,
-            metadata=candidate.verified_durable,
+            metadata=metadata,
         )
         return self._enrollment_response(
             success=True,
@@ -1829,11 +1922,23 @@ class FaceRecognitionService:
             return image.copy() if hasattr(image, "copy") else image
 
     @staticmethod
+    def _display_rgb_image(image: Any) -> Any:
+        if not isinstance(image, np.ndarray):
+            return image
+        if image.ndim != 3 or image.shape[2] < 3:
+            return image
+        rgb = image.copy()
+        rgb[..., :3] = rgb[..., [2, 1, 0]]
+        return np.ascontiguousarray(rgb)
+
+    @staticmethod
     def _enrollment_preview_data_url(image: Any) -> str:
         if image is None:
             return ""
         try:
-            return "data:image/png;base64," + preprocess_image(image)
+            return "data:image/png;base64," + preprocess_image(
+                FaceRecognitionService._display_rgb_image(image)
+            )
         except Exception:
             logger.exception("Failed to encode enrollment preview image")
             return ""
@@ -1843,7 +1948,9 @@ class FaceRecognitionService:
         if image is None:
             return ""
         try:
-            return "data:image/png;base64," + preprocess_image(image)
+            return "data:image/png;base64," + preprocess_image(
+                FaceRecognitionService._display_rgb_image(image)
+            )
         except Exception:
             logger.exception("Failed to encode live camera frame for display")
             return ""
@@ -1922,7 +2029,7 @@ class FaceRecognitionService:
             timestamp=now,
             depth_m=depth_m,
             center_distance=center_distance,
-            directory_profile_lines=format_identity_profile_lines(metadata),
+            directory_profile_lines=(),
         )
         attention_target = AttentionTarget(
             kind="recognized",
@@ -2028,10 +2135,11 @@ class FaceRecognitionService:
             )
             return
 
+        frame_captured_at = time.time()
         self._cache_latest_loop_frame(
             image=image,
             camera_resource_id=camera_resource_id,
-            captured_at=time.time(),
+            captured_at=frame_captured_at,
         )
         prepare_started = perf_now()
         prepared = self._prepare_faces_for_recognition_result(
@@ -2041,6 +2149,12 @@ class FaceRecognitionService:
         )
         prepare_s = perf_now() - prepare_started
         detected_faces = prepared.faces
+        self._cache_latest_loop_frame(
+            image=image,
+            camera_resource_id=camera_resource_id,
+            captured_at=frame_captured_at,
+            faces=detected_faces,
+        )
         if not detected_faces:
             self._reset_unknown_stability()
             publish_started = perf_now()
@@ -2168,10 +2282,10 @@ class FaceRecognitionService:
         )
 
     def _format_recognition_log_details(self, persons: list[PersonContext]) -> list[str]:
-        threshold = float(getattr(self, "_recognition_threshold", 0.0) or 0.0)
         details: list[str] = []
         for person in persons:
             label = str(person.name or person.person_id).replace(" ", "_")
+            threshold = float(getattr(person, "recognition_threshold", 0.0) or 0.0)
             details.append(f"{label}:sim={person.confidence:.2f},threshold={threshold:.2f}")
         return details
 
@@ -2329,3 +2443,80 @@ class FaceRecognitionService:
     def get_presence_snapshot(self) -> dict[str, Any]:
         """Thread-safe read of canonical face presence state."""
         return self._presence_cache.get_presence_snapshot()
+
+    def get_recent_face_observation(
+        self,
+        person_id: str,
+        *,
+        max_age_sec: float = 8.0,
+    ) -> dict[str, Any] | None:
+        """Return the latest accepted face embedding for a person in this session."""
+        rendered = str(person_id or "").strip()
+        if not rendered:
+            return None
+        now = time.time()
+        if not hasattr(self, "_recent_face_observations_lock"):
+            self._recent_face_observations_lock = threading.Lock()
+        if not hasattr(self, "_recent_face_observations"):
+            self._recent_face_observations = {}
+        with self._recent_face_observations_lock:
+            observation = dict(self._recent_face_observations.get(rendered) or {})
+        if not observation:
+            return None
+        observed_at = float(observation.get("observed_at", 0.0) or 0.0)
+        if max_age_sec > 0.0 and (now - observed_at) > float(max_age_sec):
+            return None
+        return observation
+
+    def _remember_recent_face_observation(
+        self,
+        *,
+        person_id: str,
+        embedding: Any,
+        metadata: dict[str, Any],
+    ) -> None:
+        rendered = str(person_id or "").strip()
+        if not rendered or embedding is None:
+            return
+        try:
+            vector = np.asarray(embedding, dtype=np.float32).reshape(-1).copy()
+        except Exception:
+            return
+        if vector.size <= 0:
+            return
+        if not hasattr(self, "_recent_face_observations_lock"):
+            self._recent_face_observations_lock = threading.Lock()
+        if not hasattr(self, "_recent_face_observations"):
+            self._recent_face_observations = {}
+        with self._recent_face_observations_lock:
+            self._recent_face_observations[rendered] = {
+                "person_id": rendered,
+                "embedding": vector,
+                "metadata": dict(metadata or {}),
+                "observed_at": time.time(),
+            }
+
+
+def _person_id_from_profile(name: str, profile: dict[str, Any]) -> str:
+    username = str(profile.get("username") or "").strip().lower()
+    if username:
+        return f"person_{username}"
+    email = str(profile.get("email") or "").strip().lower()
+    if email and "@" in email:
+        return f"person_{email.split('@', 1)[0]}"
+    slug = "_".join(
+        part
+        for part in re.sub(r"[^a-zA-Z0-9]+", " ", str(name or "").casefold()).split()
+        if part
+    )
+    if slug:
+        return f"person_{slug}"
+    return f"person_{uuid4().hex[:12]}"
+
+
+def _profile_directory_lines(profile: Any) -> tuple[str, ...]:
+    if isinstance(profile, dict):
+        lines = profile.get("directory_profile_lines") or ()
+    else:
+        lines = getattr(profile, "directory_profile_lines", ()) or ()
+    return tuple(str(line) for line in lines if str(line or "").strip())

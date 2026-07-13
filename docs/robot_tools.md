@@ -117,14 +117,15 @@ changes future navigation and docking behavior.
 ## Optional Tailwag Memory Tool
 
 `memory.search_semantic` is model-visible only when the active profile enables
-it and `memory.enabled` creates a Tailwag provider. The runtime tool searches
-episodes and extracted memory items scoped to the current resolved `owner_id`.
+it and `identity_memory.enabled` creates a Tailwag-backed identity-memory
+client. The runtime tool searches episodes and extracted memory items scoped to
+the current resolved `owner_id`.
 If no current owner is recognized, the tool returns an error instead of running
 a broad unscoped search.
 
 The memory tool is read-only from Argos' point of view. Episode ingestion,
 memory extraction, active follow-up handling, archival, and repair belong to
-Tailwag. See `memory_provider.md` and `slack_memory.md` for the memory contract.
+Tailwag. See `identity_memory.md` for the memory contract.
 
 ## Motion And Local Bounds
 

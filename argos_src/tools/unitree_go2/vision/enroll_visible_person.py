@@ -32,11 +32,11 @@ class EnrollVisiblePersonTool(BaseTool):
     description: str = (
         "Register a new visible person using the live camera. "
         "Use this only after the person has confirmed their full name and that they are the only person in view and are ready to be remembered. "
-        "When registration was validated through the employee directory, pass only the verified username returned by resolve_employee_identity; other employee fields are loaded locally. "
+        "When registration was validated through the employee directory, pass only the verified username returned by resolve_employee_identity; Tailwag reloads the other employee fields. "
     )
     args_schema: Type[BaseModel] = _EnrollVisiblePersonInput
     face_service: Any = Field(exclude=True)
-    employee_directory_service: Any | None = Field(default=None, exclude=True)
+    identity_memory_client: Any | None = Field(default=None, exclude=True)
     default_camera_resource: str = Field(default=DEFAULT_CAMERA_RESOURCE, exclude=True)
     display_runtime: Any | None = Field(default=None, exclude=True)
 
@@ -49,7 +49,7 @@ class EnrollVisiblePersonTool(BaseTool):
         username: str | None = None,
     ) -> str:
         employee_profile = None
-        lookup = getattr(self.employee_directory_service, "get_verified_profile", None)
+        lookup = getattr(self.identity_memory_client, "get_verified_profile", None)
         if callable(lookup):
             employee_profile = lookup(
                 username=username or "",
@@ -83,13 +83,13 @@ class EnrollVisiblePersonTool(BaseTool):
 def get_enroll_visible_person_tool(
     face_service: Any,
     default_camera_resource: str = DEFAULT_CAMERA_RESOURCE,
-    employee_directory_service: Any | None = None,
+    identity_memory_client: Any | None = None,
     display_runtime: Any | None = None,
 ) -> BaseTool:
     """Return the enrollment tool bound to the active face service."""
     return EnrollVisiblePersonTool(
         face_service=face_service,
-        employee_directory_service=employee_directory_service,
+        identity_memory_client=identity_memory_client,
         default_camera_resource=default_camera_resource,
         display_runtime=display_runtime,
     )

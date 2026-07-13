@@ -4,8 +4,9 @@ These scripts are small lab tools for testing Argos functionality without starti
 the full realtime agent.
 
 They still use the real Argos service code, profile config, provider camera
-resources, face embedding model, and face/identity stores. They are meant for diagnosis and
-parameter tuning, not for normal user-facing registration.
+resources, and embedding models. Durable identity and memory now live in
+`tailwag-memory`; these scripts are meant for diagnosis and parameter tuning,
+not for normal user-facing registration.
 
 Run from the repo root:
 
@@ -20,9 +21,9 @@ poetry run python -m scripts.labs.owner_turn_calibration_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
 poetry run python -m scripts.labs.enrollment_audio_collection --help
-poetry run python -m scripts.labs.speaker_recognition_lab --help
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --help
+poetry run python -m scripts.labs.biometric_enrollment_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
+poetry run python -m scripts.labs.list_openai_models --help
 poetry run python -m scripts.labs.agent_state_machine_lab --help
 ```
 
@@ -67,6 +68,19 @@ The audio script uses the selected profile's microphone/VAD settings, shows
 `Mic admission active`, `Recording...`, and `Saved audio...` on the interaction
 display when configured, waits for Enter before each clip, and saves both the
 input-rate WAV plus an agent-rate 16 kHz WAV for later experiments.
+
+Live Tailwag biometric enrollment:
+
+```bash
+poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3
+poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3 --commit
+```
+
+This guided lab uses the interaction display for phase accept/reject prompts,
+instructions, countdowns, and recording state. It is dry-run by default. With
+`--commit`, the first accepted face and voice embedding creates a Tailwag
+reference, and the next accepted samples update that same reference toward
+Tailwag's target sample count.
 
 ## Structured perception labs + eval
 
@@ -116,8 +130,9 @@ Registration quality dry run:
 poetry run python -m scripts.labs.face_registration_lab --frames 5
 ```
 
-Dry-run and enrollment previews are saved under `scripts/labs/face_preview` by
-default. Use `--preview-dir /path/to/dir` to choose another folder.
+Dry-run and enrollment previews are saved under scripts/labs/face_preview by
+default; the lab creates that ignored preview directory on demand. Use
+`--preview-dir /path/to/dir` to choose another folder.
 
 With depth enabled, each diagnostic frame waits until a synced RGBD pair arrives.
 Use `--max-frame-wait-sec 10` only if you want the helper to give up instead of
@@ -127,8 +142,6 @@ Current registration tuning defaults match the production agent:
 - `min_face_area=1300`
 - `min_brightness=35`
 - `min_contrast=15.5`
-- `recognition_threshold=0.6`
-- `recognition_margin_threshold=0.20`
 
 Use `--details` when you want the full diagnostic dump.
 
@@ -160,12 +173,11 @@ when face recognition has a known person:
 poetry run python -m scripts.labs.attention_display_lab
 ```
 
-To test frame-window identity voting, require two recognized hits in the last
-five fresh face-loop snapshots:
+Run without publishing to the interaction display and stop after 30 seconds:
 
 ```bash
 poetry run python -m scripts.labs.attention_display_lab \
-  --recognition-window-frames 5 --recognition-window-min-matches 2
+  --display off --duration-sec 30 --print-json
 ```
 
 Owner-turn centering dry run. Press Enter for each sample; it captures the
@@ -185,50 +197,12 @@ poetry run python -m scripts.labs.owner_turn_calibration_lab --move \
   --camera-yaw-offset-deg -4.0 --turn-gain 0.8
 ```
 
-Speaker enrollment to a temporary lab DB:
+Offline realtime state-machine report. This runs synthetic admission,
+engagement, and event-coalescer cases against the selected profile:
 
 ```bash
-poetry run python -m scripts.labs.speaker_recognition_lab enroll --person-id person_me --clips 3
-```
-
-Speaker recognition against that lab DB:
-
-```bash
-poetry run python -m scripts.labs.speaker_recognition_lab recognize --clips 1
-```
-
-Each speaker attempt also saves a JSON report with:
-- the effective profile/policy config used for that run
-- raw vs trimmed clip stats
-- VAD frame counts and frame-RMS summaries
-- explicit diagnostics such as trim fallback, VAD mismatch, quiet clips, and borderline matches
-
-List the temporary lab references:
-
-```bash
-poetry run python -m scripts.labs.speaker_recognition_lab list
-```
-
-Employee-directory registration probe from the microphone:
-
-```bash
-# Agent-style registration probe: wait for "Listening...", say your name once,
-# print the transcript, the actual Realtime tool-call args, and the employee-directory
-# match result, then exit.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3
-
-# Same as above, but keep listening until Ctrl+C.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --loop
-
-# If Snowflake stores Latin-script names and multilingual ASR is returning a
-# native-script transcript, force English transcription for this lab run.
-poetry run python -m scripts.labs.rapidfuzz_employee_lab --sites bos1,bos3 --language en
-```
-
-Realtime state machine report from latency logs:
-
-```bash
-poetry run python -m scripts.labs.agent_state_machine_lab --log-path logs/latency.log
+poetry run python -m scripts.labs.agent_state_machine_lab
+poetry run python -m scripts.labs.agent_state_machine_lab --output var/labs/state_machine/report.json
 ```
 
 One-off OpenAI speech without starting the realtime agent:
@@ -246,4 +220,11 @@ poetry run python -m scripts.labs.openai_say_lab \
   --voice marin \
   --instructions "Sound warm, concise, and a little excited." \
   --play
+```
+
+OpenAI API-key model visibility check. This is an operator sanity helper, not an
+agent-module simulator, and it makes a network request to the OpenAI API:
+
+```bash
+poetry run python -m scripts.labs.list_openai_models --match realtime --details
 ```

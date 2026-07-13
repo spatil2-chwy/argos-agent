@@ -7,7 +7,7 @@ from argos_src.tools.unitree_go2.vision.enroll_visible_person import (
 )
 
 
-def test_enroll_visible_person_tool_rehydrates_employee_profile_locally():
+def test_enroll_visible_person_tool_rehydrates_verified_profile_from_tailwag():
     captured = {}
 
     class _FaceService:
@@ -33,7 +33,7 @@ def test_enroll_visible_person_tool_rehydrates_employee_profile_locally():
 
     tool = get_enroll_visible_person_tool(
         _FaceService(),
-        employee_directory_service=_Directory(),
+        identity_memory_client=_Directory(),
         default_camera_resource="head_realsense",
     )
 

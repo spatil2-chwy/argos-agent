@@ -219,6 +219,7 @@ def create_agent(
     map_locations_file: Optional[str] = None,
     startup_patrol_route: Optional[list[str]] = None,
     prompt_file: Optional[str] = None,
+    raw_data_capture: object | None = None,
 ) -> RealtimeRobotAgent:
     """Create the profile-driven realtime Argos agent runtime."""
     scenario_profile = _resolve_agent_profile(
@@ -278,37 +279,43 @@ def create_agent(
 
     face_service = None
     speaker_service = None
-    employee_directory_service = None
     preference_extractor = None
-    slack_memory_service = None
-    identity_store = None
+    identity_memory_client = None
     memory_provider = None
     memory_context_compiler = None
-    if (
+    adaptive_update_coordinator = None
+    if scenario_profile.identity_memory.enabled and (
         needs_face_runtime
-        or scenario_profile.speaker_recognition.enabled
-        or scenario_profile.face_recognition.preference_extraction.enabled
-        or scenario_profile.slack_memory.enabled
-    ):
-        from argos_src.identity import IdentityStore
-
-        identity_store = IdentityStore(db_path=scenario_profile.identity_store.db_path)
-
-    if scenario_profile.memory.enabled and (
-        needs_face_runtime
-        or scenario_profile.face_recognition.preference_extraction.enabled
-        or scenario_profile.slack_memory.enabled
+        or scenario_profile.identity_memory.record_live_episodes
         or memory_tools_enabled
+        or scenario_profile.speaker_recognition.enabled
     ):
-        from argos_src.memory_provider import TailwagMemoryProvider
+        if scenario_profile.identity_memory.backend == "noop":
+            from argos_src.identity_memory import NoopIdentityMemoryClient
 
-        memory_provider = TailwagMemoryProvider(
-            site_code=scenario_profile.employee_directory.site_code,
-            place_room_id=scenario_profile.memory.place_room_id,
-            retention_class=scenario_profile.memory.retention_class,
-            extract_live_turn_memory=scenario_profile.memory.extract_live_turn_memory,
-        )
-        memory_context_compiler = memory_provider
+            identity_memory_client = NoopIdentityMemoryClient()
+        else:
+            from argos_src.identity_memory import TailwagPackageIdentityMemoryClient
+
+            identity_memory_client = TailwagPackageIdentityMemoryClient(
+                site_code=scenario_profile.identity_memory.site_code,
+                place_room_id=scenario_profile.identity_memory.place_room_id,
+                retention_class=scenario_profile.identity_memory.retention_class,
+                extract_live_turn_memory=(
+                    scenario_profile.identity_memory.extract_live_turn_memory
+                ),
+            )
+        memory_provider = identity_memory_client
+        memory_context_compiler = identity_memory_client
+        try:
+            from argos_src.identity_memory import AdaptiveBiometricUpdateCoordinator
+
+            adaptive_update_coordinator = AdaptiveBiometricUpdateCoordinator(
+                identity_memory_client,
+                logger_=logger,
+            )
+        except ImportError:
+            logger.debug("Adaptive biometric update coordinator unavailable", exc_info=True)
 
     if needs_face_runtime:
         from argos_src.face_recognition.attention_gate import (
@@ -325,15 +332,10 @@ def create_agent(
         recognition_stability = scenario_profile.face_recognition.recognition_stability
 
         face_service = FaceRecognitionService(
-            db_path=scenario_profile.face_recognition.db_path,
-            recognition_threshold=scenario_profile.face_recognition.recognition_threshold,
-            recognition_margin_threshold=(
-                scenario_profile.face_recognition.recognition_margin_threshold
-            ),
             robot_client=robot_client,
-            identity_store=identity_store,
-            memory_store=memory_provider,
-            site_code=scenario_profile.employee_directory.site_code,
+            identity_memory_client=identity_memory_client,
+            memory_store=identity_memory_client,
+            site_code=scenario_profile.identity_memory.site_code,
             camera_resource_id=scenario_profile.resources.face_camera,
             camera_yaw_offset_rad=(
                 scenario_profile.face_recognition.owner_turn.camera_yaw_offset_rad
@@ -375,7 +377,7 @@ def create_agent(
             ),
         )
         if (
-            scenario_profile.face_recognition.preference_extraction.enabled
+            scenario_profile.identity_memory.record_live_episodes
             and memory_provider is not None
         ):
             preference_extractor = memory_provider
@@ -390,6 +392,8 @@ def create_agent(
 
         speaker_service = SpeakerRecognitionService(
             policy=scenario_profile.speaker_recognition.policy,
+            identity_memory_client=identity_memory_client,
+            adaptive_update_coordinator=adaptive_update_coordinator,
         )
         try:
             speaker_service.prewarm()
@@ -398,25 +402,6 @@ def create_agent(
                 "Speaker backend prewarm failed; live turns will fall back to lazy initialization.",
                 exc_info=True,
             )
-
-    if scenario_profile.employee_directory.enabled:
-        from argos_src.employee_directory import EmployeeDirectoryService
-
-        employee_directory_service = EmployeeDirectoryService(
-            site_code=scenario_profile.employee_directory.site_code,
-            email_domain=scenario_profile.employee_directory.email_domain,
-        )
-        employee_directory_service.start_background()
-
-    if scenario_profile.slack_memory.enabled and memory_provider is not None:
-        from argos_src.memory_provider import TailwagSlackMemoryService
-
-        slack_memory_service = TailwagSlackMemoryService(
-            profile=scenario_profile.slack_memory,
-            episode_recorder=memory_provider,
-        )
-        if scenario_profile.slack_memory.start_with_agent:
-            slack_memory_service.start_background()
 
     navigation_runtime_store = None
     location_store_for_prompt = None
@@ -449,7 +434,7 @@ def create_agent(
         enabled_tool_ids=enabled_tool_ids,
         robot_client=robot_client,
         face_service=face_service,
-        employee_directory_service=employee_directory_service,
+        identity_memory_client=identity_memory_client,
         location_store=navigation_runtime_store,
         nav_state=nav_state,
         on_nav_event=wiring.submit_nav_event,
@@ -490,13 +475,14 @@ def create_agent(
         coalescer=None,
         face_service=face_service,
         speaker_service=speaker_service,
-        employee_directory_service=employee_directory_service,
-        slack_memory_service=slack_memory_service,
-        identity_store=identity_store,
+        identity_memory_client=identity_memory_client,
+        adaptive_update_coordinator=adaptive_update_coordinator,
+        raw_data_capture=raw_data_capture,
         memory_context_compiler=memory_context_compiler,
         preference_extractor=preference_extractor,
         preference_extraction_enabled=(
-            scenario_profile.face_recognition.preference_extraction.enabled
+            scenario_profile.identity_memory.record_live_episodes
+            and preference_extractor is not None
         ),
         location_store=location_store_for_prompt,
         nav_state=nav_state,

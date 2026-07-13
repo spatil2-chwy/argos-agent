@@ -14,6 +14,10 @@ if str(_REPO_ROOT) not in sys.path:
 from argos_src.agent import create_agent
 from argos_src.agent.startup import RobotStartupPreparationError
 from argos_src.logging_config import configure_argos_logging
+from argos_src.observability.raw_capture import (
+    DEFAULT_RAW_DATA_DIR,
+    RawDataCaptureSink,
+)
 from argos_src.profile_config import (
     ProfileValidationError,
     apply_audio_cli_overrides,
@@ -38,6 +42,20 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--wake-window-sec", type=float, default=None)
     parser.add_argument("--silence-grace-period", type=float, default=None)
     parser.add_argument("--patrol-route", type=str, default=None)
+    parser.add_argument(
+        "--save-raw-data",
+        action="store_true",
+        help=(
+            "Save raw turn audio and face-detection images/metadata under an "
+            "ignored local artifact directory."
+        ),
+    )
+    parser.add_argument(
+        "--raw-data-dir",
+        type=str,
+        default=str(DEFAULT_RAW_DATA_DIR),
+        help="Directory for --save-raw-data artifacts.",
+    )
     return parser.parse_args()
 
 
@@ -81,11 +99,18 @@ def main() -> int:
         print(f"Prompt file: {scenario.realtime.prompt_file}")
     print(f"Realtime model: {scenario.realtime.model}")
     print(f"Voice: {scenario.realtime.voice}")
+    raw_data_capture = None
+    if args.save_raw_data:
+        raw_data_capture = RawDataCaptureSink(args.raw_data_dir)
+        print(f"Raw data capture: enabled ({args.raw_data_dir})")
     print()
 
     agent = None
     try:
-        agent = create_agent(scenario_profile=scenario)
+        agent = create_agent(
+            scenario_profile=scenario,
+            raw_data_capture=raw_data_capture,
+        )
         agent.start()
         print("Realtime agent running. Press Ctrl+C to stop.")
         agent.wait_until_shutdown()
@@ -98,6 +123,8 @@ def main() -> int:
     finally:
         if agent is not None:
             agent.shutdown()
+        elif raw_data_capture is not None:
+            raw_data_capture.close()
 
 
 if __name__ == "__main__":

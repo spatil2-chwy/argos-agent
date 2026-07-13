@@ -7,7 +7,6 @@ from importlib import import_module
 __all__ = [
     "FacePresenceSnapshot",
     "FaceRecognitionService",
-    "FaceRecognitionStore",
     "FaceTurnTarget",
     "PersonContext",
 ]
@@ -20,10 +19,6 @@ _LAZY_EXPORTS = {
     "FaceRecognitionService": (
         "argos_src.face_recognition.face_recognition_service",
         "FaceRecognitionService",
-    ),
-    "FaceRecognitionStore": (
-        "argos_src.face_recognition.store",
-        "FaceRecognitionStore",
     ),
     "FaceTurnTarget": ("argos_src.face_recognition.models", "FaceTurnTarget"),
     "PersonContext": ("argos_src.face_recognition.models", "PersonContext"),

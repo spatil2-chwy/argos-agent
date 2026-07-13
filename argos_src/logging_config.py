@@ -34,8 +34,6 @@ def configure_argos_logging(default_level: str = "INFO") -> None:
         "httpcore",
         "urllib3",
         "openai",
-        "snowflake.connector",
-        "chromadb",
         "posthog",
     ):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)

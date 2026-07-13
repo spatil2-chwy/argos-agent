@@ -8,7 +8,6 @@ from typing import Any, Optional
 
 from argos_src.agent.realtime_turns import FrozenTurnContext
 from argos_src.face_recognition.models import PersonContext
-from argos_src.identity.prompting import format_identity_profile_lines
 
 
 class TurnContextRuntime:
@@ -38,6 +37,9 @@ class TurnContextRuntime:
         except Exception:
             host.logger.exception("Failed to compile memory context for %s", person_id)
             return person
+        directory_lines = tuple(getattr(context, "directory_profile_lines", ()) or ())
+        if directory_lines:
+            person.directory_profile_lines = directory_lines
         person.memory_profile_lines = tuple(context.profile_lines or ())
         person.potential_followups = tuple(context.followup_lines or ())
         if context.preferred_language:
@@ -69,22 +71,23 @@ class TurnContextRuntime:
     def identity_person(self, person_id: Optional[str]) -> PersonContext | None:
         host = self._host
         rendered = str(person_id or "").strip()
-        identity_store = getattr(host, "identity_store", None)
-        if not rendered or identity_store is None:
+        identity_memory = getattr(host, "identity_memory_client", None)
+        if not rendered or identity_memory is None:
             return None
         try:
-            record = identity_store.get_person(rendered)
-            if record is None:
+            profile = identity_memory.person_profile(rendered)
+            if profile is None:
                 return None
-            metadata = dict(record.get("metadata") or {})
+            metadata = dict(getattr(profile, "metadata", {}) or {})
+            directory_lines = tuple(getattr(profile, "directory_profile_lines", ()) or ())
             person = PersonContext(
                 person_id=rendered,
-                name=str(record.get("name") or metadata.get("name") or rendered),
-                interaction_count=int(metadata.get("interaction_count", 0) or 0),
+                name=str(getattr(profile, "display_name", "") or metadata.get("name") or rendered),
+                interaction_count=int(getattr(profile, "interaction_count", 0) or 0),
                 confidence=1.0,
                 bbox_area=0,
                 timestamp=time.time(),
-                directory_profile_lines=format_identity_profile_lines(metadata),
+                directory_profile_lines=directory_lines,
                 memory_profile_lines=(),
                 preferred_language="",
                 potential_followups=(),

@@ -3,14 +3,14 @@
 This is the high-level map of the current Argos stack. The deeper component docs are:
 
 - `realtime_turn_flow.md`
-- `realtime_control_refactor_plan.md`
+- `realtime_state_model.md`
+- `realtime_state_machine_diagram.md`
 - `prompting_and_history.md`
 - `robot_tools.md`
 - `attention_gate.md`
 - `speaker_recognition.md`
 - `face_recognition.md`
-- `memory_provider.md`
-- `slack_memory.md`
+- `identity_memory.md`
 - `observability.md`
 
 ## Core Idea
@@ -62,8 +62,9 @@ There is no separate ASR process and no separate TTS process in the supported pa
 - `resources/`
   Prompt files, wake-word ONNX models, and navigation-location JSON.
 - `var/`
-  Ignored local runtime state for identity, face, speaker, and other local
-  runtime stores. Social/context memory lives in Tailwag.
+  Ignored local runtime state for logs, lab artifacts, generated knowledge
+  indexes, and other local runtime outputs. Durable identity, biometrics,
+  and social/context memory live in Tailwag.
 - `scripts/labs/`
   Operator/lab tools that exercise runtime services without starting the agent.
 
@@ -79,14 +80,14 @@ camera + optional depth
     -> FaceEventBridge publish / proactive FACE_EVENT
     -> RealtimeRobotAgent turn snapshot + prompt context
     -> preference segment buffering
-    -> TailwagMemoryProvider
+    -> Tailwag identity-memory client
     -> Tailwag episode + person context
 ```
 
 Tailwag is the semantic memory writer and person-context source. Argos sends the
 full active conversation episode to Tailwag from speaker-owned realtime turn
 text. Prompt views still surface as `About` and `Potential Followups`, but the
-storage and extraction contract lives outside Argos. See `memory_provider.md`
+storage and extraction contract lives outside Argos. See `identity_memory.md`
 for the Tailwag-backed provider contract.
 
 Important distinctions:
@@ -162,7 +163,7 @@ Used for:
 
 Every response combines:
 
-1. static system prompt from `static_interaction_prompt.md`
+1. static system prompt from the selected profile's `realtime.prompt_file`
 2. dynamic instructions attached on `response.create`
 3. rolling Realtime session history
 
@@ -235,6 +236,4 @@ as subtitles.
 - Use `speaker_recognition.md` for voice enrollment, audio ownership, strict face ownership, and voice-reference management.
 - Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.
-- Use `identity_store.md` for shared person records and face/speaker embedding-store management.
-- Use `memory_provider.md` for Tailwag-backed person context, episodes, encounters, semantic search, and reset boundaries.
-- Use `slack_memory.md` for Tailwag-backed Slack polling, cursor state, and identity convergence.
+- Use `identity_memory.md` for Tailwag-backed person profiles, biometric references, episodes, semantic search, Slack ingestion, and reset boundaries.

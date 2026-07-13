@@ -311,6 +311,19 @@ button {
   font-size: 0.82rem;
 }
 
+.prompt-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--tailwag-border);
+  border-radius: 6px;
+  background: var(--tailwag-blue-100);
+  color: var(--tailwag-blue-900);
+  font-size: 0.68rem;
+  font-weight: 760;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -637,14 +650,18 @@ button {
 }
 
 .stage-owner_handoff .stage-icon,
-.stage-memory_flushed .stage-icon {
+.stage-memory_flushed .stage-icon,
+.stage-tailwag_episode_recorded .stage-icon,
+.stage-tailwag_episode_skipped .stage-icon,
+.stage-biometric_update .stage-icon {
   background: #eef4ff;
   border-color: #c7d7fe;
   color: #3538cd;
 }
 
 .stage-playback_stopped .stage-icon,
-.stage-exchange_terminal .stage-icon {
+.stage-exchange_terminal .stage-icon,
+.stage-tailwag_episode_failed .stage-icon {
   background: #fff1f3;
   border-color: #fecdd6;
   color: #c01048;
@@ -918,12 +935,100 @@ button {
   border-top: 1px solid #eef2f6;
 }
 
+.diagnostic-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnostic-section-heading svg {
+  color: var(--tailwag-blue-700);
+  flex: 0 0 auto;
+}
+
 .diagnostic-section h3 {
   margin: 0 0 8px;
   color: #475467;
   font-size: 0.82rem;
   font-weight: 760;
   text-transform: uppercase;
+}
+
+.prompt-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.prompt-snapshot {
+  padding: 10px 0;
+  border-top: 1px solid #eef2f6;
+}
+
+.prompt-snapshot:first-child {
+  border-top: 0;
+}
+
+.prompt-snapshot summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--tailwag-blue-900);
+  font-size: 0.88rem;
+  font-weight: 760;
+  list-style: none;
+}
+
+.prompt-snapshot summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-snapshot small {
+  color: var(--tailwag-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.prompt-block {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.prompt-block span {
+  color: var(--tailwag-muted);
+  font-size: 0.75rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.prompt-block summary {
+  color: var(--tailwag-muted);
+  font-size: 0.75rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.prompt-block pre {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px;
+  border: 1px solid var(--tailwag-border);
+  border-radius: 7px;
+  background: #fbfcfe;
+  color: var(--tailwag-blue-900);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.prompt-block-collapsed pre {
+  margin-top: 6px;
 }
 
 .raw-row {

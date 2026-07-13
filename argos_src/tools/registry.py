@@ -33,7 +33,7 @@ def build_builtin_tools(
     enabled_tool_ids: Iterable[str],
     robot_client,
     face_service,
-    employee_directory_service,
+    identity_memory_client,
     location_store: LocationStore,
     nav_state: NavigationState,
     on_nav_event,
@@ -84,17 +84,17 @@ def build_builtin_tools(
         tools.append(
             get_enroll_visible_person_tool(
                 face_service,
-                employee_directory_service=employee_directory_service,
+                identity_memory_client=identity_memory_client,
                 default_camera_resource=default_camera_resource,
                 display_runtime=display_runtime,
             )
         )
     if (
         "resolve_employee_identity" in requested_set
-        and employee_directory_service is not None
+        and identity_memory_client is not None
     ):
         tools.append(
-            get_resolve_employee_identity_tool(employee_directory_service)
+            get_resolve_employee_identity_tool(identity_memory_client)
         )
 
     memory_names = [name for name in MEMORY_TOOL_NAMES if name in requested_set]

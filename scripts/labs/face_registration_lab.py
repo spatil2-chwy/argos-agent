@@ -15,7 +15,8 @@ Useful tuning examples:
 
 Default mode is a dry-run diagnostic: it captures frames, runs the same
 registration preprocessing, and prints quality metrics without saving a person.
-Pass `--enroll` to actually write a face reference to the configured DB.
+Pass `--enroll` to write a face reference through the configured
+identity-memory client.
 """
 
 from __future__ import annotations
@@ -371,10 +372,7 @@ def main() -> int:
                 "mode": "enroll" if args.enroll else "dry_run",
                 "profile": config["profile_name"],
                 "camera_resource_id": config["camera_resource_id"],
-                "db_path": config["db_path"],
-                "identity_db_path": config["identity_db_path"],
                 "loop_interval_sec": config["loop_interval_sec"],
-                "recognition_threshold": config["recognition_threshold"],
                 "provider_transport": config["provider_transport"],
                 "provider_id": config["provider_id"],
                 "provider_resource_id": config["provider_resource_id"],
