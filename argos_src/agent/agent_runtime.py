@@ -25,7 +25,10 @@ from argos_src.agent.control.audio_runtime import (
     AudioRuntime,
     VAD_SAMPLE_RATE,
 )
-from argos_src.agent.control.state_runtime import AgentStateRuntime
+from argos_src.agent.control.state_runtime import (
+    OWNER_HANDOFF_DELETE_ACK_TIMEOUT_SEC,
+    AgentStateRuntime,
+)
 from argos_src.agent.control.server_event_runtime import ServerEventRuntime
 from argos_src.agent.realtime_turns import (
     NO_AUDIO_RESPONSE_RETRY_LIMIT,
@@ -381,6 +384,9 @@ class RealtimeRobotAgent:
             known_item_ids=self._known_history_item_ids,
             item_owner_req_id=self._history_item_owner_req_id,
         )
+        self._history_delete_ack_condition = threading.Condition(self._turn_lock)
+        self._history_delete_ack_pending_item_ids: set[str] = set()
+        self._history_delete_ack_item_ids: set[str] = set()
         self._active_history_owner_key: str = ""
         self._playback_req_id: str = ""
         self._playback_stream_id: str = ""
@@ -733,6 +739,23 @@ class RealtimeRobotAgent:
 
     def _forget_deleted_history_item(self, item_id: str) -> None:
         self._state_controller()._forget_deleted_history_item(item_id)
+
+    def _mark_history_delete_pending(self, item_id: str) -> None:
+        self._state_controller()._mark_history_delete_pending(item_id)
+
+    def _handle_history_item_delete_ack(self, item_id: str) -> None:
+        self._state_controller()._handle_history_item_delete_ack(item_id)
+
+    def _wait_for_history_delete_acks(
+        self,
+        item_ids: list[str],
+        *,
+        timeout_s: float = OWNER_HANDOFF_DELETE_ACK_TIMEOUT_SEC,
+    ) -> tuple[list[str], list[str]]:
+        return self._state_controller()._wait_for_history_delete_acks(
+            item_ids,
+            timeout_s=timeout_s,
+        )
 
     def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
         self._state_controller()._maybe_rotate_history_for_turn(turn)
@@ -2089,6 +2112,9 @@ class RealtimeRobotAgent:
 
     def _handle_conversation_item_created(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_conversation_item_created(event)
+
+    def _handle_conversation_item_deleted(self, event: dict[str, Any]) -> None:
+        self._server_event_runtime_controller().handle_conversation_item_deleted(event)
 
     def _handle_input_audio_buffer_committed(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_input_audio_buffer_committed(event)

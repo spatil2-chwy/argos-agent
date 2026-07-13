@@ -9,6 +9,7 @@ from argos_src.agent.control.types import SessionState
 
 _HANDLER_BY_EVENT_TYPE = {
     "conversation.item.created": "_handle_conversation_item_created",
+    "conversation.item.deleted": "_handle_conversation_item_deleted",
     "response.created": "_handle_response_created",
     "conversation.item.input_audio_transcription.completed": (
         "_handle_input_transcription_completed"

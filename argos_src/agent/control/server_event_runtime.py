@@ -93,6 +93,17 @@ class ServerEventRuntime:
                 elif item_type == "function_call":
                     turn.function_call_item_ids.add(item_id)
 
+    def handle_conversation_item_deleted(self, event: dict[str, Any]) -> None:
+        item_id = str(event.get("item_id") or "").strip()
+        if not item_id:
+            item = server_event_item(event)
+            item_id = server_event_item_id(event, item=item)
+        if not item_id:
+            return
+        handler = getattr(self, "_handle_history_item_delete_ack", None)
+        if callable(handler):
+            handler(item_id)
+
     def handle_input_audio_buffer_committed(self, event: dict[str, Any]) -> None:
         item_id = str(event.get("item_id") or "").strip()
         if not item_id:

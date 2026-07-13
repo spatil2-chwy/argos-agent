@@ -552,6 +552,9 @@ def _make_agent():
     agent._known_history_item_ids = set()
     agent._history_item_owner_req_id = {}
     agent._history_item_snapshots = {}
+    agent._history_delete_ack_condition = threading.Condition(agent._turn_lock)
+    agent._history_delete_ack_pending_item_ids = set()
+    agent._history_delete_ack_item_ids = set()
     agent._ignored_voice_commands = deque()
     agent._latency = _FakeLatency()
     agent._tool_latency = _FakeLatency()
@@ -1920,6 +1923,33 @@ def test_conversation_item_created_records_history_snapshot():
         "status": "completed",
         "text": "[INTERNAL EVENT]\nBattery is low.",
     }
+
+
+def test_conversation_item_deleted_ack_forgets_history_item():
+    agent = _make_agent()
+    turn = _make_turn("rt-history-delete")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(turn, "old-user-item")
+    agent._history_item_snapshots["old-user-item"] = {
+        "type": "message",
+        "role": "user",
+        "text": "hello",
+    }
+    agent._mark_history_delete_pending("old-user-item")
+
+    agent._handle_server_event(
+        {
+            "type": "conversation.item.deleted",
+            "item_id": "old-user-item",
+        }
+    )
+
+    assert list(agent._history_item_order) == []
+    assert "old-user-item" not in agent._known_history_item_ids
+    assert "old-user-item" not in turn.history_item_ids
+    assert "old-user-item" not in agent._history_item_snapshots
+    assert "old-user-item" not in agent._history_delete_ack_pending_item_ids
+    assert "old-user-item" in agent._history_delete_ack_item_ids
 
 
 def test_response_create_logs_model_prompt_snapshot():

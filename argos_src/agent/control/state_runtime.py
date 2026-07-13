@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 import os
+import threading
 import time
 from typing import Any, Optional
 
@@ -22,6 +23,10 @@ from argos_src.agent.control.transport_runtime import TransportRuntime
 from argos_src.agent.control.turn_context_runtime import TurnContextRuntime
 from argos_src.agent.control.turn_store import PendingResponseBindingStore, ResponseBinding
 from argos_src.agent.control.types import StateAxis, StateTransition
+
+OWNER_HANDOFF_DELETE_ACK_TIMEOUT_SEC = float(
+    os.environ.get("ARGOS_OWNER_HANDOFF_DELETE_ACK_TIMEOUT_SEC", "2.0")
+)
 
 
 class AgentStateRuntime:
@@ -483,6 +488,68 @@ class AgentStateRuntime:
             turn = self._turns_by_req_id.get(req_id) if req_id else None
         self._forget_history_item(turn, rendered)
 
+    def _ensure_history_delete_ack_state(self) -> tuple[threading.Condition, set[str], set[str]]:
+        condition = getattr(self, "_history_delete_ack_condition", None)
+        if condition is None:
+            condition = threading.Condition(self._turn_lock)
+            self._history_delete_ack_condition = condition
+        pending = getattr(self, "_history_delete_ack_pending_item_ids", None)
+        if pending is None:
+            pending = set()
+            self._history_delete_ack_pending_item_ids = pending
+        acked = getattr(self, "_history_delete_ack_item_ids", None)
+        if acked is None:
+            acked = set()
+            self._history_delete_ack_item_ids = acked
+        return condition, pending, acked
+
+    def _mark_history_delete_pending(self, item_id: str) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            _, pending, acked = self._ensure_history_delete_ack_state()
+            pending.add(rendered)
+            acked.discard(rendered)
+
+    def _handle_history_item_delete_ack(self, item_id: str) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            condition, pending, acked = self._ensure_history_delete_ack_state()
+            if rendered in pending:
+                pending.discard(rendered)
+                acked.add(rendered)
+            self._forget_deleted_history_item(rendered)
+            condition.notify_all()
+
+    def _wait_for_history_delete_acks(
+        self,
+        item_ids: list[str],
+        *,
+        timeout_s: float = OWNER_HANDOFF_DELETE_ACK_TIMEOUT_SEC,
+    ) -> tuple[list[str], list[str]]:
+        expected = [str(item_id or "").strip() for item_id in item_ids]
+        expected = [item_id for item_id in expected if item_id]
+        if not expected:
+            return [], []
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        with self._turn_lock:
+            condition, pending, acked = self._ensure_history_delete_ack_state()
+            while any(item_id in pending for item_id in expected):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                condition.wait(timeout=remaining)
+            acked_items = [item_id for item_id in expected if item_id in acked]
+            pending_items = [item_id for item_id in expected if item_id in pending]
+            for item_id in acked_items:
+                acked.discard(item_id)
+            for item_id in pending_items:
+                pending.discard(item_id)
+            return acked_items, pending_items
+
     def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
         new_owner_key = self._history_owner_key_for_turn(turn)
         old_owner_key = str(getattr(self, "_active_history_owner_key", "") or "")
@@ -495,24 +562,56 @@ class AgentStateRuntime:
                 protected_item_ids=protected_item_ids
             )
 
-        deleted_count = 0
+        delete_item_ids: list[str] = []
+        failed_item_ids: list[str] = []
         for item_id in history_snapshot:
             try:
+                self._mark_history_delete_pending(item_id)
                 self._transport_host()._send_event(
                     {"type": "conversation.item.delete", "item_id": item_id}
                 )
             except Exception:
+                with self._turn_lock:
+                    _, pending, _ = self._ensure_history_delete_ack_state()
+                    pending.discard(str(item_id or "").strip())
+                failed_item_ids.append(item_id)
                 self.logger.exception(
                     "Failed to delete owner-scoped conversation item_id=%s",
                     item_id,
                 )
                 continue
-            self._forget_deleted_history_item(item_id)
-            deleted_count += 1
+            delete_item_ids.append(item_id)
 
-        self._active_history_owner_key = new_owner_key
-        self._last_tool_name = None
-        self._last_tool_summary = None
+        acked_item_ids, pending_item_ids = self._wait_for_history_delete_acks(delete_item_ids)
+        if failed_item_ids:
+            history_action = "clear_failed"
+        elif pending_item_ids:
+            history_action = "clear_timeout"
+        else:
+            history_action = "cleared"
+        deleted_count = len(acked_item_ids)
+        if pending_item_ids:
+            pending_preview = ",".join(pending_item_ids[:10])
+            self.logger.error(
+                "Owner handoff history clear timed out req_id=%s old_owner_key=%s new_owner_key=%s acked_items=%s pending_items=%s pending_preview=%s",
+                getattr(turn, "req_id", None),
+                old_owner_key,
+                new_owner_key,
+                len(acked_item_ids),
+                len(pending_item_ids),
+                pending_preview,
+            )
+        if failed_item_ids:
+            failed_preview = ",".join(failed_item_ids[:10])
+            self.logger.error(
+                "Owner handoff history clear failed req_id=%s old_owner_key=%s new_owner_key=%s failed_items=%s failed_preview=%s",
+                getattr(turn, "req_id", None),
+                old_owner_key,
+                new_owner_key,
+                len(failed_item_ids),
+                failed_preview,
+            )
+
         if old_owner_key:
             latency = getattr(self, "_latency", None)
             emit = getattr(latency, "emit", None)
@@ -531,9 +630,20 @@ class AgentStateRuntime:
                     new_owner_key=new_owner_key,
                     deleted_items=deleted_count,
                     protected_items=len(protected_item_ids),
-                    history_action="cleared",
+                    history_action=history_action,
+                    pending_delete_acks=len(pending_item_ids),
+                    failed_delete_sends=len(failed_item_ids),
                     **log_fields,
                 )
+        if pending_item_ids or failed_item_ids:
+            raise TimeoutError(
+                "Failed to clear OpenAI Realtime owner-scoped history "
+                f"before owner handoff response_create req_id={getattr(turn, 'req_id', '')!r}"
+            )
+
+        self._active_history_owner_key = new_owner_key
+        self._last_tool_name = None
+        self._last_tool_summary = None
         self.logger.info(
             "Rotated realtime history old_owner_key=%s new_owner_key=%s "
             "deleted_items=%s protected_items=%s",

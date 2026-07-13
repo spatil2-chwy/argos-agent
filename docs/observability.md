@@ -44,7 +44,7 @@ Typical human turn flow:
 | `realtime` | `event=speech_end` | local end-of-speech detection fired |
 | `realtime` | `event=audio_commit` | mic audio was committed into the Realtime session |
 | `realtime` | `event=exchange_context` | face, speaker, owner, and pending internal-event context captured for the exchange |
-| `realtime` | `event=owner_handoff` | resolved owner key changed and prior Realtime history was cleared |
+| `realtime` | `event=owner_handoff` | resolved owner key changed and prior Realtime history was server-acknowledged as cleared |
 | `realtime` | `event=response_create` | the model response was explicitly requested |
 | `realtime` | `metric=first_audio_latency_s` | speech end to first playback audio delta |
 | `realtime` | `event=tool_call_requested` | the model requested a tool call |
@@ -186,10 +186,14 @@ the same run that share the same history owner key:
 
 This mirrors owner-scoped Realtime history. Consecutive exchanges with the same
 owner key keep the model-visible conversation context. When the key changes,
-the runtime emits `owner_handoff` and deletes older Realtime conversation items
-while protecting current in-flight items. The dashboard nests exchanges under
-these conversation segments so an operator can see when Argos was carrying one
-person's context versus when it reset for a new or unknown speaker.
+the runtime deletes older Realtime conversation items while protecting current
+in-flight items, waits for `conversation.item.deleted` acknowledgements, then
+emits `owner_handoff` with `history_action=cleared`. If acknowledgements time
+out, the runtime emits `history_action=clear_timeout`; if a delete cannot be
+sent, it emits `history_action=clear_failed`. Either failure cancels the turn
+before `response.create`. The dashboard nests exchanges under these conversation
+segments so an operator can see when Argos was carrying one person's context
+versus when it reset for a new or unknown speaker.
 
 Memory extraction has a related but separate signal. Completed attributed turns
 are buffered into speaker-owned segments and flushed on speaker handoff,

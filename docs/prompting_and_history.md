@@ -380,9 +380,15 @@ resolved owner key changes:
 - `anonymous` when no owner is safely resolved
 
 On owner handoff, older Realtime conversation items are deleted with
-`conversation.item.delete`. Current in-flight items, playback, and unresolved
+`conversation.item.delete`, and the runtime waits for the matching
+`conversation.item.deleted` server acknowledgements before it sends the next
+`response.create`. Current in-flight items, playback, and unresolved
 tool/response chains are protected. Local `QueuedTurn` transcripts remain
-available for observability and preference extraction.
+available for observability and preference extraction. In latency logs,
+`history_action=cleared` means the server acknowledged the deletes; a timeout is
+logged as `history_action=clear_timeout`, a send failure as
+`history_action=clear_failed`, and the turn is canceled before the model can
+answer with stale owner context.
 
 So history is bounded, but the runtime avoids deleting items that the current session still needs to resolve in-flight work.
 

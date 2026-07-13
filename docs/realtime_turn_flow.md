@@ -232,12 +232,18 @@ This is the main handoff from speech capture into interaction state.
 `_response_loop()` pulls the turn and `_run_turn()` does:
 
 1. Register the turn as active.
-2. If this were a text turn, create a system message item.
-3. If `pending_internal_text` exists, create a system message item for it.
-4. Send `response.create`.
-5. Wait for both model completion and playback completion.
+2. Rotate owner-scoped history if the resolved owner key changed.
+3. If this were a text turn, create a system message item.
+4. If `pending_internal_text` exists, create a system message item for it.
+5. Send `response.create`.
+6. Wait for both model completion and playback completion.
 
 Important nuance: for audio turns, the human speech itself is not wrapped in a local `conversation.item.create`. The server creates the audio-backed user item after `input_audio_buffer.commit`.
+
+Owner-history rotation sends `conversation.item.delete` for older unprotected
+items and waits for the matching `conversation.item.deleted` acknowledgements
+before `response.create`. If those deletes cannot be sent or acknowledged, the
+turn is canceled rather than allowing a response against stale owner context.
 
 ### Step 8: Server events bind the realtime objects back to the turn
 

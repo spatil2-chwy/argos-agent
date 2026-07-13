@@ -4,6 +4,7 @@ from collections import deque
 import logging
 import sys
 import threading
+import time
 import types
 
 
@@ -49,6 +50,9 @@ class FakeRuntime(AgentStateRuntime):
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
+        self._history_delete_ack_condition = threading.Condition(self._turn_lock)
+        self._history_delete_ack_pending_item_ids: set[str] = set()
+        self._history_delete_ack_item_ids: set[str] = set()
         self._active_history_owner_key = ""
         self._playback_item_id = ""
         self._last_tool_name = None
@@ -63,9 +67,21 @@ class FakeRuntime(AgentStateRuntime):
         self._pending_preference_segment_ids = set()
         self._preference_runtime = PreferenceRuntime(self)
         self.sent_events: list[dict] = []
+        self.auto_ack_history_deletes = True
+        self.fail_delete_item_ids: set[str] = set()
 
     def _send_event(self, payload: dict) -> None:
+        if (
+            payload.get("type") == "conversation.item.delete"
+            and payload.get("item_id") in self.fail_delete_item_ids
+        ):
+            raise RuntimeError("delete send failed")
         self.sent_events.append(payload)
+        if (
+            self.auto_ack_history_deletes
+            and payload.get("type") == "conversation.item.delete"
+        ):
+            self._handle_history_item_delete_ack(payload.get("item_id", ""))
 
     def _cancel_preference_idle_flush(self) -> None:
         return
@@ -123,6 +139,15 @@ def deleted_item_ids(runtime: FakeRuntime) -> list[str]:
     ]
 
 
+def wait_until(predicate, *, timeout_s: float = 1.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
 def test_same_owner_does_not_delete_history_or_clear_tool_summary() -> None:
     runtime = FakeRuntime()
     runtime._active_history_owner_key = "owner:A"
@@ -172,6 +197,87 @@ def test_owner_change_deletes_old_items_and_protects_current_audio_item() -> Non
             "deleted_items": 2,
             "protected_items": 1,
             "history_action": "cleared",
+            "pending_delete_acks": 0,
+            "failed_delete_sends": 0,
+        }
+    ]
+
+
+def test_owner_change_waits_for_server_delete_ack_before_cleared_log() -> None:
+    runtime = FakeRuntime()
+    runtime.auto_ack_history_deletes = False
+    runtime._latency = FakeLatency()
+    runtime._active_history_owner_key = "owner:A"
+    old_turn = make_turn("old", owner_id="A", finalized=True)
+    register_turn_item(runtime, old_turn, "old-user")
+    current_turn = make_turn("current", owner_id="B")
+    runtime._turns_by_req_id[current_turn.req_id] = current_turn
+
+    worker = threading.Thread(
+        target=runtime._maybe_rotate_history_for_turn,
+        args=(current_turn,),
+        daemon=True,
+    )
+    worker.start()
+
+    assert wait_until(lambda: deleted_item_ids(runtime) == ["old-user"])
+    assert worker.is_alive()
+    assert runtime._latency.events == []
+    assert runtime._active_history_owner_key == "owner:A"
+    assert list(runtime._history_item_order) == ["old-user"]
+
+    runtime._handle_history_item_delete_ack("old-user")
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert list(runtime._history_item_order) == []
+    assert runtime._active_history_owner_key == "owner:B"
+    assert runtime._latency.events == [
+        {
+            "event": "owner_handoff",
+            "req_id": "current",
+            "old_owner_key": "owner:A",
+            "new_owner_key": "owner:B",
+            "deleted_items": 1,
+            "protected_items": 0,
+            "history_action": "cleared",
+            "pending_delete_acks": 0,
+            "failed_delete_sends": 0,
+        }
+    ]
+
+
+def test_owner_change_delete_send_failure_does_not_report_cleared_or_rotate() -> None:
+    runtime = FakeRuntime()
+    runtime._latency = FakeLatency()
+    runtime._active_history_owner_key = "owner:A"
+    runtime.fail_delete_item_ids.add("old-user")
+    old_turn = make_turn("old", owner_id="A", finalized=True)
+    register_turn_item(runtime, old_turn, "old-user")
+    current_turn = make_turn("current", owner_id="B")
+    runtime._turns_by_req_id[current_turn.req_id] = current_turn
+
+    try:
+        runtime._maybe_rotate_history_for_turn(current_turn)
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("owner handoff should fail when delete cannot be sent")
+
+    assert deleted_item_ids(runtime) == []
+    assert list(runtime._history_item_order) == ["old-user"]
+    assert runtime._active_history_owner_key == "owner:A"
+    assert runtime._latency.events == [
+        {
+            "event": "owner_handoff",
+            "req_id": "current",
+            "old_owner_key": "owner:A",
+            "new_owner_key": "owner:B",
+            "deleted_items": 0,
+            "protected_items": 0,
+            "history_action": "clear_failed",
+            "pending_delete_acks": 0,
+            "failed_delete_sends": 1,
         }
     ]
 
