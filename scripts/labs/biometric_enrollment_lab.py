@@ -65,12 +65,14 @@ PHOTO_GUIDANCE = (
 )
 
 VOICE_PROMPTS = (
-    "This is a test recording for Argos voice enrollment.",
-    "My voice should be recognized clearly in a normal office.",
-    "I am speaking at a comfortable volume for this microphone.",
-    "Argos is collecting a clean biometric voice reference.",
-    "This final sentence helps confirm my speaker embedding.",
+    "This is a test recording for voice enrollment.",
+    "It's weird to be recording my voice for this.",
+    "Since when did I start talking to robots?",
+    "Okay almost done with the enrollment.",
+    "This is the final sentence I am recording.",
 )
+
+VOICE_PROMPT_GUIDANCE = "Say what you see on screen, or say any sentence you want."
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -235,15 +237,23 @@ def _review_prompt(
     return _confirm(f"{title}: {message}", assume_yes=False)
 
 
-def _show(display: Any | None, message: str, subtitle: str = "") -> None:
+def _show(display: Any | None, message: str, detail: str = "") -> None:
     if display is None:
         return
     try:
-        display.show_message(message)
-        if subtitle:
-            display.show_subtitle(subtitle, duration_ms=15000)
+        lines = [str(message or "").strip(), str(detail or "").strip()]
+        display.show_message("\n".join(line for line in lines if line))
     except Exception:
         logger.debug("Display update failed", exc_info=True)
+
+
+def _show_subtitle(display: Any | None, text: str, *, duration_ms: int = 15000) -> None:
+    if display is None:
+        return
+    try:
+        display.show_subtitle(text, duration_ms=duration_ms)
+    except Exception:
+        logger.debug("Display subtitle failed", exc_info=True)
 
 
 def _countdown(display: Any | None, seconds: int) -> None:
@@ -443,15 +453,19 @@ def _collect_face_samples(
     photo_dir = session_dir / "biometric_photos"
     photo_dir.mkdir(parents=True, exist_ok=True)
 
+    target = max(1, int(args.photos))
+    face_intro = (
+        f"I will snap {target} photos.\n"
+        "Change angle a little each time: smile, tilt, crouch, or move closer."
+    )
     _show(
         display,
         "Face enrollment",
-        "I will snap 5 photos. Change angle a little each time: smile, tilt, crouch or move closer.",
+        face_intro,
     )
     photo_intro = (
-        "I will snap 5 photos with a countdown before each.\n\n"
-        "Try different angles, smile, tilt, crouch slightly, and keep your whole face visible.\n\n"
-        "Once you accept, the 5 photos will happen one after another."
+        f"I will snap {target} photos with a countdown before each.\n\n"
+        "Change angle a little each time: smile, tilt, crouch, or move closer."
     )
     print(f"\nFace enrollment: {photo_intro}")
     if not _review_prompt(
@@ -464,17 +478,16 @@ def _collect_face_samples(
     ):
         raise RuntimeError("Photo capture rejected by operator.")
 
-    target = max(1, int(args.photos))
     for attempt in range(1, max(1, int(args.max_photo_attempts)) + 1):
         if len(accepted) >= target:
             break
         sample_number = len(accepted) + 1
         guidance = PHOTO_GUIDANCE[(sample_number - 1) % len(PHOTO_GUIDANCE)]
         sample_id = f"face_{sample_number:04d}_attempt_{attempt:04d}"
-        _show(display, f"Photo {sample_number}/{target}", guidance)
+        _show(display, f"Photo {sample_number}/{target}", "Get ready.")
         print(f"[photo {sample_number}/{target}] {guidance}")
         _countdown(display, int(args.photo_countdown_sec))
-        _show(display, "Click", f"Photo {sample_number}/{target}")
+        _show(display, f"Photo {sample_number}/{target}", "Hold still.")
         sample = _capture_face_sample(
             service=service,
             camera_resource_id=camera_resource_id,
@@ -509,19 +522,27 @@ def _capture_voice_sample(
     audio_dir: Path,
     sample_id: str,
     prompt: str,
+    sample_number: int,
+    total: int,
     speaker_service: Any,
 ) -> dict[str, Any]:
     print(f"[voice] Read: {prompt}")
-    _show(display, "Voice enrollment", prompt)
+    display_prompt = f"{VOICE_PROMPT_GUIDANCE}\n\n{prompt}"
+    _show(display, f"Voice {sample_number}/{total}", display_prompt)
     _countdown(display, int(args.voice_countdown_sec))
-    _show(display, "Mic admission active", prompt)
+    _show(display, f"Voice {sample_number}/{total}", display_prompt)
+
+    def _show_recording() -> None:
+        _show(display, f"Voice {sample_number}/{total}", display_prompt)
+        _show_subtitle(display, f"Recording audio {sample_number}/{total}")
+
     capture = _capture_microphone_utterance_raw(
         config,
         vad=vad,
-        on_listening=(lambda: _show(display, "Mic admission active", prompt)),
-        on_recording_start=(display.show_recording if display is not None else None),
+        on_listening=(lambda: _show(display, f"Voice {sample_number}/{total}", display_prompt)),
+        on_recording_start=_show_recording,
         on_recording_stop=(
-            (lambda reason: _show(display, "Saving audio...", reason))
+            (lambda reason: _show(display, f"Saving audio {sample_number}/{total}...", reason))
             if display is not None
             else None
         ),
@@ -591,15 +612,16 @@ def _collect_voice_samples(
     audio_dir = session_dir / "biometric_audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
+    target = max(1, int(args.voice_clips))
     _show(
         display,
         "Voice enrollment",
-        "Now I need 5 voice recordings. Read each sentence when it appears.",
+        f"Now I need {target} voice recordings. {VOICE_PROMPT_GUIDANCE}",
     )
     voice_intro = (
-        "Now I need 5 voice recordings.\n\n"
-        "Read each sentence shown on the screen after the countdown.\n\n"
-        "Once you accept, the 5 recordings will happen one after another."
+        f"Now I need {target} voice recordings.\n\n"
+        f"{VOICE_PROMPT_GUIDANCE}\n\n"
+        f"Once you accept, the {target} recordings will happen one after another."
     )
     print(f"\nVoice enrollment: {voice_intro}")
     if not _review_prompt(
@@ -612,7 +634,6 @@ def _collect_voice_samples(
     ):
         raise RuntimeError("Voice capture rejected by operator.")
 
-    target = max(1, int(args.voice_clips))
     for attempt in range(1, max(1, int(args.max_voice_attempts)) + 1):
         if len(accepted) >= target:
             break
@@ -627,6 +648,8 @@ def _collect_voice_samples(
             audio_dir=audio_dir,
             sample_id=sample_id,
             prompt=prompt,
+            sample_number=sample_number,
+            total=target,
             speaker_service=speaker_service,
         )
         clean_sample = {key: value for key, value in sample.items() if key != "embedding"}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from scripts.labs import biometric_enrollment_lab as lab
@@ -61,7 +63,15 @@ class FakeDisplay:
 
     def __init__(self, accepted: bool = True) -> None:
         self.accepted = accepted
+        self.messages: list[str] = []
         self.prompts: list[dict] = []
+        self.subtitles: list[tuple[str, int]] = []
+
+    def show_message(self, text: str) -> None:
+        self.messages.append(text)
+
+    def show_subtitle(self, text: str, *, duration_ms: int = 5000) -> None:
+        self.subtitles.append((text, duration_ms))
 
     def review_text_prompt(self, **kwargs):
         self.prompts.append(kwargs)
@@ -70,6 +80,25 @@ class FakeDisplay:
             "accepted": self.accepted,
             "status": "accepted" if self.accepted else "rejected",
         }
+
+
+class FakeSpeakerBackend:
+    def embed_query_clip(self, waveform, *, sample_rate: int):
+        return np.asarray([1.0, 0.0], dtype=np.float32)
+
+
+class FakeSpeakerService:
+    policy = object()
+    backend = FakeSpeakerBackend()
+
+
+def test_show_uses_centered_message_not_subtitle() -> None:
+    display = FakeDisplay()
+
+    lab._show(display, "Face enrollment", "I will snap 5 photos.")
+
+    assert display.messages == ["Face enrollment\nI will snap 5 photos."]
+    assert display.subtitles == []
 
 
 def test_review_prompt_uses_configured_display() -> None:
@@ -93,6 +122,50 @@ def test_review_prompt_uses_configured_display() -> None:
             "timeout_sec": 120.0,
         }
     ]
+
+
+def test_voice_capture_displays_prompt_as_message_and_recording_as_subtitle(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    display = FakeDisplay()
+    prompt = "This is a test recording for Argos voice enrollment."
+
+    def fake_capture(config, *, vad, on_listening, on_recording_start, on_recording_stop):
+        on_listening()
+        on_recording_start()
+        on_recording_stop("speech complete")
+        return {
+            "success": True,
+            "agent_audio_pcm16": (np.zeros(1600, dtype=np.int16)).tobytes(),
+            "source_audio_pcm16": b"",
+            "source_sample_rate_hz": 0,
+        }
+
+    monkeypatch.setattr(lab, "_capture_microphone_utterance_raw", fake_capture)
+    monkeypatch.setattr(lab, "enrollment_rejection_reason", lambda policy, *, audio_pcm16: "")
+
+    result = lab._capture_voice_sample(
+        args=SimpleNamespace(voice_countdown_sec=0),
+        config=object(),
+        vad=object(),
+        display=display,
+        audio_dir=tmp_path,
+        sample_id="voice_0001_attempt_0001",
+        prompt=prompt,
+        sample_number=1,
+        total=5,
+        speaker_service=FakeSpeakerService(),
+    )
+
+    assert result["accepted"] is True
+    assert prompt in display.messages[0]
+    assert lab.VOICE_PROMPT_GUIDANCE in display.messages[0]
+    assert any(prompt in message for message in display.messages)
+    assert any(lab.VOICE_PROMPT_GUIDANCE in message for message in display.messages)
+    assert display.subtitles == [("Recording audio 1/5", 15000)]
+    assert all(prompt not in text for text, _ in display.subtitles)
+    assert all(lab.VOICE_PROMPT_GUIDANCE not in text for text, _ in display.subtitles)
 
 
 def test_commit_modality_enrolls_once_then_observes_remaining_face_samples() -> None:
