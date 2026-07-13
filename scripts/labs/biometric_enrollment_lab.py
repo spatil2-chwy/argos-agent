@@ -102,8 +102,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--voice-clips", type=int, default=5, help="Accepted voice clips required.")
     parser.add_argument("--max-photo-attempts", type=int, default=12)
     parser.add_argument("--max-voice-attempts", type=int, default=10)
-    parser.add_argument("--photo-countdown-sec", type=int, default=3)
-    parser.add_argument("--voice-countdown-sec", type=int, default=3)
+    parser.add_argument("--photo-countdown-sec", type=int, default=5)
+    parser.add_argument("--voice-countdown-sec", type=int, default=5)
     parser.add_argument(
         "--output-root",
         default=str(DEFAULT_COLLECTION_ROOT),
@@ -619,7 +619,6 @@ def _collect_voice_samples(
         f"Now I need {target} voice recordings. {VOICE_PROMPT_GUIDANCE}",
     )
     voice_intro = (
-        f"Now I need {target} voice recordings.\n\n"
         f"{VOICE_PROMPT_GUIDANCE}\n\n"
         f"Once you accept, the {target} recordings will happen one after another."
     )
