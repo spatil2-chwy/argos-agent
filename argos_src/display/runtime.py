@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 import logging
 import threading
 import time
@@ -323,6 +325,27 @@ class DisplayRuntime:
                 "response": response,
             }
 
+    def review_text_prompt(
+        self,
+        *,
+        title: str,
+        message: str,
+        request_id: str | None = None,
+        accept_label: str = "Accept",
+        reject_label: str = "Reject",
+        timeout_sec: float = DEFAULT_REVIEW_TIMEOUT_SEC,
+    ) -> dict[str, Any]:
+        """Show a blocking accept/reject prompt using the existing preview UI."""
+        image_url = _text_prompt_data_url(title=title, message=message)
+        return self.review_face_capture(
+            image_url=image_url,
+            request_id=request_id or f"text-prompt-{uuid4().hex[:12]}",
+            title=title,
+            accept_label=accept_label,
+            reject_label=reject_label,
+            timeout_sec=timeout_sec,
+        )
+
     def _request(
         self,
         operation: str,
@@ -338,3 +361,54 @@ class DisplayRuntime:
             args=args,
             timeout_ms=timeout_ms,
         )
+
+
+def _text_prompt_data_url(*, title: str, message: str) -> str:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception as exc:  # pragma: no cover - exercised only in stripped envs.
+        raise RuntimeError("Pillow is required to render display text prompts.") from exc
+
+    width, height = 1280, 720
+    margin = 72
+    image = Image.new("RGB", (width, height), color=(14, 14, 18))
+    draw = ImageDraw.Draw(image)
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 56)
+        body_font = ImageFont.truetype("DejaVuSans.ttf", 36)
+    except Exception:
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+
+    y = margin
+    rendered_title = str(title or "Confirm").strip() or "Confirm"
+    draw.text((margin, y), rendered_title, fill=(255, 255, 255), font=title_font)
+    y += 64
+
+    rendered_message = str(message or "").strip()
+    lines: list[str] = []
+    for paragraph in rendered_message.splitlines() or [""]:
+        paragraph = paragraph.strip()
+        if not paragraph:
+            lines.append("")
+            continue
+        words = paragraph.split()
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > 48 and current:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+
+    for line in lines[:12]:
+        draw.text((margin, y), line, fill=(230, 230, 235), font=body_font)
+        y += 48
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"

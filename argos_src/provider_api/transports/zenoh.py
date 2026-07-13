@@ -713,7 +713,11 @@ def _decode_image_payload(payload: Any) -> np.ndarray | None:
     return _normalize_decoded_color_array(
         array,
         encoding=encoding,
-        color_space=payload.get("color_space") or payload.get("pixel_format"),
+        color_space=(
+            payload.get("color_space")
+            or payload.get("pixel_format")
+            or payload.get("format")
+        ),
     )
 
 

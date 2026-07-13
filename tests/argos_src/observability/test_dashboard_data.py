@@ -282,6 +282,7 @@ def test_dashboard_snapshot_merges_req_rows_with_missing_session_id() -> None:
 def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
     prompt = "STATIC RULES\n\n[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
     dynamic = "[CURRENT TIME]\n2026-07-07\n\n[ROBOT STATE]\nstanding"
+    history = "1. user type=message item_id=item-a\nHello Argos"
     rows = [
         _row(
             "ts=2026-07-07 10:00:00.000 | component=realtime | event=response_create | "
@@ -290,6 +291,8 @@ def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
             f"{_b64(prompt)} | model_prompt_chars={len(prompt)} | "
             f"model_static_prompt_chars=12 | model_dynamic_context_b64={_b64(dynamic)} | "
             f"model_dynamic_context_chars={len(dynamic)} | "
+            f"model_history_snapshot_b64={_b64(history)} | "
+            f"model_history_snapshot_chars={len(history)} | "
             "model_history_owner_key=owner:person-1 | model_history_item_count=3 | "
             "model_turn_history_item_count=1 | "
             "model_history_item_ids=item-a,item-b,item-c | "
@@ -308,10 +311,12 @@ def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
             "prompt": prompt,
             "dynamic_context": dynamic,
             "delivery_instructions": "",
+            "history_snapshot": history,
             "prompt_chars": len(prompt),
             "static_prompt_chars": 12,
             "dynamic_context_chars": len(dynamic),
             "delivery_instructions_chars": None,
+            "history_snapshot_chars": len(history),
             "history_owner_key": "owner:person-1",
             "history_item_count": 3,
             "turn_history_item_count": 1,

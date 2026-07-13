@@ -104,6 +104,7 @@ __all__ = [
 ]
 
 PREFERENCE_IDLE_FLUSH_DELAY_SEC = 60.0
+HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT = 3000
 
 
 def _log_text_b64(value: str) -> str:
@@ -111,6 +112,72 @@ def _log_text_b64(value: str) -> str:
     if not rendered:
         return ""
     return base64.b64encode(rendered.encode("utf-8")).decode("ascii")
+
+
+def _history_content_text(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        rendered_type = str(part.get("type", "") or "").strip()
+        text = str(part.get("text") or part.get("transcript") or "").strip()
+        if text:
+            parts.append(text)
+        elif rendered_type in {"input_audio", "audio"}:
+            parts.append("[audio input]")
+        elif rendered_type in {"input_image", "image"}:
+            parts.append("[image input]")
+        elif rendered_type:
+            parts.append(f"[{rendered_type}]")
+    return "\n".join(part for part in parts if part)
+
+
+def _history_snapshot_from_item(item: dict[str, Any]) -> dict[str, str]:
+    item_type = str(item.get("type", "") or "").strip()
+    role = str(item.get("role", "") or "").strip()
+    status = str(item.get("status", "") or "").strip()
+    text = ""
+    if item_type == "function_call_output":
+        call_id = str(item.get("call_id", "") or "").strip()
+        output = str(item.get("output", "") or "").strip()
+        text = "\n".join(
+            part
+            for part in (
+                f"call_id={call_id}" if call_id else "",
+                output,
+            )
+            if part
+        )
+    elif item_type == "function_call":
+        name = str(item.get("name", "") or "").strip()
+        call_id = str(item.get("call_id", "") or "").strip()
+        arguments = str(item.get("arguments", "") or "").strip()
+        text = "\n".join(
+            part
+            for part in (
+                f"name={name}" if name else "",
+                f"call_id={call_id}" if call_id else "",
+                f"arguments={arguments}" if arguments else "",
+            )
+            if part
+        )
+    else:
+        text = _history_content_text(item.get("content"))
+    return {
+        "type": item_type,
+        "role": role,
+        "status": status,
+        "text": text,
+    }
+
+
+def _bound_history_snapshot_text(value: str) -> str:
+    rendered = str(value or "").strip()
+    if len(rendered) <= HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT:
+        return rendered
+    return rendered[: HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT - 3].rstrip() + "..."
 
 
 def _human_text_from_text_turn(text: str) -> str:
@@ -308,6 +375,7 @@ class RealtimeRobotAgent:
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
+        self._history_item_snapshots: dict[str, dict[str, str]] = {}
         self._history_index_store = OwnerScopedHistoryIndex(
             item_order=self._history_item_order,
             known_item_ids=self._known_history_item_ids,
@@ -602,11 +670,60 @@ class RealtimeRobotAgent:
             owner_req_id=owner_req_id,
         )
 
+    def _record_history_item_snapshot(self, item_id: str, item: dict[str, Any]) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is None:
+                snapshots = {}
+                self._history_item_snapshots = snapshots
+            existing = dict(snapshots.get(rendered, {}))
+            incoming = _history_snapshot_from_item(item)
+            for key, value in incoming.items():
+                if value or not existing.get(key):
+                    existing[key] = value
+            snapshots[rendered] = existing
+
+    def _update_history_item_snapshot(
+        self,
+        item_id: str,
+        *,
+        text: str = "",
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+    ) -> None:
+        rendered = str(item_id or "").strip()
+        if not rendered:
+            return
+        with self._turn_lock:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is None:
+                snapshots = {}
+                self._history_item_snapshots = snapshots
+            snapshot = dict(snapshots.get(rendered, {}))
+            if text:
+                snapshot["text"] = str(text)
+            if item_type:
+                snapshot["type"] = str(item_type)
+            if role:
+                snapshot["role"] = str(role)
+            if status:
+                snapshot["status"] = str(status)
+            snapshots[rendered] = snapshot
+
     def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
         self._state_controller()._register_turn_history_item(turn, item_id)
 
     def _forget_history_item(self, turn: Optional[QueuedTurn], item_id: str) -> None:
         self._state_controller()._forget_history_item(turn, item_id)
+        rendered = str(item_id or "").strip()
+        if rendered:
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is not None:
+                snapshots.pop(rendered, None)
 
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
         return self._state_controller()._history_owner_key_for_turn(turn)
@@ -1601,6 +1718,28 @@ class RealtimeRobotAgent:
             max_output_tokens=self.realtime_profile.max_output_tokens,
         )
 
+    def _model_history_snapshot_text(self, history_item_ids: list[str]) -> str:
+        if not history_item_ids:
+            return ""
+        snapshots = getattr(self, "_history_item_snapshots", {}) or {}
+        start_index = max(1, len(history_item_ids) - 19)
+        blocks: list[str] = []
+        for index, item_id in enumerate(history_item_ids[-20:], start=start_index):
+            snapshot = snapshots.get(item_id, {})
+            item_type = str(snapshot.get("type", "") or "item").strip()
+            role = str(snapshot.get("role", "") or "").strip()
+            status = str(snapshot.get("status", "") or "").strip()
+            title_parts = [f"{index}.", role or item_type, f"item_id={item_id}"]
+            if role and item_type:
+                title_parts.insert(2, f"type={item_type}")
+            if status:
+                title_parts.append(f"status={status}")
+            text = _bound_history_snapshot_text(snapshot.get("text", "") or "")
+            if not text:
+                text = "(content not available locally)"
+            blocks.append(" ".join(title_parts) + "\n" + text)
+        return "\n\n".join(blocks)
+
     def _model_prompt_log_fields(
         self,
         turn: QueuedTurn,
@@ -1608,6 +1747,7 @@ class RealtimeRobotAgent:
     ) -> dict[str, Any]:
         history_item_ids = list(getattr(self, "_history_item_order", ()) or ())
         turn_history_item_ids = sorted(str(item_id) for item_id in turn.history_item_ids)
+        history_snapshot_text = self._model_history_snapshot_text(history_item_ids)
         instructions = instruction_snapshot.get("instructions", "")
         static_instructions = instruction_snapshot.get("static_instructions", "")
         dynamic_instructions = instruction_snapshot.get("dynamic_instructions", "")
@@ -1622,6 +1762,9 @@ class RealtimeRobotAgent:
             "model_history_item_count": len(history_item_ids),
             "model_turn_history_item_count": len(turn_history_item_ids),
         }
+        if history_snapshot_text:
+            fields["model_history_snapshot_b64"] = _log_text_b64(history_snapshot_text)
+            fields["model_history_snapshot_chars"] = len(history_snapshot_text)
         if delivery_instructions:
             fields["model_delivery_instructions_b64"] = _log_text_b64(
                 delivery_instructions
@@ -1662,6 +1805,12 @@ class RealtimeRobotAgent:
             req_id=turn.req_id,
             **self._model_prompt_log_fields(turn, instruction_snapshot),
             **self._exchange_log_fields(turn),
+            _console_omit_fields=(
+                "model_prompt_b64",
+                "model_dynamic_context_b64",
+                "model_delivery_instructions_b64",
+                "model_history_snapshot_b64",
+            ),
         )
         self.logger.info(
             "Queueing response.create req_id=%s pending_response_requests=%s",

@@ -51,6 +51,9 @@ class ServerEventRuntime:
             return
         if item_id in self._item_id_to_req_id:
             self._register_history_item(item_id)
+            record_snapshot = getattr(self, "_record_history_item_snapshot", None)
+            if callable(record_snapshot):
+                record_snapshot(item_id, item)
             return
 
         item_type = str(item.get("type", "") or "").strip()
@@ -76,6 +79,9 @@ class ServerEventRuntime:
                 self._call_id_to_req_id[call_id] = req_id
 
         self._register_history_item(item_id, owner_req_id=req_id)
+        record_snapshot = getattr(self, "_record_history_item_snapshot", None)
+        if callable(record_snapshot):
+            record_snapshot(item_id, item)
         if req_id:
             turn = self._turns_by_req_id.get(req_id)
             if turn is not None:
@@ -179,6 +185,15 @@ class ServerEventRuntime:
         )
         if transcript:
             turn.user_transcript = transcript
+            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+            if callable(update_snapshot):
+                update_snapshot(
+                    item_id,
+                    text=transcript,
+                    item_type="message",
+                    role="user",
+                    status="transcribed",
+                )
             if turn.phase == TURN_PHASE_FINALIZED:
                 self._maybe_note_preference_turn(turn)
 
@@ -352,6 +367,15 @@ class ServerEventRuntime:
             turn.assistant_item_id = item_id or turn.assistant_item_id
             turn.assistant_item_ids.add(item_id)
         turn.assistant_transcript += delta
+        if turn.assistant_item_id:
+            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+            if callable(update_snapshot):
+                update_snapshot(
+                    turn.assistant_item_id,
+                    text=turn.assistant_transcript,
+                    item_type="message",
+                    role="assistant",
+                )
         self._show_display_subtitle_async(
             self._display_subtitle_window(turn.assistant_transcript),
             duration_ms=5000,
@@ -447,6 +471,21 @@ class ServerEventRuntime:
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
             turn.function_call_item_ids.add(item_id)
+            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+            if callable(update_snapshot):
+                update_snapshot(
+                    item_id,
+                    text="\n".join(
+                        part
+                        for part in (
+                            f"name={tool_name}",
+                            f"call_id={call_id}",
+                            f"arguments={arguments_json or '{}'}",
+                        )
+                        if part
+                    ),
+                    item_type="function_call",
+                )
         turn.pending_tool_calls += 1
         turn.pending_call_ids.add(call_id)
         turn.pending_tool_names_by_call_id[call_id] = tool_name
@@ -505,6 +544,16 @@ class ServerEventRuntime:
             or len(final_transcript) >= len(turn.assistant_transcript.strip())
         ):
             turn.assistant_transcript = final_transcript
+        if turn.assistant_item_id and turn.assistant_transcript.strip():
+            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+            if callable(update_snapshot):
+                update_snapshot(
+                    turn.assistant_item_id,
+                    text=turn.assistant_transcript,
+                    item_type="message",
+                    role="assistant",
+                    status=status,
+                )
         if turn.audio_started and turn.assistant_transcript.strip():
             self._show_display_subtitle_async(
                 self._display_subtitle_window(turn.assistant_transcript),
