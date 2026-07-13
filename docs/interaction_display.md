@@ -24,6 +24,8 @@ resources:
     capabilities:
       - display.command
       - display.interaction
+      - display.image
+      - display.response
 ```
 
 The default `static_interaction` profile selects:
@@ -57,11 +59,11 @@ The HTTP provider transport maps display operations to the local display server:
 
 | Operation | Endpoint | Purpose |
 |---|---|---|
-| `display.command` | `POST /argos/providers/puffle-go2-display/resources/screen_001/display` | Send face, subtitle, clear/reset, message, countdown, Rive, or preview commands. |
+| `display.command` | `POST /argos/providers/puffle-go2-display/resources/screen_001/request/command` | Send face, subtitle, clear/reset, message, countdown, Rive, or preview commands. |
 | `display.health` | `GET /argos/providers/puffle-go2-display/resources/screen_001/health` | Check whether the display control server is reachable. |
-| `display.image` | `POST /argos/providers/puffle-go2-display/resources/screen_001/image` | Show or clear the small live camera image panel. |
+| `display.image` | `POST /argos/providers/puffle-go2-display/resources/screen_001/request/image` | Show or clear the small live camera image panel. |
 | `display.state` | `GET /argos/providers/puffle-go2-display/resources/screen_001/state` | Read current display state. |
-| `display.await_response` | `GET /argos/providers/puffle-go2-display/resources/screen_001/response` polling | Wait for an interactive response matching `requestId`. |
+| `display.await_response` | `POST /argos/providers/puffle-go2-display/resources/screen_001/request/await_response` | Wait for an interactive response matching `requestId`. |
 
 The display server is expected at:
 
@@ -132,10 +134,11 @@ The preview command sent to the display is:
 }
 ```
 
-The browser posts or stores the response for the namespaced response endpoint;
-Argos polls
-`/argos/providers/puffle-go2-display/resources/screen_001/response`
-until it sees a matching `requestId`.
+The browser posts the response to
+`/argos/providers/puffle-go2-display/resources/screen_001/request/response`.
+Argos then calls
+`/argos/providers/puffle-go2-display/resources/screen_001/request/await_response`
+with the same `requestId`.
 
 ## Tests
 

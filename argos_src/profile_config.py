@@ -145,7 +145,7 @@ class SpeakerRecognitionProfile:
 @dataclass(frozen=True)
 class IdentityMemoryProfile:
     enabled: bool = True
-    backend: str = "tailwag_package"
+    backend: str = "tailwag_http"
     site_code: str = ""
     place_room_id: str = "realtime"
     retention_class: str = "standard"
@@ -228,6 +228,7 @@ class ResourceSelectionsProfile:
     face_camera: str = ""
     scene_camera: str = ""
     interaction_display: str = ""
+    identity_memory: str = ""
     lidar: str = ""
 
 
@@ -638,6 +639,9 @@ def _parse_resource_selections(
         interaction_display=(
             _pop_optional_str(data, "interaction_display", default="") or ""
         ),
+        identity_memory=(
+            _pop_optional_str(data, "identity_memory", default="") or ""
+        ),
         lidar=_pop_optional_str(data, "lidar", default="") or "",
     )
     _reject_unknown(data, "resources")
@@ -663,12 +667,19 @@ def _parse_resource_selections(
             capability_id="display.command",
         )
         selections = replace(selections, interaction_display=interaction_display)
+    if not selections.identity_memory:
+        identity_memory = _default_resource_id(
+            manifest,
+            capability_id="memory.identity",
+        )
+        selections = replace(selections, identity_memory=identity_memory)
 
     for field_name in (
         "primary_robot",
         "face_camera",
         "scene_camera",
         "interaction_display",
+        "identity_memory",
         "lidar",
     ):
         resource_id = str(getattr(selections, field_name, "") or "").strip()
@@ -799,6 +810,23 @@ def _validate_runtime_resource_capabilities(
         )
 
 
+def _validate_identity_memory_resource(
+    *,
+    manifest: ProviderManifest,
+    resources: ResourceSelectionsProfile,
+    identity_memory: IdentityMemoryProfile,
+) -> None:
+    if not identity_memory.enabled or identity_memory.backend == "noop":
+        return
+    memory_resource = _selected_resource(manifest, resources.identity_memory)
+    _require_selected_capability(
+        capability_id="memory.identity",
+        resource=memory_resource,
+        selector_name="resources.identity_memory",
+        feature_name="identity_memory.enabled",
+    )
+
+
 def _selected_resource(
     manifest: ProviderManifest,
     resource_id: str,
@@ -896,6 +924,11 @@ def _parse_profile(
     if slack_memory_data:
         raise ProfileValidationError("slack_memory has moved to tailwag-memory.")
     identity_memory = _parse_identity_memory(identity_memory_data)
+    _validate_identity_memory_resource(
+        manifest=manifest,
+        resources=resources,
+        identity_memory=identity_memory,
+    )
     knowledge_bases = tuple(
         _parse_knowledge_base_entry(item, index=i)
         for i, item in enumerate(knowledge_base_data)
@@ -1336,9 +1369,9 @@ def _parse_face_recognition(data: dict[str, Any]) -> FaceRecognitionProfile:
 
 
 def _parse_identity_memory(data: dict[str, Any]) -> IdentityMemoryProfile:
-    backend = (_pop_optional_str(data, "backend", default="tailwag_package") or "tailwag_package").strip()
-    if backend not in {"tailwag_package", "noop"}:
-        raise ProfileValidationError("identity_memory.backend must be tailwag_package or noop.")
+    backend = (_pop_optional_str(data, "backend", default="tailwag_http") or "tailwag_http").strip()
+    if backend not in {"tailwag_http", "noop"}:
+        raise ProfileValidationError("identity_memory.backend must be tailwag_http or noop.")
     site_code = (_pop_optional_str(data, "site_code", default="") or "").strip()
     retention_class = (_pop_optional_str(data, "retention_class", default="standard") or "standard").strip()
     if not retention_class:

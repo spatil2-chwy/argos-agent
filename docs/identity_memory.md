@@ -20,8 +20,9 @@ Tailwag owns durable identity and memory:
 - live episode ingestion and memory extraction
 - semantic memory search and prompt context
 
-Argos imports Tailwag only through `argos_src.identity_memory.tailwag_package`.
-Everything else uses the `IdentityMemoryClient` protocol or the noop fallback.
+Argos reaches Tailwag through the generic HTTP provider transport and the
+`argos_src.identity_memory.tailwag_http` adapter. Everything else uses the
+`IdentityMemoryClient` protocol or the noop fallback.
 
 The shipped profile section keeps only the normal operational knobs:
 
@@ -33,7 +34,7 @@ identity_memory:
 
 The remaining identity-memory profile keys are advanced switches with defaults:
 
-- `backend`: defaults to `tailwag_package`; set to `noop` only for disabled
+- `backend`: defaults to `tailwag_http`; set to `noop` only for disabled
   identity-memory test or fallback runs.
 - `place_room_id`: defaults to `realtime`; attached to Tailwag live episodes as
   room metadata.
@@ -47,6 +48,16 @@ The remaining identity-memory profile keys are advanced switches with defaults:
 Removed Argos sections include `identity_store`, `employee_directory`, `memory`,
 and `slack_memory`. Face and speaker recognition no longer accept local database
 paths for biometric storage.
+
+The selected manifest must include an HTTP `memory` provider and a `memory`
+resource with `memory.identity`. Argos sends bearer auth from
+`TAILWAG_API_BEARER_TOKEN` when the provider declares:
+
+```yaml
+auth:
+  type: bearer
+  token_env: TAILWAG_API_BEARER_TOKEN
+```
 
 ## Runtime Memory Search
 
