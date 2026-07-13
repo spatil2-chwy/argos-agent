@@ -43,6 +43,29 @@ def test_display_runtime_review_posts_preview_and_waits_for_response():
     assert client.requests[1]["args"]["requestId"] == "capture-1"
 
 
+def test_display_runtime_text_prompt_uses_preview_accept_reject():
+    client = _Client()
+    runtime = DisplayRuntime(client=client, resource_id="interaction_display")
+
+    result = runtime.review_text_prompt(
+        request_id="prompt-1",
+        title="Face enrollment",
+        message="I will snap 5 photos with a countdown before each.",
+        accept_label="Start photos",
+        reject_label="Cancel",
+    )
+
+    assert result["accepted"] is True
+    assert client.requests[0]["operation"] == OP_DISPLAY_COMMAND
+    assert client.requests[0]["args"]["type"] == "face_capture_preview"
+    assert client.requests[0]["args"]["requestId"] == "prompt-1"
+    assert client.requests[0]["args"]["imageUrl"].startswith("data:image/png;base64,")
+    assert client.requests[0]["args"]["title"] == "Face enrollment"
+    assert client.requests[0]["args"]["acceptLabel"] == "Start photos"
+    assert client.requests[0]["args"]["rejectLabel"] == "Cancel"
+    assert client.requests[1]["operation"] == OP_DISPLAY_AWAIT_RESPONSE
+
+
 def test_display_runtime_image_message_preview_posts_and_clears():
     client = _Client()
     runtime = DisplayRuntime(client=client, resource_id="interaction_display")

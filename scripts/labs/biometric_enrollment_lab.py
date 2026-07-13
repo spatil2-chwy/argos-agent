@@ -209,6 +209,32 @@ def _confirm(prompt: str, *, assume_yes: bool = False) -> bool:
     return answer in {"y", "yes"}
 
 
+def _review_prompt(
+    display: Any | None,
+    *,
+    title: str,
+    message: str,
+    accept_label: str = "Accept",
+    reject_label: str = "Reject",
+    assume_yes: bool = False,
+) -> bool:
+    if assume_yes:
+        print(f"{title}: {message} [auto-yes]")
+        return True
+    if display is not None and bool(getattr(display, "is_configured", False)):
+        review = display.review_text_prompt(
+            title=title,
+            message=message,
+            accept_label=accept_label,
+            reject_label=reject_label,
+            timeout_sec=120.0,
+        )
+        if not bool(review.get("available", False)):
+            raise RuntimeError(f"Display prompt unavailable: {review.get('status')}")
+        return bool(review.get("accepted", False))
+    return _confirm(f"{title}: {message}", assume_yes=False)
+
+
 def _show(display: Any | None, message: str, subtitle: str = "") -> None:
     if display is None:
         return
@@ -422,9 +448,20 @@ def _collect_face_samples(
         "Face enrollment",
         "I will snap 5 photos. Change angle a little each time: smile, tilt, crouch or move closer.",
     )
-    print("\nFace enrollment: I will snap 5 photos with a countdown before each.")
-    print("Try different angles, smile, tilt, crouch slightly, and keep your whole face visible.")
-    if not _confirm("Start photo capture?", assume_yes=bool(args.yes)):
+    photo_intro = (
+        "I will snap 5 photos with a countdown before each.\n\n"
+        "Try different angles, smile, tilt, crouch slightly, and keep your whole face visible.\n\n"
+        "Once you accept, the 5 photos will happen one after another."
+    )
+    print(f"\nFace enrollment: {photo_intro}")
+    if not _review_prompt(
+        display,
+        title="Face enrollment",
+        message=photo_intro,
+        accept_label="Start photos",
+        reject_label="Cancel",
+        assume_yes=bool(args.yes),
+    ):
         raise RuntimeError("Photo capture rejected by operator.")
 
     target = max(1, int(args.photos))
@@ -437,6 +474,7 @@ def _collect_face_samples(
         _show(display, f"Photo {sample_number}/{target}", guidance)
         print(f"[photo {sample_number}/{target}] {guidance}")
         _countdown(display, int(args.photo_countdown_sec))
+        _show(display, "Click", f"Photo {sample_number}/{target}")
         sample = _capture_face_sample(
             service=service,
             camera_resource_id=camera_resource_id,
@@ -475,8 +513,6 @@ def _capture_voice_sample(
 ) -> dict[str, Any]:
     print(f"[voice] Read: {prompt}")
     _show(display, "Voice enrollment", prompt)
-    if not _confirm("Arm mic for this sentence?", assume_yes=bool(args.yes)):
-        return {"sample_id": sample_id, "accepted": False, "reason": "operator_rejected"}
     _countdown(display, int(args.voice_countdown_sec))
     _show(display, "Mic admission active", prompt)
     capture = _capture_microphone_utterance_raw(
@@ -560,8 +596,20 @@ def _collect_voice_samples(
         "Voice enrollment",
         "Now I need 5 voice recordings. Read each sentence when it appears.",
     )
-    print("\nVoice enrollment: I need 5 short recordings.")
-    if not _confirm("Start voice capture?", assume_yes=bool(args.yes)):
+    voice_intro = (
+        "Now I need 5 voice recordings.\n\n"
+        "Read each sentence shown on the screen after the countdown.\n\n"
+        "Once you accept, the 5 recordings will happen one after another."
+    )
+    print(f"\nVoice enrollment: {voice_intro}")
+    if not _review_prompt(
+        display,
+        title="Voice enrollment",
+        message=voice_intro,
+        accept_label="Start voice",
+        reject_label="Cancel",
+        assume_yes=bool(args.yes),
+    ):
         raise RuntimeError("Voice capture rejected by operator.")
 
     target = max(1, int(args.voice_clips))
@@ -809,8 +857,16 @@ def main() -> int:
             _show(display, "Dry run complete", "No Tailwag writes were made.")
             print("Dry run complete. Re-run with --commit to write references to Tailwag.")
             return 0
-        if not _confirm(
-            "Commit these samples to Tailwag? This creates one new active reference per modality.",
+        save_message = (
+            "The face and voice samples are complete.\n\n"
+            "Accept to save one face reference and one voice reference to Tailwag."
+        )
+        if not _review_prompt(
+            display,
+            title="Save enrollment",
+            message=save_message,
+            accept_label="Save",
+            reject_label="Do not save",
             assume_yes=bool(args.yes),
         ):
             _show(display, "Commit skipped", "No Tailwag writes were made.")

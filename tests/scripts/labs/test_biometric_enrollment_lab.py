@@ -56,6 +56,45 @@ class FakeIdentityMemory:
         }
 
 
+class FakeDisplay:
+    is_configured = True
+
+    def __init__(self, accepted: bool = True) -> None:
+        self.accepted = accepted
+        self.prompts: list[dict] = []
+
+    def review_text_prompt(self, **kwargs):
+        self.prompts.append(kwargs)
+        return {
+            "available": True,
+            "accepted": self.accepted,
+            "status": "accepted" if self.accepted else "rejected",
+        }
+
+
+def test_review_prompt_uses_configured_display() -> None:
+    display = FakeDisplay(accepted=True)
+
+    accepted = lab._review_prompt(
+        display,
+        title="Face enrollment",
+        message="I will snap 5 photos.",
+        accept_label="Start photos",
+        reject_label="Cancel",
+    )
+
+    assert accepted is True
+    assert display.prompts == [
+        {
+            "title": "Face enrollment",
+            "message": "I will snap 5 photos.",
+            "accept_label": "Start photos",
+            "reject_label": "Cancel",
+            "timeout_sec": 120.0,
+        }
+    ]
+
+
 def test_commit_modality_enrolls_once_then_observes_remaining_face_samples() -> None:
     fake = FakeIdentityMemory()
     embeddings = [np.asarray([1.0, float(index)], dtype=np.float32) for index in range(5)]

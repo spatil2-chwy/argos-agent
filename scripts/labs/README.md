@@ -76,11 +76,11 @@ poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-cod
 poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3 --commit
 ```
 
-This guided lab uses the interaction display for instructions, countdowns, and
-recording state, while the operator confirms each phase in the terminal. It is
-dry-run by default. With `--commit`, the first accepted face and voice embedding
-creates a Tailwag reference, and the next accepted samples update that same
-reference toward Tailwag's target sample count.
+This guided lab uses the interaction display for phase accept/reject prompts,
+instructions, countdowns, and recording state. It is dry-run by default. With
+`--commit`, the first accepted face and voice embedding creates a Tailwag
+reference, and the next accepted samples update that same reference toward
+Tailwag's target sample count.
 
 ## Structured perception labs + eval
 
