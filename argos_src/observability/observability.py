@@ -59,6 +59,11 @@ class LatencyLogger:
         return value not in {"0", "false", "no"}
 
     def emit(self, **fields: Any) -> None:
+        console_omit_fields = {
+            str(field)
+            for field in fields.pop("_console_omit_fields", ()) or ()
+            if field is not None
+        }
         row: Dict[str, Any] = {}
         row.update(get_request_context())
         row.update({k: v for k, v in fields.items() if v is not None})
@@ -68,13 +73,27 @@ class LatencyLogger:
             row.pop(internal, None)
 
         preferred = ["component", "event", "metric", "duration_s", "tool", "req_id"]
-        parts = [f"ts={_now_ts()}"]
-        for key in preferred:
-            if key in row:
-                parts.append(f"{key}={_to_str(row.pop(key))}")
-        for key in sorted(row):
-            parts.append(f"{key}={_to_str(row[key])}")
-        line = " | ".join(parts)
+
+        timestamp = _now_ts()
+
+        def _format_line(log_row: Dict[str, Any]) -> str:
+            row_copy = dict(log_row)
+            parts = [f"ts={timestamp}"]
+            for key in preferred:
+                if key in row_copy:
+                    parts.append(f"{key}={_to_str(row_copy.pop(key))}")
+            for key in sorted(row_copy):
+                parts.append(f"{key}={_to_str(row_copy[key])}")
+            return " | ".join(parts)
+
+        line = _format_line(row)
+
+        console_row = row
+        if console_omit_fields:
+            console_row = {
+                key: value for key, value in row.items() if key not in console_omit_fields
+            }
+        console_line = _format_line(console_row)
 
         path = self._log_path()
         with _file_lock:
@@ -83,7 +102,7 @@ class LatencyLogger:
                 f.write(line + "\n")
 
         if self._console_enabled():
-            print(line)
+            print(console_line)
         else:
             self._logger.info(line)
 

@@ -1922,11 +1922,23 @@ class FaceRecognitionService:
             return image.copy() if hasattr(image, "copy") else image
 
     @staticmethod
+    def _display_rgb_image(image: Any) -> Any:
+        if not isinstance(image, np.ndarray):
+            return image
+        if image.ndim != 3 or image.shape[2] < 3:
+            return image
+        rgb = image.copy()
+        rgb[..., :3] = rgb[..., [2, 1, 0]]
+        return np.ascontiguousarray(rgb)
+
+    @staticmethod
     def _enrollment_preview_data_url(image: Any) -> str:
         if image is None:
             return ""
         try:
-            return "data:image/png;base64," + preprocess_image(image)
+            return "data:image/png;base64," + preprocess_image(
+                FaceRecognitionService._display_rgb_image(image)
+            )
         except Exception:
             logger.exception("Failed to encode enrollment preview image")
             return ""
@@ -1936,7 +1948,9 @@ class FaceRecognitionService:
         if image is None:
             return ""
         try:
-            return "data:image/png;base64," + preprocess_image(image)
+            return "data:image/png;base64," + preprocess_image(
+                FaceRecognitionService._display_rgb_image(image)
+            )
         except Exception:
             logger.exception("Failed to encode live camera frame for display")
             return ""

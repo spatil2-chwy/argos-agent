@@ -453,6 +453,9 @@ class AgentStateRuntime:
         with self._turn_lock:
             self._item_id_to_req_id.pop(rendered, None)
             self._history_index().forget(rendered)
+            snapshots = getattr(self, "_history_item_snapshots", None)
+            if snapshots is not None:
+                snapshots.pop(rendered, None)
 
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
         return self._history_index().owner_key(getattr(turn, "owner_id", None))

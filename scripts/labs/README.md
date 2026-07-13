@@ -21,6 +21,7 @@ poetry run python -m scripts.labs.owner_turn_calibration_lab --help
 poetry run python -m scripts.labs.audio_detection_lab --help
 poetry run python -m scripts.labs.enrollment_photo_collection --help
 poetry run python -m scripts.labs.enrollment_audio_collection --help
+poetry run python -m scripts.labs.biometric_enrollment_lab --help
 poetry run python -m scripts.labs.openai_say_lab --help
 poetry run python -m scripts.labs.list_openai_models --help
 poetry run python -m scripts.labs.agent_state_machine_lab --help
@@ -67,6 +68,19 @@ The audio script uses the selected profile's microphone/VAD settings, shows
 `Mic admission active`, `Recording...`, and `Saved audio...` on the interaction
 display when configured, waits for Enter before each clip, and saves both the
 input-rate WAV plus an agent-rate 16 kHz WAV for later experiments.
+
+Live Tailwag biometric enrollment:
+
+```bash
+poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3
+poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3 --commit
+```
+
+This guided lab uses the interaction display for instructions, countdowns, and
+recording state, while the operator confirms each phase in the terminal. It is
+dry-run by default. With `--commit`, the first accepted face and voice embedding
+creates a Tailwag reference, and the next accepted samples update that same
+reference toward Tailwag's target sample count.
 
 ## Structured perception labs + eval
 

@@ -70,15 +70,26 @@ def test_enrollment_display_accept_commits_person():
     assert display.reviews[0]["image_url"].startswith("data:image/png;base64,")
 
 
-def test_enrollment_preview_data_url_preserves_rgb_channel_order():
+def test_enrollment_preview_data_url_converts_internal_bgr_to_rgb():
     image = np.zeros((1, 1, 3), dtype=np.uint8)
-    image[0, 0] = [255, 0, 0]
+    image[0, 0] = [0, 0, 255]
 
     data_url = FaceRecognitionService._enrollment_preview_data_url(image)
     encoded = data_url.removeprefix("data:image/png;base64,")
     decoded = Image.open(BytesIO(base64.b64decode(encoded)))
 
     assert decoded.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_live_frame_data_url_converts_internal_bgr_to_rgb():
+    image = np.zeros((1, 1, 3), dtype=np.uint8)
+    image[0, 0] = [255, 0, 0]
+
+    data_url = FaceRecognitionService._live_frame_data_url(image)
+    encoded = data_url.removeprefix("data:image/png;base64,")
+    decoded = Image.open(BytesIO(base64.b64decode(encoded)))
+
+    assert decoded.getpixel((0, 0)) == (0, 0, 255)
 
 
 def test_enrollment_display_reject_does_not_commit():

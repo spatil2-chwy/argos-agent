@@ -127,12 +127,18 @@ face-resolved owners may have `0.000` audio confidence while still being validly
 resolved from face context.
 
 `response_create` rows also carry an operator prompt snapshot for the dashboard.
-The full `response.create.instructions` string and dynamic context block are
-logged as base64 fields so markdown tables, pipes, and newlines do not corrupt
-the pipe-separated latency log. The dashboard decodes these into each exchange's
-diagnostics panel. History content remains owned by the live Realtime session,
-so the snapshot exposes the owner-scoped history key plus known history item
-counts and item ids rather than reconstructing server-side conversation text.
+The full `response.create.instructions` string, dynamic context block, and a
+bounded conversation-history snapshot are logged as base64 fields so markdown
+tables, pipes, and newlines do not corrupt the pipe-separated latency log. The
+stdout mirror omits these base64 prompt payloads so live terminal logs stay
+readable. The dashboard decodes the file fields into each exchange's
+diagnostics panel.
+
+History itself remains owned by the live Realtime session. The dashboard
+history snapshot mirrors the runtime's known item order at `response_create`
+time, including roles and locally known text/transcripts for the latest items.
+Audio-only, image-only, or server-owned content that is not available locally is
+labelled as such rather than reconstructed.
 
 Adaptive biometric update attempts emit `component=identity_memory` with
 `event=adaptive_biometric_update`. When the event is associated with a turn, the

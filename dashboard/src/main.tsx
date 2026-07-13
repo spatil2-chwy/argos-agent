@@ -111,10 +111,12 @@ type ModelPrompt = {
   prompt?: string;
   dynamic_context?: string;
   delivery_instructions?: string;
+  history_snapshot?: string;
   prompt_chars?: number | null;
   static_prompt_chars?: number | null;
   dynamic_context_chars?: number | null;
   delivery_instructions_chars?: number | null;
+  history_snapshot_chars?: number | null;
   history_owner_key?: string | null;
   history_item_count?: number | null;
   turn_history_item_count?: number | null;
@@ -594,12 +596,14 @@ function ModelPromptList({ prompts }: { prompts: ModelPrompt[] }) {
               ["prompt_chars", prompt.prompt_chars],
               ["static_prompt_chars", prompt.static_prompt_chars],
               ["dynamic_context_chars", prompt.dynamic_context_chars],
+              ["history_snapshot_chars", prompt.history_snapshot_chars],
               ["history_owner", prompt.history_owner_key],
               ["history_items", prompt.history_item_count],
               ["turn_history_items", prompt.turn_history_item_count]
             ]}
           />
           <TextBlock label="dynamic context" text={prompt.dynamic_context} />
+          <TextBlock label="conversation history" text={prompt.history_snapshot} />
           <TextBlock label="delivery" text={prompt.delivery_instructions} />
           <TextBlock label="full prompt" text={prompt.prompt} collapsed />
         </details>

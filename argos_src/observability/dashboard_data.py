@@ -336,7 +336,8 @@ def _model_prompt_from_response_create(
     prompt = _decode_b64_text(row.get("model_prompt_b64"))
     dynamic_context = _decode_b64_text(row.get("model_dynamic_context_b64"))
     delivery_instructions = _decode_b64_text(row.get("model_delivery_instructions_b64"))
-    if not prompt and not dynamic_context and not delivery_instructions:
+    history_snapshot = _decode_b64_text(row.get("model_history_snapshot_b64"))
+    if not prompt and not dynamic_context and not delivery_instructions and not history_snapshot:
         return None
     return {
         "request_index": request_index,
@@ -345,10 +346,12 @@ def _model_prompt_from_response_create(
         "prompt": prompt,
         "dynamic_context": dynamic_context,
         "delivery_instructions": delivery_instructions,
+        "history_snapshot": history_snapshot,
         "prompt_chars": _int(row, "model_prompt_chars"),
         "static_prompt_chars": _int(row, "model_static_prompt_chars"),
         "dynamic_context_chars": _int(row, "model_dynamic_context_chars"),
         "delivery_instructions_chars": _int(row, "model_delivery_instructions_chars"),
+        "history_snapshot_chars": _int(row, "model_history_snapshot_chars"),
         "history_owner_key": row.get("model_history_owner_key", ""),
         "history_item_count": _int(row, "model_history_item_count"),
         "turn_history_item_count": _int(row, "model_turn_history_item_count"),

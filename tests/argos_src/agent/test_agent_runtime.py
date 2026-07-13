@@ -551,6 +551,7 @@ def _make_agent():
     agent._history_item_order = deque()
     agent._known_history_item_ids = set()
     agent._history_item_owner_req_id = {}
+    agent._history_item_snapshots = {}
     agent._ignored_voice_commands = deque()
     agent._latency = _FakeLatency()
     agent._tool_latency = _FakeLatency()
@@ -1887,11 +1888,56 @@ def test_response_request_starts_with_base_prompt_before_dynamic_context():
     assert instructions.index("STATIC RULES") < instructions.index("[CURRENT TIME]")
 
 
+def test_conversation_item_created_records_history_snapshot():
+    agent = _make_agent()
+    turn = _make_turn("rt-history-snapshot")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._queue_pending_local_created_item(turn.req_id, "message", "system")
+
+    agent._handle_conversation_item_created(
+        {
+            "type": "conversation.item.created",
+            "item": {
+                "id": "sys-item-1",
+                "type": "message",
+                "role": "system",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "[INTERNAL EVENT]\nBattery is low.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert list(agent._history_item_order) == ["sys-item-1"]
+    assert turn.history_item_ids == {"sys-item-1"}
+    assert agent._history_item_snapshots["sys-item-1"] == {
+        "type": "message",
+        "role": "system",
+        "status": "completed",
+        "text": "[INTERNAL EVENT]\nBattery is low.",
+    }
+
+
 def test_response_create_logs_model_prompt_snapshot():
     agent = _make_agent()
     agent.base_system_prompt = "STATIC RULES"
     agent._current_office_location = "BOS3"
     agent._history_item_order.extend(["prior-user-item", "current-user-item"])
+    agent._history_item_snapshots["prior-user-item"] = {
+        "type": "message",
+        "role": "user",
+        "status": "transcribed",
+        "text": "Where are you right now?",
+    }
+    agent._history_item_snapshots["current-user-item"] = {
+        "type": "message",
+        "role": "user",
+        "text": "[audio input]",
+    }
     turn = _make_turn("rt-prompt-log")
     turn.history_item_ids.add("current-user-item")
 
@@ -1905,12 +1951,23 @@ def test_response_create_logs_model_prompt_snapshot():
     logged_dynamic = base64.b64decode(
         response_log["model_dynamic_context_b64"]
     ).decode("utf-8")
+    logged_history = base64.b64decode(
+        response_log["model_history_snapshot_b64"]
+    ).decode("utf-8")
     assert logged_prompt == sent_request["instructions"]
     assert logged_prompt.startswith("STATIC RULES\n\n")
     assert "[CURRENT OFFICE LOCATION] BOS3" in logged_dynamic
+    assert "1. user type=message item_id=prior-user-item status=transcribed" in logged_history
+    assert "Where are you right now?" in logged_history
+    assert "2. user type=message item_id=current-user-item" in logged_history
+    assert "[audio input]" in logged_history
+    assert "model_dynamic_context_b64" in response_log["_console_omit_fields"]
+    assert "model_history_snapshot_b64" in response_log["_console_omit_fields"]
+    assert "model_prompt_b64" in response_log["_console_omit_fields"]
     assert response_log["model_prompt_chars"] == len(sent_request["instructions"])
     assert response_log["model_static_prompt_chars"] == len("STATIC RULES")
     assert response_log["model_dynamic_context_chars"] == len(logged_dynamic)
+    assert response_log["model_history_snapshot_chars"] == len(logged_history)
     assert response_log["model_history_owner_key"] == "owner:person-1"
     assert response_log["model_history_item_count"] == 2
     assert response_log["model_turn_history_item_count"] == 1
