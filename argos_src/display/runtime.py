@@ -336,7 +336,7 @@ class DisplayRuntime:
         return self.review_face_capture(
             image_url=image_url,
             request_id=request_id or f"text-prompt-{uuid4().hex[:12]}",
-            title=title,
+            title="",
             accept_label=accept_label,
             reject_label=reject_label,
             timeout_sec=timeout_sec,
@@ -370,8 +370,8 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
     image = Image.new("RGB", (width, height), color=(14, 14, 18))
     draw = ImageDraw.Draw(image)
     try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 56)
-        body_font = ImageFont.truetype("DejaVuSans.ttf", 36)
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 124)
+        body_font = ImageFont.truetype("DejaVuSans.ttf", 100)
     except Exception:
         title_font = ImageFont.load_default()
         body_font = ImageFont.load_default()
@@ -379,7 +379,7 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
     y = margin
     rendered_title = str(title or "Confirm").strip() or "Confirm"
     draw.text((margin, y), rendered_title, fill=(255, 255, 255), font=title_font)
-    y += 64
+    y += 150
 
     rendered_message = str(message or "").strip()
     lines: list[str] = []
@@ -392,7 +392,7 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
         current = ""
         for word in words:
             candidate = f"{current} {word}".strip()
-            if len(candidate) > 48 and current:
+            if len(candidate) > 18 and current:
                 lines.append(current)
                 current = word
             else:
@@ -400,9 +400,9 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
         if current:
             lines.append(current)
 
-    for line in lines[:12]:
+    for line in lines[:4]:
         draw.text((margin, y), line, fill=(230, 230, 235), font=body_font)
-        y += 48
+        y += 116
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")

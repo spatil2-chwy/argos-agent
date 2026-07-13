@@ -60,7 +60,7 @@ def test_display_runtime_text_prompt_uses_preview_accept_reject():
     assert client.requests[0]["args"]["type"] == "face_capture_preview"
     assert client.requests[0]["args"]["requestId"] == "prompt-1"
     assert client.requests[0]["args"]["imageUrl"].startswith("data:image/png;base64,")
-    assert client.requests[0]["args"]["title"] == "Face enrollment"
+    assert client.requests[0]["args"]["title"] == ""
     assert client.requests[0]["args"]["acceptLabel"] == "Start photos"
     assert client.requests[0]["args"]["rejectLabel"] == "Cancel"
     assert client.requests[1]["operation"] == OP_DISPLAY_AWAIT_RESPONSE
