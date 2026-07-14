@@ -27,21 +27,11 @@ class TurnContextRuntime:
         try:
             context = compiler.person_context(
                 person_id,
-                fallback_profile_lines=tuple(
-                    getattr(person, "memory_profile_lines", ()) or ()
-                ),
-                fallback_followup_lines=tuple(
-                    getattr(person, "potential_followups", ()) or ()
-                ),
             )
         except Exception:
             host.logger.exception("Failed to compile memory context for %s", person_id)
             return person
-        directory_lines = tuple(getattr(context, "directory_profile_lines", ()) or ())
-        if directory_lines:
-            person.directory_profile_lines = directory_lines
-        person.memory_profile_lines = tuple(context.profile_lines or ())
-        person.potential_followups = tuple(context.followup_lines or ())
+        person.context_markdown = str(getattr(context, "context_markdown", "") or "").strip()
         if context.preferred_language:
             person.preferred_language = context.preferred_language
         return person

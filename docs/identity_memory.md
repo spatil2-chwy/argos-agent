@@ -52,7 +52,7 @@ and `slack_memory`. Face and speaker recognition no longer accept local database
 paths for biometric storage.
 
 The selected manifest must include an HTTP `memory` provider and a `memory`
-resource with `memory.identity`. Argos sends bearer auth from
+resource with `memory.identity` and `memory.person_context`. Argos sends bearer auth from
 `TAILWAG_API_BEARER_TOKEN` when the provider declares:
 
 ```yaml
@@ -60,6 +60,13 @@ auth:
   type: bearer
   token_env: TAILWAG_API_BEARER_TOKEN
 ```
+
+Argos calls Tailwag's `memory.person_context` operation for the resolved turn
+owner. The HTTP transport posts that operation to
+`/argos/providers/memory/resources/memory/request/person_context`. Tailwag
+returns `context_markdown`, and Argos pastes that prompt-ready markdown into the
+`[PERSON SPEAKING TO YOU]` block after any Argos-owned `Directory` lines. Argos
+does not parse or rebuild the Tailwag memory section locally.
 
 ## Runtime Memory Search
 

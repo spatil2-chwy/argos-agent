@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_PLACE_BUILDING = "ARGOS"
 DEFAULT_PLACE_ROOM = "realtime"
 DEFAULT_RETENTION_CLASS = "standard"
-DEFAULT_PREFERRED_LANGUAGE = "English"
 
 
 class TailwagHttpIdentityMemoryClient:
@@ -138,36 +137,29 @@ class TailwagHttpIdentityMemoryClient:
         fallback_followup_lines: tuple[str, ...] = (),
         current_text: str | None = None,
     ) -> PersonMemoryContext:
+        del fallback_profile_lines, fallback_followup_lines
         rendered_person_id = str(person_id or "").strip()
         if not rendered_person_id:
-            return PersonMemoryContext(
-                profile_lines=fallback_profile_lines,
-                followup_lines=fallback_followup_lines,
-            )
+            return PersonMemoryContext()
         try:
-            structured = self._request(
-                "memory.person_context_structured",
+            response = self._request(
+                "memory.person_context",
                 {
                     "person_id": rendered_person_id,
+                    "limit": 10,
+                    "semantic_scope": None,
                     "current_text": current_text,
+                    "memory_limit": 12,
+                    "recent_episode_limit": 5,
                 },
             )
-            payload = _plain(structured)
-            profile_lines = tuple(payload.get("memory_profile_lines") or ())
-            directory_lines = tuple(payload.get("directory_profile_lines") or ())
-            followup_lines = tuple(payload.get("potential_followups") or ())
+            payload = _plain(response)
             return PersonMemoryContext(
-                directory_profile_lines=directory_lines,
-                profile_lines=profile_lines or fallback_profile_lines,
-                followup_lines=followup_lines or fallback_followup_lines,
-                preferred_language=str(payload.get("preferred_language") or DEFAULT_PREFERRED_LANGUAGE),
+                context_markdown=str(payload.get("context_markdown") or "").strip(),
             )
         except Exception:
-            logger.exception("Tailwag structured context unavailable for person_id=%s", rendered_person_id)
-            return PersonMemoryContext(
-                profile_lines=fallback_profile_lines,
-                followup_lines=fallback_followup_lines,
-            )
+            logger.exception("Tailwag person context unavailable for person_id=%s", rendered_person_id)
+            return PersonMemoryContext()
 
     def site_blocks(self, site_code: str, *, current_person_id: str | None = None) -> tuple[str, ...]:
         del site_code, current_person_id

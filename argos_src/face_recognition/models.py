@@ -38,6 +38,7 @@ class PersonContext:
     head_roll_deg: float | None = None
     directory_profile_lines: tuple[str, ...] = ()
     memory_profile_lines: tuple[str, ...] = ()
+    context_markdown: str = ""
     preferred_language: str = ""
     potential_followups: tuple[str, ...] = ()
     visible: bool = True

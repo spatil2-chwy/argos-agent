@@ -59,6 +59,12 @@ class _StrictProviderClient:
             }
         if operation in {"memory.identity_verified_profile", "memory.people_profile"}:
             return None
+        if operation == "memory.person_context":
+            return {
+                "person_id": (args or {}).get("person_id", ""),
+                "context_markdown": "[PERSON MEMORY]\nPreferences:\n- likes robot demos",
+                "generated_at": "2026-07-10T00:00:00+00:00",
+            }
         if operation == "memory.episodes_record":
             return {"episode_id": (args or {}).get("episode", {}).get("id", "")}
         raise AssertionError(f"Unexpected operation: {operation}")
@@ -165,6 +171,30 @@ def test_tailwag_optional_profiles_preserve_http_null_results():
         "memory.identity_verified_profile",
         "memory.people_profile",
     ]
+
+
+def test_tailwag_person_context_uses_markdown_provider_contract():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    context = client.person_context("person-1", current_text="robot demo")
+
+    assert context.context_markdown == "[PERSON MEMORY]\nPreferences:\n- likes robot demos"
+    assert context.profile_lines == ()
+    assert context.followup_lines == ()
+    assert context.preferred_language == "English"
+    assert [name for name, _payload in provider.calls] == ["memory.person_context"]
+    call = provider.calls[0][1]
+    assert call["resource_id"] == "memory"
+    assert call["person_id"] == "person-1"
+    assert call["current_text"] == "robot demo"
+    assert call["limit"] == 10
+    assert call["semantic_scope"] is None
+    assert call["memory_limit"] == 12
+    assert call["recent_episode_limit"] == 5
 
 
 def test_tailwag_record_episode_defaults_to_no_memory_extraction():
