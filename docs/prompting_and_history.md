@@ -84,6 +84,7 @@ Every `response.create` carries fresh instructions from `_build_turn_instruction
 The runtime currently builds these blocks:
 
 - `[PERSON SPEAKING TO YOU]`, only when `owner_id` is resolved
+- `[IDENTITY STATUS]`, only when `owner_id` is not resolved
 - `[OTHER PEOPLE IN VIEW]`, only alongside a resolved owner and only as names/counts
 - `[CURRENT TIME]`
 - `[CURRENT OFFICE LOCATION]`
@@ -104,7 +105,10 @@ turn owner:
 If `owner_id` is not resolved, no person-specific prompt context is emitted,
 even if a recognized person is visible. This avoids addressing a visible
 bystander as the speaker when someone else talks off-camera or speaker
-recognition is inconclusive.
+recognition is inconclusive. Unknown-owner turns also carry `[IDENTITY STATUS]`
+to make the local resolver authoritative: the model must not use a person's name
+or infer identity from voice similarity, face runner-up matches, or session
+memory unless `[PERSON SPEAKING TO YOU]` is present.
 
 Those lines come from the Tailwag identity-memory client. Tailwag writes
 future-facing summaries so the realtime model can use them without seeing the

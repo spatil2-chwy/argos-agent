@@ -2033,6 +2033,11 @@ class RealtimeRobotAgent:
             )
             if people_context:
                 blocks.append(people_context)
+        else:
+            blocks.append(
+                "[IDENTITY STATUS] Current speaker is not safely identified. "
+                "Do not use any person's name or claim to recognize them. "
+            )
         voice_prompt = self._consume_voice_enrollment_prompt_note(turn)
         if voice_prompt:
             blocks.append(voice_prompt)

@@ -3412,6 +3412,8 @@ def test_build_turn_instructions_omits_person_context_without_owner_id():
 
     rendered = agent._build_turn_instructions(turn)
 
+    assert "[IDENTITY STATUS] Current speaker is not safely identified." in rendered
+    assert "Do not use any person's name or claim to recognize them." in rendered
     assert "[PERSON SPEAKING TO YOU]" not in rendered
     assert "[OTHER PEOPLE IN VIEW]" not in rendered
     assert "Alice" not in rendered
