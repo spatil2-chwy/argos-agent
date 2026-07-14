@@ -68,36 +68,22 @@ def format_people_context(
         if owner_person is not None
         else ()
     )
-    directory_profile_lines = tuple(
-        str(item).strip() for item in (directory_items or ()) if str(item).strip()
-    )
+    if isinstance(directory_items, str):
+        directory_profile_lines = (directory_items.strip(),) if directory_items.strip() else ()
+    else:
+        directory_profile_lines = tuple(
+            str(item).strip() for item in (directory_items or ()) if str(item).strip()
+        )
     if directory_profile_lines:
         lines.append(f"  Directory: {'; '.join(directory_profile_lines)}")
 
-    memory_items = (
-        getattr(owner_person, "memory_profile_lines", ())
+    context_markdown = (
+        str(getattr(owner_person, "context_markdown", "") or "").strip()
         if owner_person is not None
-        else ()
+        else ""
     )
-    memory_profile_lines = tuple(
-        str(item).strip() for item in (memory_items or ()) if str(item).strip()
-    )
-    if memory_profile_lines:
-        lines.append(f"  About: {'; '.join(memory_profile_lines)}")
-    else:
-        lines.append(
-            "  About: No durable social memory stored yet. Use this conversation "
-            "to learn one useful social detail."
-        )
-    followups = tuple(
-        getattr(owner_person, "potential_followups", ())
-        if owner_person is not None
-        else ()
-    )
-    if followups:
-        rendered = " ".join(str(item).strip() for item in followups if str(item).strip())
-        if rendered:
-            lines.append(f"  Potential Followups: {rendered}")
+    if context_markdown:
+        lines.append(context_markdown)
 
     snapshot = face_snapshot or {}
     unknown_count = int(snapshot.get("unknown_count", 0) or 0)

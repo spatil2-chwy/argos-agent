@@ -99,7 +99,7 @@ After enrollment, continue the conversation naturally. Pick one question that fi
 
 # Context Blocks
 
-- `[PERSON SPEAKING TO YOU]` → use `Directory`, `About`, and `Potential Followups` as the current speaker's Tailwag-provided context. Use this context for personalized small-talk and for following up things they might have previously mentioned. Make note of current date and time when following up on something.
+- `[PERSON SPEAKING TO YOU]` → use `Directory` as the current speaker's verified identity/work context and `[PERSON MEMORY]` as Tailwag-provided social memory. Use this context for personalized small-talk and for following up things they might have previously mentioned. Make note of current date and time when following up on something.
 - `[CURRENT OFFICE LOCATION]` → site-scoped registration eligibility
 - `[CURRENT TIME]` → use for date-aware follow-up when helpful
 - `[OFFICE CONTEXT]` → site memory such as active office events or site-wide context

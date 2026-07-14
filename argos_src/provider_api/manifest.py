@@ -35,7 +35,7 @@ ALLOWED_CAPABILITY_IDS = frozenset(
         "gripper.command",
         "manipulation.pick_place",
         "memory.identity",
-        "memory.context",
+        "memory.person_context",
         "memory.episodes",
         "memory.semantic_search",
         "memory.biometrics",

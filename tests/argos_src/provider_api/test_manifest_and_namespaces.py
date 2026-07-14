@@ -45,6 +45,8 @@ def test_puffle_manifest_loads_resources_and_capabilities():
     assert memory is not None
     assert memory.kind == "memory"
     assert memory.has_capability("memory.identity")
+    assert memory.has_capability("memory.person_context")
+    assert not memory.has_capability("memory.context")
     assert memory.has_capability("memory.semantic_search")
 
 

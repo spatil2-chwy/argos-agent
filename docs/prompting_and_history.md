@@ -93,13 +93,12 @@ The runtime currently builds these blocks:
 - battery prompt block
 - `[SAVED LOCATIONS]`
 
-`[PERSON SPEAKING TO YOU]` may include memory projections for the resolved
-turn owner:
-
-- `About`: durable social memory such as preferences, boundaries, pets, facts,
-  and capped notes.
-- `Potential Followups`: due, unexpired short-lived check-ins such as trips,
-  visits, recoveries, or deadlines.
+`[PERSON SPEAKING TO YOU]` may include Tailwag's prompt-ready
+`context_markdown` for the resolved turn owner. Argos keeps verified
+identity/work lines under `Directory`, then pastes the Tailwag memory block
+directly. The current Tailwag block is headed `[PERSON MEMORY]` and may include
+subsections such as `Preferences`, `Pets`, `Facts`, `Potential Follow-Ups`, and
+`Recent Episodes`.
 
 If `owner_id` is not resolved, no person-specific prompt context is emitted,
 even if a recognized person is visible. This avoids addressing a visible
