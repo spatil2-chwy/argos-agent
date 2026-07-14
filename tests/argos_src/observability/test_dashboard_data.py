@@ -206,8 +206,8 @@ def test_dashboard_snapshot_groups_consecutive_exchanges_by_owner_segment() -> N
         for segment in segments
     ] == [
         ("owner:person-a", ["ex-1", "ex-2"], "session_start"),
-        ("anonymous", ["ex-3"], "owner_handoff"),
-        ("owner:person-b", ["ex-4"], "owner_handoff"),
+        ("anonymous", ["ex-3"], "inference_scope_selected"),
+        ("owner:person-b", ["ex-4"], "inference_scope_selected"),
     ]
     assert segments[0]["owner_source_counts"] == {"face": 1, "audio": 1}
     assert segments[0]["avg_first_audio_latency_s"] == 0.2
@@ -293,10 +293,14 @@ def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
             f"model_dynamic_context_chars={len(dynamic)} | "
             f"model_history_snapshot_b64={_b64(history)} | "
             f"model_history_snapshot_chars={len(history)} | "
-            "model_history_owner_key=owner:person-1 | model_history_item_count=3 | "
-            "model_turn_history_item_count=1 | "
-            "model_history_item_ids=item-a,item-b,item-c | "
-            "model_turn_history_item_ids=item-c"
+            "model_inference_owner_key=owner:person-1 | "
+            "model_inference_scope_id=owner:person-1 | "
+            "model_selected_history_item_count=2 | "
+            "model_selected_current_turn_item_count=1 | "
+            "model_selected_item_count=3 | "
+            "model_selected_item_ids=item-a,item-b,item-c | "
+            "model_selected_history_item_ids=item-a,item-b | "
+            "model_selected_current_turn_item_ids=item-c"
         )
     ]
 
@@ -317,11 +321,14 @@ def test_dashboard_snapshot_decodes_model_prompt_snapshot() -> None:
             "dynamic_context_chars": len(dynamic),
             "delivery_instructions_chars": None,
             "history_snapshot_chars": len(history),
-            "history_owner_key": "owner:person-1",
-            "history_item_count": 3,
-            "turn_history_item_count": 1,
-            "history_item_ids": "item-a,item-b,item-c",
-            "turn_history_item_ids": "item-c",
+            "inference_owner_key": "owner:person-1",
+            "inference_scope_id": "owner:person-1",
+            "selected_history_item_count": 2,
+            "selected_current_turn_item_count": 1,
+            "selected_item_count": 3,
+            "selected_item_ids": "item-a,item-b,item-c",
+            "selected_history_item_ids": "item-a,item-b",
+            "selected_current_turn_item_ids": "item-c",
         }
     ]
 

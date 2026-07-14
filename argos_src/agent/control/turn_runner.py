@@ -6,6 +6,7 @@ from typing import Any
 
 from argos_src.agent.realtime_turns import (
     QueuedTurn,
+    TURN_PHASE_CANCELED,
     TURN_PHASE_FINALIZED,
     TURN_PHASE_PREPARING_HISTORY,
 )
@@ -59,9 +60,18 @@ class TurnRunner:
                     role="system",
                 )
             host._send_response_create(turn)
-            self.wait_for_settled(turn)
+            settled = self.wait_for_settled(turn)
             if not host._is_turn_terminal(turn):
-                host._complete_turn_success(turn)
+                if settled == "stopped":
+                    reason = str(getattr(host, "_stop_reason", "") or "runtime_stopped")
+                    host._terminate_turn(
+                        turn,
+                        TURN_PHASE_CANCELED,
+                        reason,
+                        send_cancel=False,
+                    )
+                else:
+                    host._complete_turn_success(turn)
             if turn.phase == TURN_PHASE_FINALIZED:
                 host._maybe_capture_voice_reference(turn)
                 host._maybe_note_preference_turn(turn)
@@ -80,10 +90,12 @@ class TurnRunner:
                 if host._active_turn is turn:
                     host._active_turn = None
 
-    def wait_for_settled(self, turn: QueuedTurn) -> None:
+    def wait_for_settled(self, turn: QueuedTurn) -> str:
         host = self._host
-        while not host._stop_event.is_set():
+        while True:
             if turn.response_finished.wait(timeout=0.1) and turn.playback_finished.wait(timeout=0.1):
-                return
+                return "settled"
             if host._is_turn_terminal(turn):
-                return
+                return "settled"
+            if host._stop_event.is_set():
+                return "stopped"

@@ -1,23 +1,38 @@
 from __future__ import annotations
 
 from collections import deque
-from types import SimpleNamespace
 
-from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.history_store import InferenceHistoryIndex
+from argos_src.agent.control.state_runtime import AgentStateRuntime
 
 
-def test_history_index_registers_once_and_tracks_owner() -> None:
-    index = OwnerScopedHistoryIndex()
+def test_local_history_item_ids_fit_realtime_input_limit() -> None:
+    item_id = AgentStateRuntime._new_local_history_item_id()
 
-    assert index.register("item-1", owner_req_id="rt-1")
+    assert len(item_id) <= 32
+    assert item_id.startswith("ai_")
+
+
+def test_history_index_registers_once_and_tracks_owner_scope() -> None:
+    index = InferenceHistoryIndex()
+
+    assert index.register(
+        "item-1",
+        owner_req_id="rt-1",
+        owner_key="owner:person-1",
+        scope_id="owner:person-1",
+        status="done",
+        permitted_for_inference=True,
+    )
     assert not index.register("item-1", owner_req_id="rt-1")
 
     assert index.snapshot() == ["item-1"]
     assert index.owner_req_id_for("item-1") == "rt-1"
+    assert index.selected_item_ids(scope_id="owner:person-1") == ["item-1"]
 
 
 def test_history_index_forgets_item_from_all_indexes() -> None:
-    index = OwnerScopedHistoryIndex()
+    index = InferenceHistoryIndex()
     index.register("item-1", owner_req_id="rt-1")
     index.register("item-2")
 
@@ -26,10 +41,11 @@ def test_history_index_forgets_item_from_all_indexes() -> None:
     assert index.snapshot() == ["item-2"]
     assert index.owner_req_id_for("item-1") == ""
     assert "item-1" not in index.known_item_ids
+    assert "item-1" not in index.items
 
 
 def test_history_index_finds_newest_unbound_item() -> None:
-    index = OwnerScopedHistoryIndex()
+    index = InferenceHistoryIndex()
     index.register("old-owned", owner_req_id="rt-old")
     index.register("bound-but-unowned")
     index.register("new-unbound")
@@ -43,10 +59,12 @@ def test_history_index_uses_supplied_runtime_containers() -> None:
     item_order = deque(["existing"])
     known_item_ids = {"existing"}
     item_owner_req_id = {"existing": "rt-existing"}
-    index = OwnerScopedHistoryIndex(
+    items = {}
+    index = InferenceHistoryIndex(
         item_order=item_order,
         known_item_ids=known_item_ids,
         item_owner_req_id=item_owner_req_id,
+        items=items,
     )
 
     index.register("next", owner_req_id="rt-next")
@@ -54,44 +72,57 @@ def test_history_index_uses_supplied_runtime_containers() -> None:
     assert item_order is index.item_order
     assert known_item_ids is index.known_item_ids
     assert item_owner_req_id is index.item_owner_req_id
+    assert items is index.items
     assert list(item_order) == ["existing", "next"]
 
 
-def test_history_index_plans_protected_items_and_delete_candidates() -> None:
-    index = OwnerScopedHistoryIndex()
-    index.register("old-user", owner_req_id="old")
-    index.register("active-function", owner_req_id="active")
-    index.register("current-audio")
-    active_turn = SimpleNamespace(
-        history_item_ids=set(),
-        user_item_id="",
-        assistant_item_id="",
-        assistant_item_ids=set(),
-        function_call_item_ids={"active-function"},
-        finalized=False,
-        kind="audio",
+def test_history_index_selects_only_done_permitted_items_in_scope() -> None:
+    index = InferenceHistoryIndex()
+    index.register(
+        "owner-a-user",
+        scope_id="owner:A",
+        status="done",
+        permitted_for_inference=True,
     )
-    current_turn = SimpleNamespace(
-        history_item_ids=set(),
-        user_item_id="",
-        assistant_item_id="",
-        assistant_item_ids=set(),
-        function_call_item_ids=set(),
-        finalized=False,
-        kind="audio",
+    index.register(
+        "owner-b-user",
+        scope_id="owner:B",
+        status="done",
+        permitted_for_inference=True,
     )
-
-    protected = index.protected_item_ids(
-        turns=[active_turn],
-        is_terminal=lambda turn: bool(getattr(turn, "finalized", False)),
-        current_turn=current_turn,
-        bound_item_ids={},
+    index.register(
+        "owner-a-draft",
+        scope_id="owner:A",
+        status="in_progress",
+        permitted_for_inference=True,
+    )
+    index.register(
+        "owner-a-quarantined",
+        scope_id="owner:A",
+        status="done",
+        permitted_for_inference=False,
     )
 
-    assert protected == {"active-function", "current-audio"}
-    assert index.delete_candidates(protected_item_ids=protected) == ["old-user"]
+    assert index.selected_item_ids(scope_id="owner:A") == ["owner-a-user"]
+
+
+def test_history_index_input_entries_prefer_local_raw_items() -> None:
+    index = InferenceHistoryIndex()
+    raw_item = {
+        "id": "local-1",
+        "type": "message",
+        "role": "system",
+        "content": [{"type": "input_text", "text": "hello"}],
+    }
+    index.register("local-1", input_item=raw_item)
+    index.register("server-1")
+
+    assert index.input_entries_for(["local-1", "server-1"]) == [
+        raw_item,
+        {"type": "item_reference", "id": "server-1"},
+    ]
 
 
 def test_history_index_owner_key_uses_anonymous_for_unresolved_owner() -> None:
-    assert OwnerScopedHistoryIndex.owner_key("person-1") == "owner:person-1"
-    assert OwnerScopedHistoryIndex.owner_key(None) == "anonymous"
+    assert InferenceHistoryIndex.owner_key("person-1") == "owner:person-1"
+    assert InferenceHistoryIndex.owner_key(None) == "anonymous"

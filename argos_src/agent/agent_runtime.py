@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 import queue
 from collections import deque
@@ -25,7 +26,9 @@ from argos_src.agent.control.audio_runtime import (
     AudioRuntime,
     VAD_SAMPLE_RATE,
 )
-from argos_src.agent.control.state_runtime import AgentStateRuntime
+from argos_src.agent.control.state_runtime import (
+    AgentStateRuntime,
+)
 from argos_src.agent.control.server_event_runtime import ServerEventRuntime
 from argos_src.agent.realtime_turns import (
     NO_AUDIO_RESPONSE_RETRY_LIMIT,
@@ -46,7 +49,7 @@ from argos_src.agent.realtime_turns import (
     PlaybackBuffer,
     QueuedTurn,
 )
-from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.history_store import InferenceHistoryIndex
 from argos_src.agent.control.event_adapter import RealtimeEventAdapter
 from argos_src.agent.control.observers import safe_transition
 from argos_src.agent.control.playback_runtime import PlaybackRuntime
@@ -105,6 +108,12 @@ __all__ = [
 
 PREFERENCE_IDLE_FLUSH_DELAY_SEC = 60.0
 HISTORY_SNAPSHOT_ITEM_TEXT_LIMIT = 3000
+CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC = float(
+    os.environ.get("ARGOS_CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC", "1.0")
+)
+INFERENCE_HISTORY_MAX_ITEMS = int(
+    os.environ.get("ARGOS_INFERENCE_HISTORY_MAX_ITEMS", "40")
+)
 
 
 def _log_text_b64(value: str) -> str:
@@ -200,6 +209,18 @@ def _safe_float(value: Any, *, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _person_attr(person: Any, *names: str) -> str:
+    for name in names:
+        if isinstance(person, dict):
+            value = person.get(name)
+        else:
+            value = getattr(person, name, None)
+        rendered = str(value or "").strip()
+        if rendered:
+            return rendered
+    return ""
 
 
 class RealtimeRobotAgent:
@@ -308,6 +329,7 @@ class RealtimeRobotAgent:
         self._server_event_runtime = ServerEventRuntime(self)
 
         self._stop_event = threading.Event()
+        self._stop_reason = ""
         self._audio_send_queue: queue.Queue[bytes] = queue.Queue()
         self._turn_queue: queue.Queue[QueuedTurn] = queue.Queue()
         self._tool_queue: queue.Queue[PendingToolCall] = queue.Queue()
@@ -375,13 +397,19 @@ class RealtimeRobotAgent:
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
+        self._history_items: dict[str, Any] = {}
         self._history_item_snapshots: dict[str, dict[str, str]] = {}
-        self._history_index_store = OwnerScopedHistoryIndex(
+        self._history_index_store = InferenceHistoryIndex(
             item_order=self._history_item_order,
             known_item_ids=self._known_history_item_ids,
             item_owner_req_id=self._history_item_owner_req_id,
+            items=self._history_items,
         )
-        self._active_history_owner_key: str = ""
+        self._active_inference_owner_key: str = ""
+        self._active_inference_scope_id: str = ""
+        self._pending_anonymous_inference_scope_id: str = ""
+        self._anonymous_inference_patch_index = 0
+        self._known_owner_names_by_owner_id: dict[str, set[str]] = {}
         self._playback_req_id: str = ""
         self._playback_stream_id: str = ""
         self._playback_item_id: str = ""
@@ -596,7 +624,7 @@ class RealtimeRobotAgent:
     def _response_bindings(self) -> PendingResponseBindingStore:
         return self._state_controller()._response_bindings()
 
-    def _history_index(self) -> OwnerScopedHistoryIndex:
+    def _history_index(self) -> InferenceHistoryIndex:
         return self._state_controller()._history_index()
 
     def _bind_response_id(self, turn: QueuedTurn, response_id: str) -> None:
@@ -664,10 +692,25 @@ class RealtimeRobotAgent:
     def _conversation_item_looks_like_audio_input(self, item: dict[str, Any]) -> bool:
         return self._state_controller()._conversation_item_looks_like_audio_input(item)
 
-    def _register_history_item(self, item_id: str, *, owner_req_id: str = "") -> None:
+    def _register_history_item(
+        self,
+        item_id: str,
+        *,
+        owner_req_id: str = "",
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+        permitted_for_inference: bool | None = None,
+        input_item: dict[str, Any] | None = None,
+    ) -> None:
         self._state_controller()._register_history_item(
             item_id,
             owner_req_id=owner_req_id,
+            item_type=item_type,
+            role=role,
+            status=status,
+            permitted_for_inference=permitted_for_inference,
+            input_item=input_item,
         )
 
     def _record_history_item_snapshot(self, item_id: str, item: dict[str, Any]) -> None:
@@ -714,8 +757,26 @@ class RealtimeRobotAgent:
                 snapshot["status"] = str(status)
             snapshots[rendered] = snapshot
 
-    def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
-        self._state_controller()._register_turn_history_item(turn, item_id)
+    def _register_turn_history_item(
+        self,
+        turn: QueuedTurn,
+        item_id: str,
+        *,
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+        permitted_for_inference: bool | None = None,
+        input_item: dict[str, Any] | None = None,
+    ) -> None:
+        self._state_controller()._register_turn_history_item(
+            turn,
+            item_id,
+            item_type=item_type,
+            role=role,
+            status=status,
+            permitted_for_inference=permitted_for_inference,
+            input_item=input_item,
+        )
 
     def _forget_history_item(self, turn: Optional[QueuedTurn], item_id: str) -> None:
         self._state_controller()._forget_history_item(turn, item_id)
@@ -727,9 +788,6 @@ class RealtimeRobotAgent:
 
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
         return self._state_controller()._history_owner_key_for_turn(turn)
-
-    def _history_protected_item_ids(self, current_turn: Optional[QueuedTurn]) -> set[str]:
-        return self._state_controller()._history_protected_item_ids(current_turn)
 
     def _forget_deleted_history_item(self, item_id: str) -> None:
         self._state_controller()._forget_deleted_history_item(item_id)
@@ -1198,6 +1256,7 @@ class RealtimeRobotAgent:
         if self._stop_event.is_set():
             return
         self._set_session_state(SessionState.SHUTTING_DOWN, trigger="shutdown")
+        self._stop_reason = "shutdown"
         self._stop_event.set()
 
         self._cancel_preference_idle_flush()
@@ -1313,7 +1372,27 @@ class RealtimeRobotAgent:
             meta["turn_kind"] = "internal_text" if bool(meta.get("internal", False)) else "human_text"
         context = self._capture_turn_context()
         resolution = None
-        if not bool(meta.get("internal", False)):
+        if bool(meta.get("internal", False)):
+            internal_owner_id = ""
+            if (
+                str(meta.get("internal_event") or "").strip() == "face"
+                and str(meta.get("face_status") or "").strip() == "recognized"
+            ):
+                internal_owner_id = str(meta.get("person_id") or "").strip()
+            if internal_owner_id:
+                resolution = self._face_owner_resolution(
+                    primary_face_person_id=internal_owner_id,
+                    visible_face_person_ids=(internal_owner_id,),
+                )
+                context = self._capture_turn_context(
+                    primary_face_person_id=internal_owner_id,
+                    audio_speaker_id=resolution.audio_speaker_id,
+                    owner_id=resolution.owner_id,
+                    owner_source=resolution.owner_source,
+                    owner_confidence=resolution.owner_confidence,
+                    speaker_visible=resolution.speaker_visible,
+                )
+        else:
             resolution = self._face_owner_resolution(
                 primary_face_person_id=context.primary_face_person_id,
             )
@@ -1716,6 +1795,12 @@ class RealtimeRobotAgent:
             instructions=instruction_snapshot["instructions"],
             output_modalities=["audio"],
             max_output_tokens=self.realtime_profile.max_output_tokens,
+            input_items=self._response_input_items_for_turn(turn),
+            conversation="auto",
+            metadata={
+                "req_id": turn.req_id,
+                "inference_scope_id": str(getattr(turn, "inference_scope_id", "") or ""),
+            },
         )
 
     def _model_history_snapshot_text(self, history_item_ids: list[str]) -> str:
@@ -1745,9 +1830,10 @@ class RealtimeRobotAgent:
         turn: QueuedTurn,
         instruction_snapshot: dict[str, str],
     ) -> dict[str, Any]:
-        history_item_ids = list(getattr(self, "_history_item_order", ()) or ())
-        turn_history_item_ids = sorted(str(item_id) for item_id in turn.history_item_ids)
-        history_snapshot_text = self._model_history_snapshot_text(history_item_ids)
+        history_item_ids = list(getattr(turn, "selected_inference_history_item_ids", []) or [])
+        turn_history_item_ids = list(getattr(turn, "selected_inference_current_item_ids", []) or [])
+        selected_item_ids = [*history_item_ids, *turn_history_item_ids]
+        history_snapshot_text = self._model_history_snapshot_text(selected_item_ids)
         instructions = instruction_snapshot.get("instructions", "")
         static_instructions = instruction_snapshot.get("static_instructions", "")
         dynamic_instructions = instruction_snapshot.get("dynamic_instructions", "")
@@ -1758,9 +1844,11 @@ class RealtimeRobotAgent:
             "model_static_prompt_chars": len(static_instructions),
             "model_dynamic_context_b64": _log_text_b64(dynamic_instructions),
             "model_dynamic_context_chars": len(dynamic_instructions),
-            "model_history_owner_key": self._history_owner_key_for_turn(turn),
-            "model_history_item_count": len(history_item_ids),
-            "model_turn_history_item_count": len(turn_history_item_ids),
+            "model_inference_owner_key": str(getattr(turn, "inference_owner_key", "") or self._history_owner_key_for_turn(turn)),
+            "model_inference_scope_id": str(getattr(turn, "inference_scope_id", "") or ""),
+            "model_selected_history_item_count": len(history_item_ids),
+            "model_selected_current_turn_item_count": len(turn_history_item_ids),
+            "model_selected_item_count": len(selected_item_ids),
         }
         if history_snapshot_text:
             fields["model_history_snapshot_b64"] = _log_text_b64(history_snapshot_text)
@@ -1770,11 +1858,149 @@ class RealtimeRobotAgent:
                 delivery_instructions
             )
             fields["model_delivery_instructions_chars"] = len(delivery_instructions)
+        if selected_item_ids:
+            fields["model_selected_item_ids"] = ",".join(selected_item_ids[-40:])
         if history_item_ids:
-            fields["model_history_item_ids"] = ",".join(history_item_ids[-20:])
+            fields["model_selected_history_item_ids"] = ",".join(history_item_ids[-20:])
         if turn_history_item_ids:
-            fields["model_turn_history_item_ids"] = ",".join(turn_history_item_ids)
+            fields["model_selected_current_turn_item_ids"] = ",".join(turn_history_item_ids)
         return fields
+
+    def _wait_for_current_audio_item(self, turn: QueuedTurn) -> bool:
+        if turn.kind != "audio" or str(turn.user_item_id or "").strip():
+            return True
+        deadline = time.monotonic() + max(0.0, CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC)
+        while not self._stop_event.is_set() and time.monotonic() < deadline:
+            with self._turn_lock:
+                if str(turn.user_item_id or "").strip():
+                    return True
+            time.sleep(0.01)
+        if str(turn.user_item_id or "").strip():
+            return True
+        self._latency.emit(
+            event="audio_item_bind_timeout",
+            req_id=turn.req_id,
+            timeout_s=CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC,
+            **self._exchange_log_fields(turn),
+        )
+        return False
+
+    def _current_turn_inference_item_ids(self, turn: QueuedTurn) -> list[str]:
+        ordered = list(getattr(self, "_history_item_order", ()) or ())
+        current = set(str(item_id) for item_id in getattr(turn, "history_item_ids", set()) or set())
+        if turn.user_item_id:
+            current.add(str(turn.user_item_id))
+        current.update(str(item_id) for item_id in turn.function_call_item_ids)
+        current.update(str(item_id) for item_id in turn.assistant_item_ids)
+        current.discard("")
+        selected: list[str] = []
+        history_items = getattr(self, "_history_items", {}) or {}
+        for item_id in ordered:
+            if item_id not in current:
+                continue
+            item = history_items.get(item_id)
+            if item is None:
+                if item_id == str(turn.user_item_id or "").strip():
+                    selected.append(item_id)
+                continue
+            if item.status == "done" and item.permitted_for_inference:
+                selected.append(item_id)
+        return selected
+
+    def _response_input_items_for_turn(self, turn: QueuedTurn) -> list[dict[str, Any]]:
+        scope_id = str(getattr(turn, "inference_scope_id", "") or "")
+        with self._turn_lock:
+            history_item_ids = self._history_index().selected_item_ids(
+                scope_id=scope_id,
+                exclude_req_id=turn.req_id,
+            )
+            history_item_ids = [
+                item_id
+                for item_id in history_item_ids
+                if self._is_turn_terminal(
+                    self._turns_by_req_id.get(
+                        self._history_index().owner_req_id_for(item_id)
+                    )
+                )
+            ]
+            if INFERENCE_HISTORY_MAX_ITEMS > 0:
+                history_item_ids = history_item_ids[-INFERENCE_HISTORY_MAX_ITEMS:]
+            current_item_ids = self._current_turn_inference_item_ids(turn)
+            turn.selected_inference_history_item_ids = list(history_item_ids)
+            turn.selected_inference_current_item_ids = list(current_item_ids)
+            selected_item_ids = [*history_item_ids, *current_item_ids]
+            return self._history_index().input_entries_for(selected_item_ids)
+
+    def _remember_owner_name_for_turn(self, turn: QueuedTurn) -> None:
+        owner_id = str(getattr(turn, "owner_id", "") or "").strip()
+        if not owner_id:
+            return
+        names: set[str] = set()
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        face_name = str(metadata.get("face_match_name") or "").strip()
+        if face_name:
+            names.add(face_name)
+        context = getattr(turn, "context_snapshot", None)
+        for person in getattr(context, "persons", []) or []:
+            person_id = _person_attr(person, "person_id", "id")
+            if person_id and person_id != owner_id:
+                continue
+            for value in (
+                _person_attr(person, "display_name", "name", "official_name", "preferred_name"),
+                _person_attr(person, "first_name"),
+            ):
+                if value:
+                    names.add(value)
+        if not names:
+            return
+        known = getattr(self, "_known_owner_names_by_owner_id", None)
+        if known is None:
+            known = {}
+            self._known_owner_names_by_owner_id = known
+        bucket = known.setdefault(owner_id, set())
+        bucket.update(name for name in names if len(name) >= 2)
+
+    def _known_owner_name_values(self) -> set[str]:
+        known = getattr(self, "_known_owner_names_by_owner_id", {}) or {}
+        values: set[str] = set()
+        for names in known.values():
+            values.update(str(name or "").strip() for name in names or ())
+        return {name for name in values if len(name) >= 2}
+
+    def _anonymous_transcript_known_name_hits(self, transcript: str) -> list[str]:
+        rendered = str(transcript or "")
+        hits: list[str] = []
+        for name in sorted(self._known_owner_name_values(), key=len, reverse=True):
+            lowered = str(name or "").strip()
+            if lowered and re.search(rf"\b{re.escape(lowered)}\b", rendered, re.IGNORECASE):
+                hits.append(name)
+        return hits
+
+    def _quarantine_anonymous_history_if_needed(self, turn: QueuedTurn) -> bool:
+        if str(getattr(turn, "inference_owner_key", "") or self._history_owner_key_for_turn(turn)) != "anonymous":
+            return False
+        transcript = str(getattr(turn, "assistant_transcript", "") or "").strip()
+        hits = self._anonymous_transcript_known_name_hits(transcript)
+        if not hits:
+            return False
+        item_ids = list(getattr(turn, "assistant_item_ids", set()) or set())
+        if turn.assistant_item_id:
+            item_ids.append(turn.assistant_item_id)
+        with self._turn_lock:
+            for item_id in {str(item_id) for item_id in item_ids if str(item_id or "").strip()}:
+                self._history_index().update_item(
+                    item_id,
+                    status="done",
+                    permitted_for_inference=False,
+                )
+        self._latency.emit(
+            event="anonymous_history_quarantined",
+            req_id=turn.req_id,
+            quarantined_item_ids=",".join(sorted(set(item_ids))),
+            known_name_hits=",".join(hits[:8]),
+            **self._exchange_log_fields(turn),
+        )
+        return True
 
     def _send_response_create(self, turn: QueuedTurn) -> None:
         if self._is_turn_terminal(turn):
@@ -1782,6 +2008,16 @@ class RealtimeRobotAgent:
         if not self._wait_for_stale_response_slot():
             self._terminate_turn(turn, TURN_PHASE_CANCELED, "stale_response_wait_aborted")
             return
+        if not self._wait_for_current_audio_item(turn):
+            self._terminate_turn(
+                turn,
+                TURN_PHASE_CANCELED,
+                "audio_item_bind_timeout",
+                send_cancel=False,
+            )
+            return
+        instruction_snapshot = self._build_response_instruction_snapshot(turn)
+        response_input_items = self._response_input_items_for_turn(turn)
         turn.response_requested_at = time.time()
         turn.pending_response_requests += 1
         self._set_turn_phase(
@@ -1794,11 +2030,16 @@ class RealtimeRobotAgent:
             ),
         )
         self._queue_pending_response_turn(turn.req_id)
-        instruction_snapshot = self._build_response_instruction_snapshot(turn)
         response_request = realtime_response_payload(
             instructions=instruction_snapshot["instructions"],
             output_modalities=["audio"],
             max_output_tokens=self.realtime_profile.max_output_tokens,
+            input_items=response_input_items,
+            conversation="auto",
+            metadata={
+                "req_id": turn.req_id,
+                "inference_scope_id": str(getattr(turn, "inference_scope_id", "") or ""),
+            },
         )
         self._latency.emit(
             event="response_create",
@@ -1990,6 +2231,13 @@ class RealtimeRobotAgent:
             )
             if people_context:
                 blocks.append(people_context)
+        else:
+            blocks.append(
+                "[IDENTITY STATUS] Current speaker is not safely identified. "
+                "Do not use any person's name, claim to recognize them, or infer identity from "
+                "voice, face, prior session history, tool history, memory, or conversational context. "
+                "Only use a person's name when a current [PERSON SPEAKING TO YOU] block is present. "
+            )
         voice_prompt = self._consume_voice_enrollment_prompt_note(turn)
         if voice_prompt:
             blocks.append(voice_prompt)
@@ -2039,11 +2287,13 @@ class RealtimeRobotAgent:
             except websocket.WebSocketConnectionClosedException:
                 if not self._stop_event.is_set():
                     self.logger.warning("Realtime websocket closed during receive; stopping runtime")
+                    self._stop_reason = "websocket_closed"
                     self._stop_event.set()
                 return
             except Exception:
                 if not self._stop_event.is_set():
                     self.logger.exception("Realtime websocket receive failed")
+                    self._stop_reason = "websocket_receive_failed"
                     self._stop_event.set()
                 return
 
@@ -2069,6 +2319,9 @@ class RealtimeRobotAgent:
 
     def _handle_conversation_item_created(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_conversation_item_created(event)
+
+    def _handle_conversation_item_deleted(self, event: dict[str, Any]) -> None:
+        self._server_event_runtime_controller().handle_conversation_item_deleted(event)
 
     def _handle_input_audio_buffer_committed(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_input_audio_buffer_committed(event)

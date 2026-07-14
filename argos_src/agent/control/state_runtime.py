@@ -6,6 +6,7 @@ from collections import deque
 import os
 import time
 from typing import Any, Optional
+from uuid import uuid4
 
 from argos_src.agent.realtime_turns import (
     RESPONSE_STALL_TIMEOUT_SEC,
@@ -16,13 +17,12 @@ from argos_src.agent.realtime_turns import (
     QueuedTurn,
 )
 from argos_src.agent.control.observers import safe_transition
-from argos_src.agent.control.history_store import OwnerScopedHistoryIndex
+from argos_src.agent.control.history_store import InferenceHistoryIndex
 from argos_src.agent.control.response_lifecycle_runtime import ResponseLifecycleRuntime
 from argos_src.agent.control.transport_runtime import TransportRuntime
 from argos_src.agent.control.turn_context_runtime import TurnContextRuntime
 from argos_src.agent.control.turn_store import PendingResponseBindingStore, ResponseBinding
 from argos_src.agent.control.types import StateAxis, StateTransition
-
 
 class AgentStateRuntime:
     """State/history/transport helper surface for the realtime agent.
@@ -92,24 +92,44 @@ class AgentStateRuntime:
         text: str,
         *,
         role: str,
-    ) -> None:
+    ) -> str:
         rendered = str(text or "").strip()
         if not rendered:
-            return
+            return ""
         rendered_role = str(role or "").strip().lower()
         if rendered_role not in {"user", "system"}:
             raise ValueError(f"Unsupported realtime text message role: {role!r}")
-        self._queue_pending_local_created_item(turn.req_id, "message", rendered_role)
-        self._transport_host()._send_event(
-            {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": rendered_role,
-                    "content": [{"type": "input_text", "text": rendered}],
-                },
-            }
+        item_id = self._new_local_history_item_id()
+        input_item = {
+            "id": item_id,
+            "type": "message",
+            "role": rendered_role,
+            "status": "completed",
+            "content": [{"type": "input_text", "text": rendered}],
+        }
+        self._register_turn_history_item(
+            turn,
+            item_id,
+            item_type="message",
+            role=rendered_role,
+            status="done",
+            permitted_for_inference=True,
+            input_item=input_item,
         )
+        update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+        if callable(update_snapshot):
+            update_snapshot(
+                item_id,
+                text=rendered,
+                item_type="message",
+                role=rendered_role,
+                status="done",
+            )
+        return item_id
+
+    @staticmethod
+    def _new_local_history_item_id() -> str:
+        return f"ai_{uuid4().hex[:29]}"
 
     def _queue_pending_local_created_item(
         self,
@@ -156,6 +176,13 @@ class AgentStateRuntime:
                 self._bind_item_id_to_turn(turn, item_id)
                 if not turn.user_item_id:
                     turn.user_item_id = item_id
+                self._history_index().update_item(
+                    item_id,
+                    item_type="message",
+                    role="user",
+                    status="done",
+                    permitted_for_inference=True,
+                )
                 bound_audio_item = True
                 break
             if not bound_audio_item:
@@ -274,7 +301,7 @@ class AgentStateRuntime:
             self._response_binding_store = store
         return store
 
-    def _history_index(self) -> OwnerScopedHistoryIndex:
+    def _history_index(self) -> InferenceHistoryIndex:
         store = getattr(self, "_history_index_store", None)
         item_order = getattr(self, "_history_item_order", None)
         if item_order is None:
@@ -288,16 +315,22 @@ class AgentStateRuntime:
         if item_owner_req_id is None:
             item_owner_req_id = {}
             self._history_item_owner_req_id = item_owner_req_id
+        inference_items = getattr(self, "_history_items", None)
+        if inference_items is None:
+            inference_items = {}
+            self._history_items = inference_items
         if (
             store is None
             or store.item_order is not item_order
             or store.known_item_ids is not known_item_ids
             or store.item_owner_req_id is not item_owner_req_id
+            or store.items is not inference_items
         ):
-            store = OwnerScopedHistoryIndex(
+            store = InferenceHistoryIndex(
                 item_order=item_order,
                 known_item_ids=known_item_ids,
                 item_owner_req_id=item_owner_req_id,
+                items=inference_items,
             )
             self._history_index_store = store
         return store
@@ -424,19 +457,65 @@ class AgentStateRuntime:
                 return True
         return False
 
-    def _register_history_item(self, item_id: str, *, owner_req_id: str = "") -> None:
+    def _register_history_item(
+        self,
+        item_id: str,
+        *,
+        owner_req_id: str = "",
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+        permitted_for_inference: bool | None = None,
+        input_item: dict[str, Any] | None = None,
+    ) -> None:
         rendered = str(item_id or "").strip()
         if not rendered:
             return
+        owner_key = ""
+        scope_id = ""
+        if owner_req_id:
+            with self._turn_lock:
+                turn = self._turns_by_req_id.get(owner_req_id)
+            if turn is not None:
+                owner_key = self._history_owner_key_for_turn(turn)
+                scope_id = self._ensure_inference_scope_for_turn(turn)
         with self._turn_lock:
-            self._history_index().register(rendered, owner_req_id=owner_req_id)
+            self._history_index().register(
+                rendered,
+                owner_req_id=owner_req_id,
+                owner_key=owner_key,
+                scope_id=scope_id,
+                item_type=item_type,
+                role=role,
+                status=status,
+                permitted_for_inference=permitted_for_inference,
+                input_item=input_item,
+            )
 
-    def _register_turn_history_item(self, turn: QueuedTurn, item_id: str) -> None:
+    def _register_turn_history_item(
+        self,
+        turn: QueuedTurn,
+        item_id: str,
+        *,
+        item_type: str = "",
+        role: str = "",
+        status: str = "",
+        permitted_for_inference: bool | None = None,
+        input_item: dict[str, Any] | None = None,
+    ) -> None:
         rendered = str(item_id or "").strip()
         if not rendered:
             return
         turn.history_item_ids.add(rendered)
-        self._register_history_item(rendered, owner_req_id=turn.req_id)
+        self._register_history_item(
+            rendered,
+            owner_req_id=turn.req_id,
+            item_type=item_type,
+            role=role,
+            status=status,
+            permitted_for_inference=permitted_for_inference,
+            input_item=input_item,
+        )
 
     def _forget_history_item(self, turn: Optional[QueuedTurn], item_id: str) -> None:
         rendered = str(item_id or "").strip()
@@ -460,17 +539,6 @@ class AgentStateRuntime:
     def _history_owner_key_for_turn(self, turn: QueuedTurn) -> str:
         return self._history_index().owner_key(getattr(turn, "owner_id", None))
 
-    def _history_protected_item_ids(self, current_turn: Optional[QueuedTurn]) -> set[str]:
-        with self._turn_lock:
-            return self._history_index().protected_item_ids(
-                turns=self._turns_by_req_id.values(),
-                is_terminal=self._is_turn_terminal,
-                current_turn=current_turn,
-                pending_audio_item_ids=self._pending_audio_item_ids,
-                playback_item_id=self._playback_item_id,
-                bound_item_ids=self._item_id_to_req_id,
-            )
-
     def _forget_deleted_history_item(self, item_id: str) -> None:
         rendered = str(item_id or "").strip()
         if not rendered:
@@ -483,70 +551,97 @@ class AgentStateRuntime:
             turn = self._turns_by_req_id.get(req_id) if req_id else None
         self._forget_history_item(turn, rendered)
 
-    def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
+    def _ensure_inference_scope_for_turn(self, turn: QueuedTurn) -> str:
+        existing = str(getattr(turn, "inference_scope_id", "") or "").strip()
+        if existing:
+            return existing
+        owner_key = self._history_owner_key_for_turn(turn)
+        active_owner_key = str(getattr(self, "_active_inference_owner_key", "") or "")
+        active_scope_id = str(getattr(self, "_active_inference_scope_id", "") or "")
+        if owner_key != "anonymous":
+            scope_id = owner_key
+            self._pending_anonymous_inference_scope_id = ""
+        elif active_owner_key == "anonymous" and active_scope_id.startswith("anonymous:"):
+            scope_id = active_scope_id
+        elif str(getattr(self, "_pending_anonymous_inference_scope_id", "") or "").startswith(
+            "anonymous:"
+        ):
+            scope_id = str(getattr(self, "_pending_anonymous_inference_scope_id", "") or "")
+        else:
+            patch_index = int(getattr(self, "_anonymous_inference_patch_index", 0) or 0) + 1
+            self._anonymous_inference_patch_index = patch_index
+            scope_id = f"anonymous:{patch_index}"
+            self._pending_anonymous_inference_scope_id = scope_id
+        setattr(turn, "inference_owner_key", owner_key)
+        setattr(turn, "inference_scope_id", scope_id)
+        return scope_id
+
+    def _select_inference_scope_for_turn(self, turn: QueuedTurn) -> None:
         new_owner_key = self._history_owner_key_for_turn(turn)
-        if getattr(turn, "source_is_internal", False):
-            if not getattr(self, "_active_history_owner_key", ""):
-                self._active_history_owner_key = new_owner_key
-            return
-
-        old_owner_key = str(getattr(self, "_active_history_owner_key", "") or "")
-        if old_owner_key == new_owner_key:
-            return
-
-        protected_item_ids = self._history_protected_item_ids(turn)
+        remember_owner = getattr(self, "_remember_owner_name_for_turn", None)
+        if callable(remember_owner):
+            remember_owner(turn)
+        old_owner_key = str(getattr(self, "_active_inference_owner_key", "") or "")
+        old_scope_id = str(getattr(self, "_active_inference_scope_id", "") or "")
+        new_scope_id = self._ensure_inference_scope_for_turn(turn)
+        scope_reused = bool(old_scope_id and old_scope_id == new_scope_id)
         with self._turn_lock:
-            history_snapshot = self._history_index().delete_candidates(
-                protected_item_ids=protected_item_ids
+            selected_item_ids = self._history_index().selected_item_ids(
+                scope_id=new_scope_id,
+                exclude_req_id=turn.req_id,
             )
-
-        deleted_count = 0
-        for item_id in history_snapshot:
-            try:
-                self._transport_host()._send_event(
-                    {"type": "conversation.item.delete", "item_id": item_id}
+            selected_item_ids = [
+                item_id
+                for item_id in selected_item_ids
+                if self._is_turn_terminal(
+                    self._turns_by_req_id.get(
+                        self._history_index().owner_req_id_for(item_id)
+                    )
                 )
-            except Exception:
-                self.logger.exception(
-                    "Failed to delete owner-scoped conversation item_id=%s",
-                    item_id,
-                )
-                continue
-            self._forget_deleted_history_item(item_id)
-            deleted_count += 1
-
-        self._active_history_owner_key = new_owner_key
-        self._last_tool_name = None
-        self._last_tool_summary = None
-        if old_owner_key:
-            latency = getattr(self, "_latency", None)
-            emit = getattr(latency, "emit", None)
-            if callable(emit):
-                log_fields: dict[str, Any] = {}
-                exchange_log_fields = getattr(self, "_exchange_log_fields", None)
-                if callable(exchange_log_fields):
-                    try:
-                        log_fields.update(exchange_log_fields(turn))
-                    except Exception:
-                        log_fields = {}
-                emit(
-                    event="owner_handoff",
-                    req_id=getattr(turn, "req_id", None),
-                    old_owner_key=old_owner_key,
-                    new_owner_key=new_owner_key,
-                    deleted_items=deleted_count,
-                    protected_items=len(protected_item_ids),
-                    history_action="cleared",
-                    **log_fields,
-                )
+            ]
+            total_items = len(self._history_index().snapshot())
+        setattr(turn, "selected_inference_history_item_ids", list(selected_item_ids))
+        setattr(turn, "inference_owner_key", new_owner_key)
+        setattr(turn, "inference_scope_id", new_scope_id)
+        self._active_inference_owner_key = new_owner_key
+        self._active_inference_scope_id = new_scope_id
+        if new_owner_key != "anonymous":
+            self._pending_anonymous_inference_scope_id = ""
+        if old_scope_id != new_scope_id:
+            self._last_tool_name = None
+            self._last_tool_summary = None
+        latency = getattr(self, "_latency", None)
+        emit = getattr(latency, "emit", None)
+        if callable(emit):
+            log_fields: dict[str, Any] = {}
+            exchange_log_fields = getattr(self, "_exchange_log_fields", None)
+            if callable(exchange_log_fields):
+                try:
+                    log_fields.update(exchange_log_fields(turn))
+                except Exception:
+                    log_fields = {}
+            emit(
+                event="inference_scope_selected",
+                req_id=getattr(turn, "req_id", None),
+                old_owner_key=old_owner_key or None,
+                new_owner_key=new_owner_key,
+                old_scope_id=old_scope_id or None,
+                new_scope_id=new_scope_id,
+                scope_kind=self._history_index().scope_kind(new_scope_id),
+                scope_reused=scope_reused,
+                selected_item_count=len(selected_item_ids),
+                excluded_item_count=max(0, total_items - len(selected_item_ids)),
+                **log_fields,
+            )
         self.logger.info(
-            "Rotated realtime history old_owner_key=%s new_owner_key=%s "
-            "deleted_items=%s protected_items=%s",
-            old_owner_key or "<none>",
-            new_owner_key,
-            deleted_count,
-            len(protected_item_ids),
+            "Selected realtime inference scope old_scope_id=%s new_scope_id=%s selected_items=%s",
+            old_scope_id or "<none>",
+            new_scope_id,
+            len(selected_item_ids),
         )
+
+    def _maybe_rotate_history_for_turn(self, turn: QueuedTurn) -> None:
+        self._select_inference_scope_for_turn(turn)
 
     def _forget_response_id(self, response_id: str) -> None:
         self._response_lifecycle().forget_response_id(response_id)

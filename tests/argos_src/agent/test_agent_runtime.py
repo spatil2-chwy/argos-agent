@@ -551,7 +551,13 @@ def _make_agent():
     agent._history_item_order = deque()
     agent._known_history_item_ids = set()
     agent._history_item_owner_req_id = {}
+    agent._history_items = {}
     agent._history_item_snapshots = {}
+    agent._active_inference_owner_key = ""
+    agent._active_inference_scope_id = ""
+    agent._pending_anonymous_inference_scope_id = ""
+    agent._anonymous_inference_patch_index = 0
+    agent._known_owner_names_by_owner_id = {}
     agent._ignored_voice_commands = deque()
     agent._latency = _FakeLatency()
     agent._tool_latency = _FakeLatency()
@@ -643,6 +649,165 @@ def test_build_turn_instructions_includes_current_office_location_block():
     instructions = agent._build_turn_instructions(_make_turn("rt-office"))
 
     assert "[CURRENT OFFICE LOCATION] BOS1" in instructions
+
+
+def test_unknown_turn_instructions_forbid_identity_inference():
+    agent = _make_agent()
+    turn = _make_turn(
+        "rt-unknown",
+        owner_id=None,
+        primary_face_person_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(owner_id=None),
+    )
+
+    instructions = agent._build_turn_instructions(turn)
+
+    assert "[IDENTITY STATUS]" in instructions
+    assert "Current speaker is not safely identified" in instructions
+    assert "prior session history" in instructions
+    assert "Only use a person's name when a current [PERSON SPEAKING TO YOU] block is present" in instructions
+
+
+def test_anonymous_assistant_name_leak_is_quarantined_from_inference():
+    agent = _make_agent()
+    agent._known_owner_names_by_owner_id = {"person-1": {"Sakshee"}}
+    turn = _make_turn(
+        "rt-anon-leak",
+        owner_id=None,
+        primary_face_person_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(owner_id=None),
+    )
+    turn.inference_owner_key = "anonymous"
+    turn.inference_scope_id = "anonymous:1"
+    turn.assistant_item_id = "asst-leak"
+    turn.assistant_item_ids.add("asst-leak")
+    turn.assistant_transcript = "Hey Sakshee, Puffle remembers that smile!"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(
+        turn,
+        "asst-leak",
+        item_type="message",
+        role="assistant",
+        status="done",
+        permitted_for_inference=True,
+    )
+
+    assert agent._quarantine_anonymous_history_if_needed(turn)
+
+    assert agent._history_items["asst-leak"].permitted_for_inference is False
+    assert any(
+        event.get("event") == "anonymous_history_quarantined"
+        for event in agent._latency.events
+    )
+
+
+def test_quarantined_anonymous_assistant_item_is_excluded_from_tool_followup_input():
+    agent = _make_agent()
+    agent._known_owner_names_by_owner_id = {"person-1": {"Sakshee"}}
+    turn = _make_turn(
+        "rt-anon-tool-leak",
+        owner_id=None,
+        primary_face_person_id=None,
+        context_snapshot=realtime_mod.FrozenTurnContext(owner_id=None),
+    )
+    turn.inference_owner_key = "anonymous"
+    turn.inference_scope_id = "anonymous:1"
+    turn.user_item_id = "anon-user"
+    turn.assistant_item_id = "asst-leak"
+    turn.assistant_item_ids.add("asst-leak")
+    turn.assistant_transcript = "Hey Sakshee, let me check that."
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(
+        turn,
+        "anon-user",
+        item_type="message",
+        role="user",
+        status="done",
+        permitted_for_inference=True,
+    )
+    agent._register_turn_history_item(
+        turn,
+        "asst-leak",
+        item_type="message",
+        role="assistant",
+        status="done",
+        permitted_for_inference=True,
+    )
+    agent._register_turn_history_item(
+        turn,
+        "call-item",
+        item_type="function_call",
+        status="done",
+        permitted_for_inference=True,
+        input_item={
+            "id": "call-item",
+            "type": "function_call",
+            "name": "fake_tool",
+            "call_id": "call-1",
+            "arguments": "{}",
+            "status": "completed",
+        },
+    )
+    turn.function_call_item_ids.add("call-item")
+
+    assert agent._quarantine_anonymous_history_if_needed(turn)
+
+    assert agent._response_input_items_for_turn(turn) == [
+        {"type": "item_reference", "id": "anon-user"},
+        {
+            "id": "call-item",
+            "type": "function_call",
+            "name": "fake_tool",
+            "call_id": "call-1",
+            "arguments": "{}",
+            "status": "completed",
+        },
+    ]
+
+
+def test_response_create_waits_for_audio_item_id_before_sending():
+    agent = _make_agent()
+    turn = _make_turn("rt-audio-wait")
+    turn.inference_scope_id = "owner:person-1"
+    turn.inference_owner_key = "owner:person-1"
+    original_timeout = realtime_mod.CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC
+    realtime_mod.CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC = 0.0
+    try:
+        agent._send_response_create(turn)
+    finally:
+        realtime_mod.CURRENT_AUDIO_ITEM_ACK_TIMEOUT_SEC = original_timeout
+
+    assert not [event for event in agent._sent_events if event.get("type") == "response.create"]
+    assert turn.phase == realtime_mod.TURN_PHASE_CANCELED
+    assert any(event.get("event") == "audio_item_bind_timeout" for event in agent._latency.events)
+
+
+def test_early_audio_commit_item_becomes_future_selectable():
+    agent = _make_agent()
+    agent._handle_input_audio_buffer_committed(
+        {"type": "input_audio_buffer.committed", "item_id": "early-audio"}
+    )
+    first_turn = _make_turn("rt-first")
+    agent._turns_by_req_id[first_turn.req_id] = first_turn
+
+    agent._register_pending_audio_turn(first_turn)
+
+    assert first_turn.user_item_id == "early-audio"
+    item = agent._history_items["early-audio"]
+    assert item.scope_id == "owner:person-1"
+    assert item.status == "done"
+    assert item.permitted_for_inference is True
+    first_turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    first_turn.finalized = True
+
+    second_turn = _make_turn("rt-second")
+    second_turn.inference_scope_id = "owner:person-1"
+    second_turn.inference_owner_key = "owner:person-1"
+    agent._turns_by_req_id[second_turn.req_id] = second_turn
+
+    assert agent._response_input_items_for_turn(second_turn) == [
+        {"type": "item_reference", "id": "early-audio"}
+    ]
 
 
 def test_exchange_log_fields_include_speaker_resolution_scores():
@@ -1187,6 +1352,18 @@ def test_response_done_flushes_complete_audio_transcript_to_display():
         "subtitle",
         {"text": "partial transcript completed", "duration_ms": 5000},
     )
+    assert agent._history_items["asst-final-display"].input_item == {
+        "id": "asst-final-display",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "partial transcript completed",
+            }
+        ],
+    }
 
 
 def test_owner_turn_is_requested_when_audio_turn_commits():
@@ -1640,6 +1817,8 @@ def test_terminated_precreated_turn_stays_as_stale_response_queue_head():
     agent = _make_agent()
     old_turn = _make_turn("rt-old-pending")
     new_turn = _make_turn("rt-new-pending")
+    new_turn.user_item_id = "new-user-item"
+    new_turn.user_item_id = "new-user-item"
     agent._turns_by_req_id[old_turn.req_id] = old_turn
     agent._turns_by_req_id[new_turn.req_id] = new_turn
     agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
@@ -1670,6 +1849,7 @@ def test_expired_stale_pending_response_is_not_bound_to_later_turn(monkeypatch):
     agent = _make_agent()
     old_turn = _make_turn("rt-old-pending")
     new_turn = _make_turn("rt-new-pending")
+    new_turn.user_item_id = "new-user-item"
     agent._turns_by_req_id[old_turn.req_id] = old_turn
     agent._turns_by_req_id[new_turn.req_id] = new_turn
     agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
@@ -1706,6 +1886,7 @@ def test_expired_stale_response_reissues_pending_live_turn(monkeypatch):
     agent = _make_agent()
     old_turn = _make_turn("rt-old-pending")
     new_turn = _make_turn("rt-new-pending")
+    new_turn.user_item_id = "new-user-item"
     agent._turns_by_req_id[old_turn.req_id] = old_turn
     agent._turns_by_req_id[new_turn.req_id] = new_turn
     agent._pending_response_turn_req_ids.append(old_turn.req_id)
@@ -1791,6 +1972,8 @@ def test_canceled_tool_followup_response_stays_as_stale_queue_head():
     old_turn.response_id = "resp-initial-tool-call"
     old_turn.pending_response_requests = 1
     new_turn = _make_turn("rt-new-after-tool")
+    new_turn.user_item_id = "new-user-item"
+    new_turn.user_item_id = "new-user-item"
     agent._turns_by_req_id[old_turn.req_id] = old_turn
     agent._turns_by_req_id[new_turn.req_id] = new_turn
     agent._pending_response_turn_req_ids.extend([old_turn.req_id, new_turn.req_id])
@@ -1830,6 +2013,7 @@ def test_expired_stale_tool_followup_reissues_pending_live_turn(monkeypatch):
     old_turn.response_id = "resp-initial-tool-call"
     old_turn.pending_response_requests = 1
     new_turn = _make_turn("rt-new-after-tool")
+    new_turn.user_item_id = "new-user-item"
     agent._turns_by_req_id[old_turn.req_id] = old_turn
     agent._turns_by_req_id[new_turn.req_id] = new_turn
     agent._pending_response_turn_req_ids.append(old_turn.req_id)
@@ -1922,11 +2106,33 @@ def test_conversation_item_created_records_history_snapshot():
     }
 
 
+def test_conversation_item_deleted_forgets_cleanup_item():
+    agent = _make_agent()
+    turn = _make_turn("rt-history-delete")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(turn, "old-user-item")
+    agent._history_item_snapshots["old-user-item"] = {
+        "type": "message",
+        "role": "user",
+        "text": "hello",
+    }
+    agent._handle_server_event(
+        {
+            "type": "conversation.item.deleted",
+            "item_id": "old-user-item",
+        }
+    )
+
+    assert list(agent._history_item_order) == []
+    assert "old-user-item" not in agent._known_history_item_ids
+    assert "old-user-item" not in turn.history_item_ids
+    assert "old-user-item" not in agent._history_item_snapshots
+
+
 def test_response_create_logs_model_prompt_snapshot():
     agent = _make_agent()
     agent.base_system_prompt = "STATIC RULES"
     agent._current_office_location = "BOS3"
-    agent._history_item_order.extend(["prior-user-item", "current-user-item"])
     agent._history_item_snapshots["prior-user-item"] = {
         "type": "message",
         "role": "user",
@@ -1939,7 +2145,32 @@ def test_response_create_logs_model_prompt_snapshot():
         "text": "[audio input]",
     }
     turn = _make_turn("rt-prompt-log")
-    turn.history_item_ids.add("current-user-item")
+    prior_turn = _make_turn("rt-prior")
+    prior_turn.inference_scope_id = "owner:person-1"
+    prior_turn.inference_owner_key = "owner:person-1"
+    prior_turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+    prior_turn.finalized = True
+    agent._turns_by_req_id[prior_turn.req_id] = prior_turn
+    agent._register_turn_history_item(
+        prior_turn,
+        "prior-user-item",
+        item_type="message",
+        role="user",
+        status="done",
+        permitted_for_inference=True,
+    )
+    turn.inference_scope_id = "owner:person-1"
+    turn.inference_owner_key = "owner:person-1"
+    turn.user_item_id = "current-user-item"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(
+        turn,
+        "current-user-item",
+        item_type="message",
+        role="user",
+        status="done",
+        permitted_for_inference=True,
+    )
 
     agent._send_response_create(turn)
 
@@ -1961,6 +2192,11 @@ def test_response_create_logs_model_prompt_snapshot():
     assert "Where are you right now?" in logged_history
     assert "2. user type=message item_id=current-user-item" in logged_history
     assert "[audio input]" in logged_history
+    assert sent_request["conversation"] == "auto"
+    assert sent_request["input"] == [
+        {"type": "item_reference", "id": "prior-user-item"},
+        {"type": "item_reference", "id": "current-user-item"},
+    ]
     assert "model_dynamic_context_b64" in response_log["_console_omit_fields"]
     assert "model_history_snapshot_b64" in response_log["_console_omit_fields"]
     assert "model_prompt_b64" in response_log["_console_omit_fields"]
@@ -1968,11 +2204,125 @@ def test_response_create_logs_model_prompt_snapshot():
     assert response_log["model_static_prompt_chars"] == len("STATIC RULES")
     assert response_log["model_dynamic_context_chars"] == len(logged_dynamic)
     assert response_log["model_history_snapshot_chars"] == len(logged_history)
-    assert response_log["model_history_owner_key"] == "owner:person-1"
-    assert response_log["model_history_item_count"] == 2
-    assert response_log["model_turn_history_item_count"] == 1
-    assert response_log["model_history_item_ids"] == "prior-user-item,current-user-item"
-    assert response_log["model_turn_history_item_ids"] == "current-user-item"
+    assert response_log["model_inference_owner_key"] == "owner:person-1"
+    assert response_log["model_inference_scope_id"] == "owner:person-1"
+    assert response_log["model_selected_history_item_count"] == 1
+    assert response_log["model_selected_current_turn_item_count"] == 1
+    assert response_log["model_selected_item_ids"] == "prior-user-item,current-user-item"
+    assert response_log["model_selected_current_turn_item_ids"] == "current-user-item"
+
+
+def test_response_input_caps_prior_scope_history_but_keeps_current_turn_items():
+    agent = _make_agent()
+    original_limit = realtime_mod.INFERENCE_HISTORY_MAX_ITEMS
+    realtime_mod.INFERENCE_HISTORY_MAX_ITEMS = 2
+    try:
+        for index in range(3):
+            prior_turn = _make_turn(f"rt-prior-{index}")
+            prior_turn.inference_scope_id = "owner:person-1"
+            prior_turn.inference_owner_key = "owner:person-1"
+            prior_turn.phase = realtime_mod.TURN_PHASE_FINALIZED
+            prior_turn.finalized = True
+            agent._turns_by_req_id[prior_turn.req_id] = prior_turn
+            agent._register_turn_history_item(
+                prior_turn,
+                f"prior-{index}",
+                item_type="message",
+                role="user",
+                status="done",
+                permitted_for_inference=True,
+            )
+        turn = _make_turn("rt-current")
+        turn.inference_scope_id = "owner:person-1"
+        turn.inference_owner_key = "owner:person-1"
+        turn.user_item_id = "current-user"
+        agent._turns_by_req_id[turn.req_id] = turn
+        agent._register_turn_history_item(
+            turn,
+            "current-user",
+            item_type="message",
+            role="user",
+            status="done",
+            permitted_for_inference=True,
+        )
+
+        inputs = agent._response_input_items_for_turn(turn)
+    finally:
+        realtime_mod.INFERENCE_HISTORY_MAX_ITEMS = original_limit
+
+    assert inputs == [
+        {"type": "item_reference", "id": "prior-1"},
+        {"type": "item_reference", "id": "prior-2"},
+        {"type": "item_reference", "id": "current-user"},
+    ]
+    assert turn.selected_inference_history_item_ids == ["prior-1", "prior-2"]
+    assert turn.selected_inference_current_item_ids == ["current-user"]
+
+
+def test_tool_followup_response_input_includes_current_call_chain_in_order():
+    agent = _make_agent()
+    turn = _make_turn("rt-tool-chain")
+    turn.inference_scope_id = "owner:person-1"
+    turn.inference_owner_key = "owner:person-1"
+    turn.user_item_id = "current-user"
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_turn_history_item(
+        turn,
+        "current-user",
+        item_type="message",
+        role="user",
+        status="done",
+        permitted_for_inference=True,
+    )
+    agent._register_turn_history_item(
+        turn,
+        "call-item",
+        item_type="function_call",
+        status="done",
+        permitted_for_inference=True,
+        input_item={
+            "id": "call-item",
+            "type": "function_call",
+            "name": "fake_tool",
+            "call_id": "call-1",
+            "arguments": "{}",
+            "status": "completed",
+        },
+    )
+    turn.function_call_item_ids.add("call-item")
+    agent._register_turn_history_item(
+        turn,
+        "tool-output",
+        item_type="function_call_output",
+        status="done",
+        permitted_for_inference=True,
+        input_item={
+            "id": "tool-output",
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "{\"success\": true}",
+            "status": "completed",
+        },
+    )
+
+    assert agent._response_input_items_for_turn(turn) == [
+        {"type": "item_reference", "id": "current-user"},
+        {
+            "id": "call-item",
+            "type": "function_call",
+            "name": "fake_tool",
+            "call_id": "call-1",
+            "arguments": "{}",
+            "status": "completed",
+        },
+        {
+            "id": "tool-output",
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": "{\"success\": true}",
+            "status": "completed",
+        },
+    ]
 
 
 def test_playback_watchdog_does_not_fire_while_playback_progress_is_recent():
@@ -2449,6 +2799,27 @@ def test_closed_admission_clears_passive_alert_display():
     assert agent._display_mode == "idle"
 
 
+def test_wakeword_debug_uses_environment_without_callback_error(monkeypatch):
+    agent = _make_agent()
+    messages = []
+    agent.logger = SimpleNamespace(
+        info=lambda *args, **kwargs: messages.append((args, kwargs)),
+        warning=lambda *args, **kwargs: None,
+        exception=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+    )
+    agent._last_wake_debug_log_s = 0.0
+    agent._wake_word = SimpleNamespace(threshold=0.5)
+    monkeypatch.setenv("ARGOS_WAKEWORD_DEBUG", "1")
+
+    agent._log_wakeword_debug(
+        wake_detected=False,
+        wake_output={"open_wake_word": {"predictions": {"hey_puffle": 0.1}}},
+    )
+
+    assert messages
+
+
 def test_wake_word_during_speaking_does_not_interrupt_response():
     import numpy as np
 
@@ -2570,11 +2941,51 @@ def test_internal_text_turn_uses_system_role_message():
 
     agent._run_turn(turn)
 
-    create_event = next(
+    assert not [
         evt for evt in agent._sent_events if evt["type"] == "conversation.item.create"
-    )
-    assert create_event["item"]["role"] == "system"
+    ]
+    item_id = next(iter(turn.history_item_ids))
+    assert agent._history_item_snapshots[item_id]["role"] == "system"
     assert followups == [turn.req_id]
+
+
+def test_internal_recognized_face_event_resolves_owner_context():
+    agent = _make_agent()
+    person = SimpleNamespace(
+        person_id="person-9",
+        name="Alex",
+        interaction_count=1,
+        confidence=0.9,
+        bbox_area=100,
+        timestamp=1.0,
+        memory_profile_lines=(),
+        preferred_language="",
+        potential_followups=(),
+        visible=True,
+    )
+    agent.face_service = _FakeFaceService(
+        persons=[person],
+        snapshot={"recognized_count": 1, "unknown_count": 0},
+    )
+
+    agent.enqueue_internal_event(
+        "FACE_EVENT: recognized person 'Alex' appeared in front of you.",
+        metadata={
+            "internal": True,
+            "internal_event": "face",
+            "face_status": "recognized",
+            "person_id": "person-9",
+            "person_name": "Alex",
+            "req_id": "evt-face-alex",
+        },
+    )
+
+    turn = agent._turn_queue.get_nowait()
+
+    assert turn.source_is_internal is True
+    assert turn.owner_id == "person-9"
+    assert turn.owner_source == "face"
+    assert turn.context_snapshot.owner_id == "person-9"
 
 
 def test_external_text_turn_resolves_single_visible_owner_for_live_chat_memory():
@@ -2913,10 +3324,11 @@ def test_audio_turn_pending_internal_text_uses_system_role_message():
 
     agent._run_turn(turn)
 
-    create_event = next(
+    assert not [
         evt for evt in agent._sent_events if evt["type"] == "conversation.item.create"
-    )
-    assert create_event["item"]["role"] == "system"
+    ]
+    item_id = next(iter(turn.history_item_ids))
+    assert agent._history_item_snapshots[item_id]["role"] == "system"
     assert followups == [turn.req_id]
 
 
@@ -3384,7 +3796,8 @@ def test_build_turn_instructions_omits_person_context_without_owner_id():
 
     rendered = agent._build_turn_instructions(turn)
 
-    assert "[PERSON SPEAKING TO YOU]" not in rendered
+    assert "[IDENTITY STATUS] Current speaker is not safely identified." in rendered
+    assert "Do not use any person's name, claim to recognize them" in rendered
     assert "[OTHER PEOPLE IN VIEW]" not in rendered
     assert "Alice" not in rendered
     assert "likes robotics" not in rendered

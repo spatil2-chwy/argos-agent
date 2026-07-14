@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argos_src.display import DisplayRuntime
+from argos_src.display.runtime import _wrap_display_prompt_text
 from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
     OP_DISPLAY_COMMAND,
@@ -25,6 +26,11 @@ class _Client:
         if operation == OP_DISPLAY_AWAIT_RESPONSE:
             return dict(self.response)
         return {"ok": True}
+
+
+class _MeasuredText:
+    def textbbox(self, xy, text, font=None):
+        return (0, 0, len(str(text)) * 10, 10)
 
 
 def test_display_runtime_review_posts_preview_and_waits_for_response():
@@ -62,10 +68,26 @@ def test_display_runtime_text_prompt_uses_preview_accept_reject():
     assert client.requests[0]["args"]["type"] == "face_capture_preview"
     assert client.requests[0]["args"]["requestId"] == "prompt-1"
     assert client.requests[0]["args"]["imageUrl"].startswith("data:image/png;base64,")
-    assert client.requests[0]["args"]["title"] == "Face enrollment"
+    assert client.requests[0]["args"]["title"] == ""
     assert client.requests[0]["args"]["acceptLabel"] == "Start photos"
     assert client.requests[0]["args"]["rejectLabel"] == "Cancel"
     assert client.requests[1]["operation"] == OP_DISPLAY_AWAIT_RESPONSE
+
+
+def test_display_runtime_text_prompt_wraps_all_instruction_paragraphs():
+    paragraphs = _wrap_display_prompt_text(
+        _MeasuredText(),
+        text=(
+            "I will snap 5 photos with a countdown before each.\n\n"
+            "Change angle a little each time: smile, tilt, crouch, or move closer."
+        ),
+        font=object(),
+        max_width=260,
+    )
+
+    rendered_lines = [line for paragraph in paragraphs for line in paragraph]
+    assert any("I will snap" in line for line in rendered_lines)
+    assert any("Change angle" in line for line in rendered_lines)
 
 
 def test_display_runtime_image_message_preview_posts_and_clears():

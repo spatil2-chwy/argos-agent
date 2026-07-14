@@ -136,8 +136,8 @@ Examples of one item:
 - one function call
 - one function-call output
 
-Realtime history is scoped to the current resolved owner, and earlier
-conversation items are deleted on owner handoff.
+Model-visible history is selected from Argos' local inference scopes, not by
+deleting older server conversation items on owner handoff.
 
 ## Human Audio Turn: Exact Flow
 
@@ -232,12 +232,21 @@ This is the main handoff from speech capture into interaction state.
 `_response_loop()` pulls the turn and `_run_turn()` does:
 
 1. Register the turn as active.
-2. If this were a text turn, create a system message item.
-3. If `pending_internal_text` exists, create a system message item for it.
-4. Send `response.create`.
-5. Wait for both model completion and playback completion.
+2. Select the local inference scope for the resolved owner or anonymous patch.
+3. If this were a text turn, create a local explicit-input system/user item.
+4. If `pending_internal_text` exists, create a local explicit-input system item for it.
+5. Send `response.create` with an explicit allowlist of input items.
+6. Wait for both model completion and playback completion.
 
 Important nuance: for audio turns, the human speech itself is not wrapped in a local `conversation.item.create`. The server creates the audio-backed user item after `input_audio_buffer.commit`.
+
+The runtime no longer uses server-side conversation deletion as the owner
+privacy boundary. It keeps a local inference-history index where known owners
+reuse `owner:<person_id>` scopes and unresolved speakers use contiguous
+`anonymous:<patch_id>` scopes. Before `response.create`, Argos sends only the
+selected scope's completed, permitted items plus the current turn's required
+items. For audio turns, the worker waits briefly for
+`input_audio_buffer.committed` so the current audio item id can be included.
 
 ### Step 8: Server events bind the realtime objects back to the turn
 
@@ -254,7 +263,7 @@ The runtime learns the exact Realtime object ids incrementally:
 The binding rules are:
 
 - audio user items are matched using `_pending_audio_turn_req_ids`
-- locally created text items are matched using `_pending_local_created_items`
+- local explicit-input text items are generated with Argos-owned ids
 - assistant items and function calls are matched using `response_id`
 
 This is the key bookkeeping that keeps transcripts, playback, tool calls, and history ownership aligned even with overlap and interruption.
@@ -301,8 +310,8 @@ bridge/watchdog
   -> debounce / dedup
   -> RealtimeRobotAgent.enqueue_internal_event(...)
   -> QueuedTurn(kind="text", source_is_internal=True)
-  -> conversation.item.create(system input_text)
-  -> response.create
+  -> local explicit-input system item
+  -> response.create(input=[<selected history>, <system item>])
   -> model audio reply
 ```
 
@@ -465,9 +474,10 @@ If the model is finished but speaker playback stops making progress, the runtime
 The runtime keeps context for consecutive turns from the same resolved
 `owner_id`.
 
-When the owner changes, older Realtime conversation items are deleted before
-the new response. Anonymous turns share an `anonymous` history until a known
-owner appears.
+When the owner changes, Argos selects a different local inference scope before
+the new response. Known owners reuse `owner:<person_id>` scopes when they
+return. Anonymous turns share only a contiguous `anonymous:<patch_id>` scope
+until a known owner appears.
 
 ### Audio turns that carry pending internal text are still treated as external turns
 

@@ -197,9 +197,14 @@ def _stage_details(row: dict[str, str]) -> dict[str, Any]:
         "owner_confidence",
         "old_owner_key",
         "new_owner_key",
-        "deleted_items",
-        "protected_items",
-        "history_action",
+        "old_scope_id",
+        "new_scope_id",
+        "scope_kind",
+        "scope_reused",
+        "selected_item_count",
+        "excluded_item_count",
+        "quarantined_item_ids",
+        "known_name_hits",
         "memory_segment_id",
         "memory_person_id",
         "memory_turn_count",
@@ -286,7 +291,11 @@ def _stage_from_row(row: dict[str, str]) -> dict[str, Any] | None:
         "speech_end": ("speech_end", "Speech ended"),
         "audio_commit": ("audio_commit", "Audio committed"),
         "exchange_context": ("identity", "Speaker and owner resolved"),
-        "owner_handoff": ("owner_handoff", "Owner handoff"),
+        "inference_scope_selected": ("inference_scope", "Inference scope selected"),
+        "anonymous_history_quarantined": (
+            "history_quarantined",
+            "Anonymous history quarantined",
+        ),
         "memory_segment_flushed": ("memory_flushed", "Memory segment flushed"),
         "tailwag_episode_recorded": ("tailwag_episode_recorded", "Tailwag episode recorded"),
         "tailwag_episode_failed": ("tailwag_episode_failed", "Tailwag episode failed"),
@@ -352,11 +361,20 @@ def _model_prompt_from_response_create(
         "dynamic_context_chars": _int(row, "model_dynamic_context_chars"),
         "delivery_instructions_chars": _int(row, "model_delivery_instructions_chars"),
         "history_snapshot_chars": _int(row, "model_history_snapshot_chars"),
-        "history_owner_key": row.get("model_history_owner_key", ""),
-        "history_item_count": _int(row, "model_history_item_count"),
-        "turn_history_item_count": _int(row, "model_turn_history_item_count"),
-        "history_item_ids": row.get("model_history_item_ids", ""),
-        "turn_history_item_ids": row.get("model_turn_history_item_ids", ""),
+        "inference_owner_key": row.get("model_inference_owner_key", ""),
+        "inference_scope_id": row.get("model_inference_scope_id", ""),
+        "selected_history_item_count": _int(row, "model_selected_history_item_count"),
+        "selected_current_turn_item_count": _int(
+            row,
+            "model_selected_current_turn_item_count",
+        ),
+        "selected_item_count": _int(row, "model_selected_item_count"),
+        "selected_item_ids": row.get("model_selected_item_ids", ""),
+        "selected_history_item_ids": row.get("model_selected_history_item_ids", ""),
+        "selected_current_turn_item_ids": row.get(
+            "model_selected_current_turn_item_ids",
+            "",
+        ),
     }
 
 
@@ -717,7 +735,11 @@ def _conversation_segments_for_interactions(
                     "total_exchange_cost_usd": None,
                     "handoff_from_owner_key": previous_owner_key,
                     "handoff_to_owner_key": owner_key,
-                    "boundary_reason": "session_start" if not previous_owner_key else "owner_handoff",
+                    "boundary_reason": (
+                        "session_start"
+                        if not previous_owner_key
+                        else "inference_scope_selected"
+                    ),
                     "_latencies": [],
                     "_costs": [],
                 }

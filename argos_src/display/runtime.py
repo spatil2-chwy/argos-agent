@@ -340,7 +340,7 @@ class DisplayRuntime:
         return self.review_face_capture(
             image_url=image_url,
             request_id=request_id or f"text-prompt-{uuid4().hex[:12]}",
-            title=title,
+            title="",
             accept_label=accept_label,
             reject_label=reject_label,
             timeout_sec=timeout_sec,
@@ -370,12 +370,12 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
         raise RuntimeError("Pillow is required to render display text prompts.") from exc
 
     width, height = 1280, 720
-    margin = 72
+    margin = 64
     image = Image.new("RGB", (width, height), color=(14, 14, 18))
     draw = ImageDraw.Draw(image)
     try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 56)
-        body_font = ImageFont.truetype("DejaVuSans.ttf", 36)
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 90)
+        body_font = ImageFont.truetype("DejaVuSans.ttf", 74)
     except Exception:
         title_font = ImageFont.load_default()
         body_font = ImageFont.load_default()
@@ -383,32 +383,59 @@ def _text_prompt_data_url(*, title: str, message: str) -> str:
     y = margin
     rendered_title = str(title or "Confirm").strip() or "Confirm"
     draw.text((margin, y), rendered_title, fill=(255, 255, 255), font=title_font)
-    y += 64
+    title_bbox = draw.textbbox((margin, y), rendered_title, font=title_font)
+    y += max(90, title_bbox[3] - title_bbox[1]) + 36
 
-    rendered_message = str(message or "").strip()
-    lines: list[str] = []
-    for paragraph in rendered_message.splitlines() or [""]:
+    max_text_width = width - (margin * 2)
+    paragraphs = _wrap_display_prompt_text(
+        draw,
+        text=message,
+        font=body_font,
+        max_width=max_text_width,
+    )
+
+    line_height = 80
+    paragraph_gap = 16
+    for paragraph_index, lines in enumerate(paragraphs):
+        if paragraph_index:
+            y += paragraph_gap
+        for line in lines:
+            if y + line_height > height - margin:
+                break
+            draw.text((margin, y), line, fill=(230, 230, 235), font=body_font)
+            y += line_height
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _wrap_display_prompt_text(
+    draw: Any,
+    *,
+    text: str,
+    font: Any,
+    max_width: int,
+) -> list[list[str]]:
+    paragraphs: list[list[str]] = []
+    for paragraph in str(text or "").strip().splitlines():
         paragraph = paragraph.strip()
         if not paragraph:
-            lines.append("")
             continue
         words = paragraph.split()
         current = ""
+        lines: list[str] = []
         for word in words:
             candidate = f"{current} {word}".strip()
-            if len(candidate) > 48 and current:
+            bbox = draw.textbbox((0, 0), candidate, font=font)
+            if bbox[2] - bbox[0] > max_width and current:
                 lines.append(current)
                 current = word
             else:
                 current = candidate
         if current:
             lines.append(current)
-
-    for line in lines[:12]:
-        draw.text((margin, y), line, fill=(230, 230, 235), font=body_font)
-        y += 48
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+        if lines:
+            paragraphs.append(lines)
+    return paragraphs

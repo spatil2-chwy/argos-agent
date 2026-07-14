@@ -24,6 +24,7 @@ if "std_msgs" not in sys.modules:
     sys.modules["std_msgs.msg"] = std_msgs_msg_stub
 
 
+from argos_src.agent.control.history_store import InferenceHistoryIndex
 from argos_src.agent.control.preference_runtime import PreferenceRuntime
 from argos_src.agent.control.state_runtime import AgentStateRuntime
 from argos_src.agent.preference_segments import _PreferenceSegmentCoordinator
@@ -49,7 +50,18 @@ class FakeRuntime(AgentStateRuntime):
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
         self._history_item_owner_req_id: dict[str, str] = {}
-        self._active_history_owner_key = ""
+        self._history_items = {}
+        self._history_index_store = InferenceHistoryIndex(
+            item_order=self._history_item_order,
+            known_item_ids=self._known_history_item_ids,
+            item_owner_req_id=self._history_item_owner_req_id,
+            items=self._history_items,
+        )
+        self._history_item_snapshots: dict[str, dict[str, str]] = {}
+        self._active_inference_owner_key = ""
+        self._active_inference_scope_id = ""
+        self._pending_anonymous_inference_scope_id = ""
+        self._anonymous_inference_patch_index = 0
         self._playback_item_id = ""
         self._last_tool_name = None
         self._last_tool_summary = None
@@ -110,145 +122,126 @@ def make_turn(
     return turn
 
 
-def register_turn_item(runtime: FakeRuntime, turn: QueuedTurn, item_id: str) -> None:
+def register_done_item(runtime: FakeRuntime, turn: QueuedTurn, item_id: str) -> None:
     runtime._turns_by_req_id[turn.req_id] = turn
-    runtime._register_turn_history_item(turn, item_id)
+    runtime._ensure_inference_scope_for_turn(turn)
+    runtime._register_turn_history_item(
+        turn,
+        item_id,
+        item_type="message",
+        role="user",
+        status="done",
+        permitted_for_inference=True,
+    )
 
 
-def deleted_item_ids(runtime: FakeRuntime) -> list[str]:
-    return [
-        event["item_id"]
-        for event in runtime.sent_events
-        if event.get("type") == "conversation.item.delete"
-    ]
+def sent_delete_events(runtime: FakeRuntime) -> list[dict]:
+    return [event for event in runtime.sent_events if event.get("type") == "conversation.item.delete"]
 
 
-def test_same_owner_does_not_delete_history_or_clear_tool_summary() -> None:
-    runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
-    runtime._last_tool_name = "capture_scene"
-    runtime._last_tool_summary = "capture_scene: success"
-    old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-
-    current_turn = make_turn("current", owner_id="A")
-    runtime._turns_by_req_id[current_turn.req_id] = current_turn
-
-    runtime._maybe_rotate_history_for_turn(current_turn)
-
-    assert deleted_item_ids(runtime) == []
-    assert list(runtime._history_item_order) == ["old-user"]
-    assert runtime._last_tool_name == "capture_scene"
-    assert runtime._last_tool_summary == "capture_scene: success"
-
-
-def test_owner_change_deletes_old_items_and_protects_current_audio_item() -> None:
+def test_known_owner_history_is_reused_when_owner_returns() -> None:
     runtime = FakeRuntime()
     runtime._latency = FakeLatency()
-    runtime._active_history_owner_key = "owner:A"
-    runtime._last_tool_name = "navigate_to_location"
-    runtime._last_tool_summary = "navigate_to_location: success"
-    old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-    register_turn_item(runtime, old_turn, "old-assistant")
-    current_turn = make_turn("current", owner_id="B")
-    register_turn_item(runtime, current_turn, "current-audio")
-    current_turn.user_item_id = "current-audio"
+    owner_a_first = make_turn("a-1", owner_id="A", finalized=True)
+    register_done_item(runtime, owner_a_first, "a-user")
+    owner_b = make_turn("b-1", owner_id="B", finalized=True)
+    register_done_item(runtime, owner_b, "b-user")
+    runtime._active_inference_owner_key = "owner:B"
+    runtime._active_inference_scope_id = "owner:B"
 
-    runtime._maybe_rotate_history_for_turn(current_turn)
+    owner_a_return = make_turn("a-2", owner_id="A")
+    runtime._turns_by_req_id[owner_a_return.req_id] = owner_a_return
+    runtime._maybe_rotate_history_for_turn(owner_a_return)
 
-    assert deleted_item_ids(runtime) == ["old-user", "old-assistant"]
-    assert list(runtime._history_item_order) == ["current-audio"]
-    assert "current-audio" in runtime._known_history_item_ids
-    assert runtime._active_history_owner_key == "owner:B"
+    assert owner_a_return.inference_scope_id == "owner:A"
+    assert owner_a_return.selected_inference_history_item_ids == ["a-user"]
+    assert sent_delete_events(runtime) == []
     assert runtime._last_tool_name is None
-    assert runtime._last_tool_summary is None
-    assert runtime._latency.events == [
-        {
-            "event": "owner_handoff",
-            "req_id": "current",
-            "old_owner_key": "owner:A",
-            "new_owner_key": "owner:B",
-            "deleted_items": 2,
-            "protected_items": 1,
-            "history_action": "cleared",
-        }
-    ]
 
 
-def test_owner_change_protects_newest_unbound_audio_item() -> None:
+def test_consecutive_unknown_turns_share_one_anonymous_patch() -> None:
     runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
+    first_unknown = make_turn("anon-1", owner_id=None, finalized=True)
+    register_done_item(runtime, first_unknown, "anon-1-user")
+    runtime._active_inference_owner_key = "anonymous"
+    runtime._active_inference_scope_id = first_unknown.inference_scope_id
+
+    second_unknown = make_turn("anon-2", owner_id=None)
+    runtime._turns_by_req_id[second_unknown.req_id] = second_unknown
+    runtime._maybe_rotate_history_for_turn(second_unknown)
+
+    assert first_unknown.inference_scope_id == "anonymous:1"
+    assert second_unknown.inference_scope_id == "anonymous:1"
+    assert second_unknown.selected_inference_history_item_ids == ["anon-1-user"]
+    assert sent_delete_events(runtime) == []
+
+
+def test_queued_unknown_turns_bound_before_run_share_patch_without_future_leak() -> None:
+    runtime = FakeRuntime()
+    runtime._active_inference_owner_key = "owner:A"
+    runtime._active_inference_scope_id = "owner:A"
+    first_unknown = make_turn("anon-1", owner_id=None)
+    second_unknown = make_turn("anon-2", owner_id=None)
+    register_done_item(runtime, first_unknown, "anon-1-user")
+    register_done_item(runtime, second_unknown, "anon-2-user")
+
+    runtime._maybe_rotate_history_for_turn(first_unknown)
+
+    assert first_unknown.inference_scope_id == "anonymous:1"
+    assert second_unknown.inference_scope_id == "anonymous:1"
+    assert first_unknown.selected_inference_history_item_ids == []
+
+    first_unknown.phase = TURN_PHASE_FINALIZED
+    first_unknown.finalized = True
+    runtime._maybe_rotate_history_for_turn(second_unknown)
+
+    assert second_unknown.inference_scope_id == "anonymous:1"
+    assert second_unknown.selected_inference_history_item_ids == ["anon-1-user"]
+    assert sent_delete_events(runtime) == []
+
+
+def test_separate_unknown_patches_do_not_share_history_across_known_owner() -> None:
+    runtime = FakeRuntime()
+    first_unknown = make_turn("anon-1", owner_id=None, finalized=True)
+    register_done_item(runtime, first_unknown, "anon-1-user")
+    owner_b = make_turn("b-1", owner_id="B", finalized=True)
+    register_done_item(runtime, owner_b, "b-user")
+    runtime._active_inference_owner_key = "owner:B"
+    runtime._active_inference_scope_id = "owner:B"
+
+    second_unknown = make_turn("anon-2", owner_id=None)
+    runtime._turns_by_req_id[second_unknown.req_id] = second_unknown
+    runtime._maybe_rotate_history_for_turn(second_unknown)
+
+    assert first_unknown.inference_scope_id == "anonymous:1"
+    assert second_unknown.inference_scope_id == "anonymous:2"
+    assert second_unknown.selected_inference_history_item_ids == []
+    assert sent_delete_events(runtime) == []
+
+
+def test_internal_same_owner_event_keeps_current_owner_scope() -> None:
+    runtime = FakeRuntime()
     old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-    runtime._register_history_item("current-audio-unbound")
-    current_turn = make_turn("current", owner_id="B")
-    runtime._turns_by_req_id[current_turn.req_id] = current_turn
-
-    runtime._maybe_rotate_history_for_turn(current_turn)
-
-    assert deleted_item_ids(runtime) == ["old-user"]
-    assert list(runtime._history_item_order) == ["current-audio-unbound"]
-    assert "current-audio-unbound" in runtime._known_history_item_ids
-
-
-def test_known_owner_to_anonymous_clears_prior_history_and_tool_summary() -> None:
-    runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
-    runtime._last_tool_name = "capture_scene"
-    runtime._last_tool_summary = "capture_scene: saw a whiteboard"
-    old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-    current_turn = make_turn("anonymous", owner_id=None)
-    runtime._turns_by_req_id[current_turn.req_id] = current_turn
-
-    runtime._maybe_rotate_history_for_turn(current_turn)
-
-    assert deleted_item_ids(runtime) == ["old-user"]
-    assert runtime._active_history_owner_key == "anonymous"
-    assert runtime._last_tool_name is None
-    assert runtime._last_tool_summary is None
-
-
-def test_anonymous_to_owner_clears_anonymous_history_and_keeps_memory_context() -> None:
-    runtime = FakeRuntime()
-    runtime._active_history_owner_key = "anonymous"
-    anonymous_turn = make_turn("anon-old", owner_id=None, finalized=True)
-    register_turn_item(runtime, anonymous_turn, "anon-user")
-    context = FrozenTurnContext(owner_id="A", memory_context_blocks=("About: likes tea",))
-    current_turn = make_turn("owner-a", owner_id="A", context_snapshot=context)
-    runtime._turns_by_req_id[current_turn.req_id] = current_turn
-
-    runtime._maybe_rotate_history_for_turn(current_turn)
-
-    assert deleted_item_ids(runtime) == ["anon-user"]
-    assert runtime._active_history_owner_key == "owner:A"
-    assert current_turn.context_snapshot.memory_context_blocks == ("About: likes tea",)
-
-
-def test_internal_event_does_not_rotate_current_owner_session() -> None:
-    runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
-    old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-    internal_turn = make_turn("internal", owner_id=None, source_is_internal=True)
+    register_done_item(runtime, old_turn, "old-user")
+    runtime._active_inference_owner_key = "owner:A"
+    runtime._active_inference_scope_id = "owner:A"
+    internal_turn = make_turn("internal", owner_id="A", source_is_internal=True)
     runtime._turns_by_req_id[internal_turn.req_id] = internal_turn
 
     runtime._maybe_rotate_history_for_turn(internal_turn)
 
-    assert deleted_item_ids(runtime) == []
-    assert runtime._active_history_owner_key == "owner:A"
-    assert list(runtime._history_item_order) == ["old-user"]
+    assert internal_turn.inference_scope_id == "owner:A"
+    assert internal_turn.selected_inference_history_item_ids == ["old-user"]
+    assert sent_delete_events(runtime) == []
 
 
-def test_preference_extraction_uses_local_transcripts_after_history_deletion() -> None:
+def test_preference_extraction_uses_local_transcripts_after_scope_change() -> None:
     runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
     old_turn = make_turn("old", owner_id="A", finalized=True)
     old_turn.user_transcript = "I like jasmine tea."
     old_turn.assistant_transcript = "Got it."
     old_turn.user_item_id = "old-user"
-    register_turn_item(runtime, old_turn, "old-user")
+    register_done_item(runtime, old_turn, "old-user")
     current_turn = make_turn("current", owner_id="B")
     runtime._turns_by_req_id[current_turn.req_id] = current_turn
 
@@ -256,7 +249,7 @@ def test_preference_extraction_uses_local_transcripts_after_history_deletion() -
     runtime._maybe_note_preference_turn(old_turn)
     segment = runtime._preference_segments.flush_active()
 
-    assert "old-user" not in runtime._known_history_item_ids
+    assert "old-user" in runtime._known_history_item_ids
     assert segment is not None
     assert segment.person_id == "A"
     assert segment.turns[0].user_text == "I like jasmine tea."
@@ -288,22 +281,3 @@ def test_preference_segment_handoff_emits_memory_flush_event() -> None:
             "memory_extraction_scheduled": False,
         }
     ]
-
-
-def test_owner_change_protects_active_unresolved_function_call_items() -> None:
-    runtime = FakeRuntime()
-    runtime._active_history_owner_key = "owner:A"
-    old_turn = make_turn("old", owner_id="A", finalized=True)
-    register_turn_item(runtime, old_turn, "old-user")
-    active_turn = make_turn("active-tool", owner_id="A", finalized=False)
-    active_turn.function_call_item_ids.add("active-function-call")
-    runtime._turns_by_req_id[active_turn.req_id] = active_turn
-    runtime._register_history_item("active-function-call", owner_req_id=active_turn.req_id)
-    current_turn = make_turn("current", owner_id="B")
-    runtime._turns_by_req_id[current_turn.req_id] = current_turn
-
-    runtime._maybe_rotate_history_for_turn(current_turn)
-
-    assert deleted_item_ids(runtime) == ["old-user"]
-    assert "active-function-call" in runtime._known_history_item_ids
-    assert list(runtime._history_item_order) == ["active-function-call"]

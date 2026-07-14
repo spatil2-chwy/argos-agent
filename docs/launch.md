@@ -296,7 +296,7 @@ If the robot hears you but never replies:
 - confirm the tool call path is not failing repeatedly
 - confirm the logs show `Realtime response created` and then either `playback_completed` or a clear cancellation reason
 - if the next question seems to trigger an earlier answer, look for a stuck turn that never reached `response.done` or never started playback
-- if replies get stale after a speaker handoff, confirm owner-scoped history deletion is happening
+- if replies get stale after a speaker handoff, confirm `inference_scope_selected` and `response_create` show the expected selected item ids
 
 If face-triggered interaction is not happening:
 

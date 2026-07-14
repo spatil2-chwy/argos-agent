@@ -50,7 +50,20 @@ class ServerEventRuntime:
         if not item_id:
             return
         if item_id in self._item_id_to_req_id:
-            self._register_history_item(item_id)
+            item_type = str(item.get("type", "") or "").strip()
+            role = str(item.get("role", "") or "").strip()
+            looks_like_audio = (
+                item_type == "message"
+                and role == "user"
+                and self._conversation_item_looks_like_audio_input(item)
+            )
+            self._register_history_item(
+                item_id,
+                item_type=item_type,
+                role=role,
+                status="done" if looks_like_audio else "",
+                permitted_for_inference=True if looks_like_audio else None,
+            )
             record_snapshot = getattr(self, "_record_history_item_snapshot", None)
             if callable(record_snapshot):
                 record_snapshot(item_id, item)
@@ -78,20 +91,45 @@ class ServerEventRuntime:
             if call_id and req_id:
                 self._call_id_to_req_id[call_id] = req_id
 
-        self._register_history_item(item_id, owner_req_id=req_id)
+        self._register_history_item(
+            item_id,
+            owner_req_id=req_id,
+            item_type=item_type,
+            role=role,
+            status="done" if item_type == "message" and role in {"user", "system"} else "in_progress",
+            permitted_for_inference=True if item_type == "message" and role in {"user", "system"} else None,
+        )
         record_snapshot = getattr(self, "_record_history_item_snapshot", None)
         if callable(record_snapshot):
             record_snapshot(item_id, item)
         if req_id:
             turn = self._turns_by_req_id.get(req_id)
             if turn is not None:
-                self._register_turn_history_item(turn, item_id)
+                self._register_turn_history_item(
+                    turn,
+                    item_id,
+                    item_type=item_type,
+                    role=role,
+                    status="done" if item_type == "message" and role in {"user", "system"} else "in_progress",
+                    permitted_for_inference=True if item_type == "message" and role in {"user", "system"} else None,
+                )
                 if item_type == "message" and role == "user" and not turn.user_item_id:
                     turn.user_item_id = item_id
                 elif item_type == "message" and role == "assistant":
                     turn.assistant_item_ids.add(item_id)
                 elif item_type == "function_call":
                     turn.function_call_item_ids.add(item_id)
+
+    def handle_conversation_item_deleted(self, event: dict[str, Any]) -> None:
+        item_id = str(event.get("item_id") or "").strip()
+        if not item_id:
+            item = server_event_item(event)
+            item_id = server_event_item_id(event, item=item)
+        if not item_id:
+            return
+        handler = getattr(self, "_forget_deleted_history_item", None)
+        if callable(handler):
+            handler(item_id)
 
     def handle_input_audio_buffer_committed(self, event: dict[str, Any]) -> None:
         item_id = str(event.get("item_id") or "").strip()
@@ -110,6 +148,13 @@ class ServerEventRuntime:
         self._bind_item_id_to_turn(turn, item_id)
         if not turn.user_item_id:
             turn.user_item_id = item_id
+        self._history_index().update_item(
+            item_id,
+            item_type="message",
+            role="user",
+            status="done",
+            permitted_for_inference=True,
+        )
         self._set_transcription_state(
             turn,
             TranscriptionState.PENDING,
@@ -366,6 +411,13 @@ class ServerEventRuntime:
             self._bind_item_id_to_turn(turn, item_id)
             turn.assistant_item_id = item_id or turn.assistant_item_id
             turn.assistant_item_ids.add(item_id)
+            self._history_index().update_item(
+                item_id,
+                item_type="message",
+                role="assistant",
+                status="in_progress",
+                permitted_for_inference=False,
+            )
         turn.assistant_transcript += delta
         if turn.assistant_item_id:
             update_snapshot = getattr(self, "_update_history_item_snapshot", None)
@@ -416,6 +468,13 @@ class ServerEventRuntime:
             self._bind_item_id_to_turn(turn, item_id)
             turn.assistant_item_id = item_id or turn.assistant_item_id
             turn.assistant_item_ids.add(item_id)
+            self._history_index().update_item(
+                item_id,
+                item_type="message",
+                role="assistant",
+                status="in_progress",
+                permitted_for_inference=False,
+            )
         item_type = str(item.get("type", "") or "").strip()
         role = str(item.get("role", "") or "").strip()
         status = str(item.get("status", "") or "").strip()
@@ -443,6 +502,12 @@ class ServerEventRuntime:
         if turn is not None:
             self._bind_item_id_to_turn(turn, item_id)
             turn.function_call_item_ids.add(item_id)
+            self._history_index().update_item(
+                item_id,
+                item_type="function_call",
+                status="in_progress",
+                permitted_for_inference=False,
+            )
 
     def handle_function_call_done(self, event: dict[str, Any]) -> None:
         item_id = str(event.get("item_id", "") or "")
@@ -471,6 +536,20 @@ class ServerEventRuntime:
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
             turn.function_call_item_ids.add(item_id)
+            self._history_index().update_item(
+                item_id,
+                item_type="function_call",
+                status="done",
+                permitted_for_inference=True,
+                input_item={
+                    "id": item_id,
+                    "type": "function_call",
+                    "name": tool_name,
+                    "call_id": call_id,
+                    "arguments": arguments_json or "{}",
+                    "status": "completed",
+                },
+            )
             update_snapshot = getattr(self, "_update_history_item_snapshot", None)
             if callable(update_snapshot):
                 update_snapshot(
@@ -544,6 +623,10 @@ class ServerEventRuntime:
             or len(final_transcript) >= len(turn.assistant_transcript.strip())
         ):
             turn.assistant_transcript = final_transcript
+        quarantined = False
+        quarantine_fn = getattr(self, "_quarantine_anonymous_history_if_needed", None)
+        if callable(quarantine_fn):
+            quarantined = bool(quarantine_fn(turn))
         if turn.assistant_item_id and turn.assistant_transcript.strip():
             update_snapshot = getattr(self, "_update_history_item_snapshot", None)
             if callable(update_snapshot):
@@ -554,6 +637,27 @@ class ServerEventRuntime:
                     role="assistant",
                     status=status,
                 )
+            self._history_index().update_item(
+                turn.assistant_item_id,
+                item_type="message",
+                role="assistant",
+                status="done" if status == "completed" else status,
+                permitted_for_inference=status == "completed" and not quarantined,
+                input_item={
+                    "id": turn.assistant_item_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": turn.assistant_transcript.strip(),
+                        }
+                    ],
+                }
+                if status == "completed" and not quarantined
+                else None,
+            )
         if turn.audio_started and turn.assistant_transcript.strip():
             self._show_display_subtitle_async(
                 self._display_subtitle_window(turn.assistant_transcript),
@@ -567,10 +671,46 @@ class ServerEventRuntime:
                 self._bind_item_id_to_turn(turn, item_id)
                 if item_type == "function_call":
                     turn.function_call_item_ids.add(item_id)
+                    self._history_index().update_item(
+                        item_id,
+                        item_type="function_call",
+                        status="done",
+                        permitted_for_inference=True,
+                        input_item={
+                            "id": item_id,
+                            "type": "function_call",
+                            "name": str(output_item.get("name", "") or ""),
+                            "call_id": str(output_item.get("call_id", "") or ""),
+                            "arguments": str(output_item.get("arguments", "") or "{}"),
+                            "status": "completed",
+                        },
+                    )
                 elif item_type == "message":
                     turn.assistant_item_ids.add(item_id)
                     if not turn.assistant_item_id:
                         turn.assistant_item_id = item_id
+                    if status == "completed" and turn.assistant_transcript.strip():
+                        self._history_index().update_item(
+                            item_id,
+                            item_type="message",
+                            role="assistant",
+                            status="done",
+                            permitted_for_inference=not quarantined,
+                            input_item={
+                                "id": item_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": turn.assistant_transcript.strip(),
+                                    }
+                                ],
+                            }
+                            if not quarantined
+                            else None,
+                        )
         has_function_call = any(
             str(item.get("type", "") or "") == "function_call" for item in output_items
         )

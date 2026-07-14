@@ -12,7 +12,7 @@ This document explains what the realtime model actually sees on each turn:
 
 - the static system prompt
 - dynamic per-turn instructions
-- stateful conversation history
+- explicit selected inference history
 - tool call items and tool outputs
 - transcript side channels used outside the prompt
 
@@ -27,8 +27,8 @@ Every response is shaped by three layers:
 2. Dynamic turn instructions
    -> sent on every `response.create`
 
-3. Stateful conversation history
-   -> accumulated inside the Realtime session
+3. Explicit selected inference history
+   -> sent as `response.create.input` item references/raw items
 ```
 
 Those layers are deliberately kept separate.
@@ -84,6 +84,7 @@ Every `response.create` carries fresh instructions from `_build_turn_instruction
 The runtime currently builds these blocks:
 
 - `[PERSON SPEAKING TO YOU]`, only when `owner_id` is resolved
+- `[IDENTITY STATUS]`, only when `owner_id` is not resolved
 - `[OTHER PEOPLE IN VIEW]`, only alongside a resolved owner and only as names/counts
 - `[CURRENT TIME]`
 - `[CURRENT OFFICE LOCATION]`
@@ -103,7 +104,10 @@ subsections such as `Preferences`, `Pets`, `Facts`, `Potential Follow-Ups`, and
 If `owner_id` is not resolved, no person-specific prompt context is emitted,
 even if a recognized person is visible. This avoids addressing a visible
 bystander as the speaker when someone else talks off-camera or speaker
-recognition is inconclusive.
+recognition is inconclusive. Unknown-owner turns also carry `[IDENTITY STATUS]`
+to make the local resolver authoritative: the model must not use a person's name
+or infer identity from voice similarity, face runner-up matches, or session
+memory unless `[PERSON SPEAKING TO YOU]` is present.
 
 Those lines come from the Tailwag identity-memory client. Tailwag writes
 future-facing summaries so the realtime model can use them without seeing the
@@ -140,22 +144,25 @@ So the dynamic instructions are a hybrid:
 - frozen human/social context
 - live robot/runtime context
 
-## Layer 3: Stateful Conversation History
+## Layer 3: Explicit Inference History
 
-The Realtime session itself holds the rolling conversation state.
+Argos keeps a local inference-history index and sends an explicit `input` list
+with every `response.create`. The server default conversation may still contain
+items for realtime lifecycle operations, but it is not the model-visible history
+boundary.
 
 The runtime adds or observes these item types in history:
 
 | Item type | Who creates it | Purpose |
 |---|---|---|
 | audio user message | Realtime server after `input_audio_buffer.commit` | Represents spoken human input. |
-| system message | Local runtime via `conversation.item.create` | Internal events and coalesced robot-side context. |
-| text user message | Local runtime via `conversation.item.create` | Tool-artifact prompts and any future explicit text user input. |
+| system message | Local runtime as an explicit-input item | Internal events and coalesced robot-side context. |
+| text user message | Local runtime as an explicit-input item | Tool-artifact prompts and any future explicit text user input. |
 | assistant message | Realtime model | Spoken/text response content. |
 | function call | Realtime model | Tool invocation request. |
-| function_call_output | Local runtime via `conversation.item.create` | Tool result returned to the model. |
+| function_call_output | Local runtime as an explicit-input item | Tool result returned to the model. |
 
-This is the real "conversation history" the model conditions on across turns.
+This selected input list is the real history the model conditions on across turns.
 
 ## The Two Trigger Paths
 
@@ -187,12 +194,13 @@ So the model does not "auto-answer because audio arrived." The local runtime sti
 For a pure internal event turn, the send order is effectively:
 
 ```text
-conversation.item.create
+local explicit-input item
   role=system
   content=[{"type": "input_text", "text": "...FACE_EVENT / NAV_EVENT / ..."}]
 
 response.create
   instructions="<dynamic blocks>"
+  input=[<selected history>, <current system item>]
   output_modalities=["audio"]
 ```
 
@@ -201,7 +209,8 @@ If the coalescer merged several events, the text payload includes headers such a
 - `[INTERNAL EVENT]`
 - `[PENDING EVENTS]`
 
-Those headers are part of a system message item that the runtime adds to the live conversation.
+Those headers are part of a system message item that the runtime adds to the
+current response's explicit input list.
 
 ## What Exactly Gets Sent on a Human Audio Turn
 
@@ -211,8 +220,8 @@ For live human speech, the runtime sends:
 input_audio_buffer.clear           # when local recording starts
 input_audio_buffer.append          # repeated for PCM chunks
 input_audio_buffer.commit          # when local end-of-speech fires
-conversation.item.create?          # only if pending internal text must be injected
-response.create
+local explicit-input item?         # only if pending internal text must be injected
+response.create(input=[<selected history>, <current audio item>, ...])
 ```
 
 The human speech itself is represented by the server-side audio user item created after commit.
@@ -242,21 +251,21 @@ These events are assembled into a `PendingToolCall`.
 
 Those values then influence the next dynamic prompt block.
 
-### Step 3: The tool result is inserted back into history
+### Step 3: The tool result is inserted back into explicit input history
 
-The runtime sends:
+The runtime creates a local explicit-input item:
 
 ```text
-conversation.item.create
+local explicit-input item
   type=function_call_output
   call_id=<same call id>
   output=<stringified tool result>
 ```
 
-If the tool produced images, the runtime also inserts a synthetic user message:
+If the tool produced images, the runtime also creates a synthetic user item:
 
 ```text
-conversation.item.create
+local explicit-input item
   role=user
   content=[
     {"type":"input_text","text":"[TOOL ARTIFACT] ..."},
@@ -309,10 +318,9 @@ Examples:
 - one function call
 - one function-call output
 
-Conversation history is scoped to the current resolved owner. Consecutive turns
-from the same `owner_id` keep their Realtime conversation context, and a
-resolved owner handoff clears older conversation items before the new owner's
-response.
+Model-visible history is scoped by Argos' local inference index. Consecutive
+turns from the same known `owner_id` reuse that owner's selected items, and a
+resolved owner change selects a different local scope before the new response.
 
 ## How Conversation History Is Tracked
 
@@ -324,7 +332,7 @@ The runtime maintains several id maps so every Realtime item can be tied back to
 | `_item_id_to_req_id` | Binds conversation item ids to local turn ids. |
 | `_call_id_to_req_id` | Binds tool call ids to local turn ids. |
 | `_pending_audio_turn_req_ids` | Matches the next audio-created user item to the correct turn. |
-| `_pending_local_created_items` | Matches locally created text/tool-output items to the correct turn. |
+| `_pending_local_created_items` | Matches server-acknowledged client-created items to the correct turn when that path is used. |
 
 This matters because Realtime events arrive asynchronously and not always in the most convenient order.
 
@@ -373,20 +381,37 @@ These are intentionally outside the conversation history:
 
 This is one of the biggest simplifications of the rewrite: repeated situational state is re-sent as instructions, not permanently stuffed into history.
 
-## Owner-Scoped History Reset
+## Owner-Scoped Inference Selection
 
-The runtime rotates Realtime history on external human turns when the resolved
-owner key changes:
+The runtime selects an explicit inference scope before any model response:
 
 - `owner:<person_id>` for recognized owners
-- `anonymous` when no owner is safely resolved
+- `anonymous:<patch_id>` when no owner is safely resolved
 
-On owner handoff, older Realtime conversation items are deleted with
-`conversation.item.delete`. Current in-flight items, playback, and unresolved
-tool/response chains are protected. Local `QueuedTurn` transcripts remain
-available for observability and preference extraction.
+Known-owner scopes are reusable within the agent run, so `owner:A -> owner:B ->
+owner:A` can select A's prior permitted items again. Anonymous scopes are
+contiguous patches, so `unknown -> unknown` keeps the same patch, while
+`owner:A -> unknown -> owner:B -> unknown` creates two separate anonymous
+patches.
 
-So history is bounded, but the runtime avoids deleting items that the current session still needs to resolve in-flight work.
+Before `response.create`, Argos builds an explicit input list from local item
+metadata:
+
+```python
+selected_item_ids = [
+    item.id
+    for item in realtime_items
+    if item.scope_id == active_scope_id
+    and item.status == "done"
+    and item.permitted_for_inference
+]
+```
+
+The current turn's required items are appended to that list. This explicit input
+list is the model-visible context; the server default conversation is no longer
+the owner privacy boundary. Local `QueuedTurn` transcripts remain available for
+observability and Tailwag episode/preference extraction even when an item is not
+selected for model inference.
 
 ## A Useful Way to Think About "What the Model Sees"
 
