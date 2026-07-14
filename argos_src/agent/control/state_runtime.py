@@ -129,7 +129,7 @@ class AgentStateRuntime:
 
     @staticmethod
     def _new_local_history_item_id() -> str:
-        return f"argos-item-{uuid4().hex}"
+        return f"ai_{uuid4().hex[:29]}"
 
     def _queue_pending_local_created_item(
         self,

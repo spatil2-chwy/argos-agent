@@ -3,6 +3,14 @@ from __future__ import annotations
 from collections import deque
 
 from argos_src.agent.control.history_store import InferenceHistoryIndex
+from argos_src.agent.control.state_runtime import AgentStateRuntime
+
+
+def test_local_history_item_ids_fit_realtime_input_limit() -> None:
+    item_id = AgentStateRuntime._new_local_history_item_id()
+
+    assert len(item_id) <= 32
+    assert item_id.startswith("ai_")
 
 
 def test_history_index_registers_once_and_tracks_owner_scope() -> None:
