@@ -26,8 +26,8 @@ class ProviderClient(Protocol):
         operation: str,
         args: dict[str, Any] | None = None,
         timeout_ms: int | None = None,
-    ) -> dict[str, Any]:
-        """Send one resource-scoped request and return its result object."""
+    ) -> Any:
+        """Send one resource-scoped request and return its raw JSON result."""
 
     def publish_event(
         self,

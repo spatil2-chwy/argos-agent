@@ -41,6 +41,8 @@ def test_display_runtime_review_posts_preview_and_waits_for_response():
     assert client.requests[0]["args"]["type"] == "face_capture_preview"
     assert client.requests[1]["operation"] == OP_DISPLAY_AWAIT_RESPONSE
     assert client.requests[1]["args"]["requestId"] == "capture-1"
+    assert client.requests[1]["args"]["timeoutMs"] == 30000
+    assert client.requests[1]["timeout_ms"] == 31000
 
 
 def test_display_runtime_text_prompt_uses_preview_accept_reject():

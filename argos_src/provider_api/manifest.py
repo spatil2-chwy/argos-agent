@@ -26,12 +26,20 @@ ALLOWED_CAPABILITY_IDS = frozenset(
         "dock.charging",
         "display.command",
         "display.interaction",
+        "display.image",
+        "display.response",
         "presence.face.publish",
         "voice_command.publish",
         "lidar.scan",
         "arm.pose",
         "gripper.command",
         "manipulation.pick_place",
+        "memory.identity",
+        "memory.context",
+        "memory.episodes",
+        "memory.semantic_search",
+        "memory.biometrics",
+        "memory.owner_resolution",
     }
 )
 
@@ -41,11 +49,18 @@ class ManifestValidationError(ValueError):
 
 
 @dataclass(frozen=True)
+class ProviderAuth:
+    type: str = ""
+    token_env: str = ""
+
+
+@dataclass(frozen=True)
 class ProviderRoute:
     id: str
     transport: str
     key_prefix: str
     connect_endpoints: tuple[str, ...] = ()
+    auth: ProviderAuth | None = None
 
 
 @dataclass(frozen=True)
@@ -175,13 +190,33 @@ def _parse_provider(item: Any, *, index: int, context: str) -> ProviderRoute:
             context=f"{item_context}.connect_endpoints",
         )
     )
+    auth = _parse_provider_auth(data.pop("auth", None), context=f"{item_context}.auth")
     _reject_unknown(data, item_context)
     return ProviderRoute(
         id=provider_id,
         transport=transport,
         key_prefix=key_prefix,
         connect_endpoints=connect_endpoints,
+        auth=auth,
     )
+
+
+def _parse_provider_auth(value: Any, *, context: str) -> ProviderAuth | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ManifestValidationError(f"{context} must be a mapping.")
+    data = dict(value)
+    auth_type = _optional_str(data, "type", default="")
+    token_env = _optional_str(data, "token_env", default="")
+    _reject_unknown(data, context)
+    if not auth_type:
+        raise ManifestValidationError(f"{context}.type is required.")
+    if auth_type != "bearer":
+        raise ManifestValidationError(f"{context}.type must be bearer.")
+    if not token_env:
+        raise ManifestValidationError(f"{context}.token_env is required.")
+    return ProviderAuth(type=auth_type, token_env=token_env)
 
 
 def _parse_resource(item: Any, *, index: int, context: str) -> ProviderResource:
@@ -261,6 +296,7 @@ __all__ = [
     "ALLOWED_CAPABILITY_IDS",
     "MANIFESTS_DIR",
     "ManifestValidationError",
+    "ProviderAuth",
     "ProviderManifest",
     "ProviderResource",
     "ProviderRoute",

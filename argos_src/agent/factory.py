@@ -160,8 +160,43 @@ def _create_display_runtime(*, scenario_profile: ScenarioProfile):
         connect_endpoints=provider.connect_endpoints,
         resource_id=resource.id,
         manifest=manifest,
+        auth_token_env=(
+            getattr(provider.auth, "token_env", "") if provider.auth is not None else ""
+        ),
     )
     return DisplayRuntime(client=display_client, resource_id=resource.id)
+
+
+def _create_identity_memory_provider_client(*, scenario_profile: ScenarioProfile):
+    resource_id = str(
+        getattr(scenario_profile.resources, "identity_memory", "") or ""
+    ).strip()
+    manifest = scenario_profile.manifest
+    if not resource_id or manifest is None:
+        raise ValueError("identity_memory.enabled requires resources.identity_memory.")
+    resource = manifest.resource_by_id(resource_id)
+    if resource is None or not resource.has_capability("memory.identity"):
+        raise ValueError(
+            "identity_memory.enabled requires selected resources.identity_memory "
+            "to provide memory.identity."
+        )
+    provider = manifest.provider_by_id(resource.provider)
+    if provider is None:
+        raise ValueError(
+            f"Memory resource '{resource.id}' references unknown provider "
+            f"'{resource.provider}'."
+        )
+    client = create_provider_client(
+        transport=provider.transport,
+        key_prefix=provider.key_prefix,
+        connect_endpoints=provider.connect_endpoints,
+        resource_id=resource.id,
+        manifest=manifest,
+        auth_token_env=(
+            getattr(provider.auth, "token_env", "") if provider.auth is not None else ""
+        ),
+    )
+    return client, resource.id
 
 
 def _resolve_agent_profile(
@@ -295,9 +330,16 @@ def create_agent(
 
             identity_memory_client = NoopIdentityMemoryClient()
         else:
-            from argos_src.identity_memory import TailwagPackageIdentityMemoryClient
+            from argos_src.identity_memory import TailwagHttpIdentityMemoryClient
 
-            identity_memory_client = TailwagPackageIdentityMemoryClient(
+            memory_provider_client, memory_resource_id = (
+                _create_identity_memory_provider_client(
+                    scenario_profile=scenario_profile,
+                )
+            )
+            identity_memory_client = TailwagHttpIdentityMemoryClient(
+                provider_client=memory_provider_client,
+                resource_id=memory_resource_id,
                 site_code=scenario_profile.identity_memory.site_code,
                 place_room_id=scenario_profile.identity_memory.place_room_id,
                 retention_class=scenario_profile.identity_memory.retention_class,

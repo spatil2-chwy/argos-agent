@@ -144,11 +144,12 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.realtime.admission.block_during_engaged is True
     assert profile.realtime.admission.open_on_interaction_states == ("alert",)
     assert profile.identity_memory.enabled is True
-    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.backend == "tailwag_http"
     assert profile.identity_memory.site_code == "BOS3"
     assert profile.identity_memory.retention_class == "standard"
     assert profile.identity_memory.place_room_id == "realtime"
-    assert profile.identity_memory.extract_live_turn_memory is True
+    assert profile.identity_memory.extract_live_turn_memory is False
+    assert profile.resources.identity_memory == "memory"
 
 
 def test_navigation_profile_extends_static_interaction_capabilities():
@@ -366,10 +367,11 @@ def test_identity_memory_defaults_to_tailwag_enabled():
     )
 
     assert profile.identity_memory.enabled is True
-    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.backend == "tailwag_http"
     assert profile.identity_memory.site_code == ""
     assert profile.identity_memory.place_room_id == "realtime"
     assert profile.identity_memory.retention_class == "standard"
+    assert profile.resources.identity_memory == "memory"
 
 
 def test_identity_memory_rejects_unknown_backend():
@@ -692,10 +694,23 @@ def test_identity_memory_defaults_replace_runtime_state_paths():
     )
 
     assert profile.identity_memory.enabled is True
-    assert profile.identity_memory.backend == "tailwag_package"
+    assert profile.identity_memory.backend == "tailwag_http"
     assert profile.identity_memory.retention_class == "standard"
     assert profile.identity_memory.place_room_id == "realtime"
     assert profile.identity_memory.record_live_episodes is True
+    assert profile.identity_memory.extract_live_turn_memory is False
+
+
+def test_identity_memory_extract_live_turn_memory_explicit_true_opts_in():
+    profile = _parse_profile(
+        {
+            "name": "runtime-state-extract-opt-in",
+            "identity_memory": {"extract_live_turn_memory": True},
+        },
+        profile_path=Path("/tmp/runtime-state-extract-opt-in.yaml"),
+        framework_config={},
+    )
+
     assert profile.identity_memory.extract_live_turn_memory is True
 
 

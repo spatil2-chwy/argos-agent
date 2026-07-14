@@ -50,7 +50,6 @@ pypdf = "^5.4.0"
 docx2txt = "*"
 openwakeword = { git = "https://github.com/maciejmajek/openWakeWord.git", branch = "chore/remove-tflite-backend" }
 coloredlogs = "^15.0.1"
-tailwag-memory = { path = "../tailwag-memory", develop = true }
 
 # Face embedding remains a manual add-on for now: facenet-pytorch 2.6.0
 # advertises older torch/torchvision bounds than the Blackwell-capable stack

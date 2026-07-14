@@ -28,13 +28,24 @@ def test_puffle_manifest_loads_resources_and_capabilities():
     assert base is not None
     assert base.family == "unitree_go2"
     assert base.has_capability("motion.velocity")
-    assert manifest.resource_by_id("arducam_001").has_capability("camera.rgbd")
+    assert manifest.resource_by_id("arducam_001").has_capability("camera.rgb")
     display = manifest.resource_by_id("screen_001")
     assert display is not None
     assert display.kind == "display"
     assert display.has_capability("display.command")
     assert display.has_capability("display.interaction")
     assert manifest.provider_by_id("puffle-go2-display").transport == "http"
+    memory_provider = manifest.provider_by_id("memory")
+    assert memory_provider is not None
+    assert memory_provider.transport == "http"
+    assert memory_provider.auth is not None
+    assert memory_provider.auth.type == "bearer"
+    assert memory_provider.auth.token_env == "TAILWAG_API_BEARER_TOKEN"
+    memory = manifest.resource_by_id("memory")
+    assert memory is not None
+    assert memory.kind == "memory"
+    assert memory.has_capability("memory.identity")
+    assert memory.has_capability("memory.semantic_search")
 
 
 def test_manifest_rejects_unknown_capability():

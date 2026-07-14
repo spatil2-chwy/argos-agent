@@ -105,6 +105,7 @@ class QueuedTurn:
     assistant_item_ids: set[str] = field(default_factory=set)
     function_call_item_ids: set[str] = field(default_factory=set)
     pending_call_ids: set[str] = field(default_factory=set)
+    pending_tool_names_by_call_id: dict[str, str] = field(default_factory=dict)
     response_finished: threading.Event = field(default_factory=threading.Event)
     playback_finished: threading.Event = field(default_factory=threading.Event)
 

@@ -332,7 +332,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     monkeypatch.setitem(sys.modules, "argos_src.agent.startup", startup_mod)
 
     identity_memory_mod = types.ModuleType("argos_src.identity_memory")
-    identity_memory_mod.TailwagPackageIdentityMemoryClient = _FakeIdentityMemoryClient
+    identity_memory_mod.TailwagHttpIdentityMemoryClient = _FakeIdentityMemoryClient
     identity_memory_mod.NoopIdentityMemoryClient = _FakeIdentityMemoryClient
     monkeypatch.setitem(sys.modules, "argos_src.identity_memory", identity_memory_mod)
 
@@ -2800,12 +2800,12 @@ def test_factory_wires_identity_memory_into_prompt_extraction_and_face(monkeypat
 
     assert len(created["identity_memory_clients"]) == 1
     client = created["identity_memory_clients"][0]
-    assert client.kwargs == {
-        "site_code": "",
-        "place_room_id": "lab",
-        "retention_class": "priority",
-        "extract_live_turn_memory": False,
-    }
+    assert client.kwargs["site_code"] == ""
+    assert client.kwargs["place_room_id"] == "lab"
+    assert client.kwargs["retention_class"] == "priority"
+    assert client.kwargs["extract_live_turn_memory"] is False
+    assert client.kwargs["resource_id"] == "memory"
+    assert client.kwargs["provider_client"] is not None
     assert agent.kwargs["identity_memory_client"] is client
     assert agent.kwargs["memory_context_compiler"] is client
     assert agent.kwargs["preference_extractor"] is client

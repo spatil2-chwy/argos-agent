@@ -1,19 +1,19 @@
-"""Tailwag package-backed identity and memory client for Argos."""
+"""Tailwag HTTP provider-backed identity and memory client for Argos."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import logging
-import re
 import threading
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
 
 from argos_src.agent.preference_types import PreferenceSegment
 from argos_src.observability.observability import LatencyLogger
+from argos_src.provider_api.client import ProviderClient
 from .models import (
     BiometricCandidate,
     BiometricEnrollmentResult,
@@ -33,20 +33,23 @@ DEFAULT_RETENTION_CLASS = "standard"
 DEFAULT_PREFERRED_LANGUAGE = "English"
 
 
-class TailwagPackageIdentityMemoryClient:
-    """Single Argos adapter for Tailwag-owned identity and memory."""
+class TailwagHttpIdentityMemoryClient:
+    """Argos adapter for Tailwag-owned identity and memory over HTTP provider API."""
 
     def __init__(
         self,
         *,
-        client_factory: Callable[[], Any] | None = None,
+        provider_client: ProviderClient,
+        resource_id: str,
         site_code: str = "",
         place_room_id: str = DEFAULT_PLACE_ROOM,
         retention_class: str = DEFAULT_RETENTION_CLASS,
-        extract_live_turn_memory: bool = True,
+        extract_live_turn_memory: bool = False,
     ) -> None:
-        self._client_factory = client_factory
-        self._client_instance: Any | None = None
+        self._provider_client = provider_client
+        self._resource_id = str(resource_id or "").strip()
+        if not self._resource_id:
+            raise ValueError("Tailwag HTTP identity-memory client requires resource_id.")
         self.site_code = str(site_code or "").strip()
         self.place_room_id = str(place_room_id or "").strip() or DEFAULT_PLACE_ROOM
         self.retention_class = str(retention_class or "").strip() or DEFAULT_RETENTION_CLASS
@@ -59,9 +62,7 @@ class TailwagPackageIdentityMemoryClient:
         self._latency = LatencyLogger("identity_memory")
 
     def close(self) -> None:
-        client = self._client_instance
-        self._client_instance = None
-        close = getattr(client, "close", None)
+        close = getattr(self._provider_client, "shutdown", None)
         if callable(close):
             try:
                 close()
@@ -70,11 +71,11 @@ class TailwagPackageIdentityMemoryClient:
 
     def health(self) -> bool:
         try:
-            self._client()
+            result = self._request("memory.health", {})
         except Exception:
             logger.exception("Tailwag identity-memory health check failed")
             return False
-        return True
+        return bool(result.get("ok", True))
 
     def resolve_identity(
         self,
@@ -83,26 +84,35 @@ class TailwagPackageIdentityMemoryClient:
         shared_last_name: str,
         shared_name: str = "",
     ) -> dict[str, Any]:
-        result = self._client().resolve_identity(
-            shared_first_name=shared_first_name,
-            shared_last_name=shared_last_name,
-            shared_name=shared_name,
-            site_code=self.site_code,
+        result = self._request(
+            "memory.identity_resolve",
+            {
+                "shared_first_name": shared_first_name,
+                "shared_last_name": shared_last_name,
+                "shared_name": shared_name,
+                "site_code": self.site_code,
+            },
         )
         return _plain(result)
 
     def get_verified_profile(self, *, username: str, official_name: str) -> dict[str, Any] | None:
-        result = self._client().get_verified_profile(
-            username=username,
-            official_name=official_name,
-            site_code=self.site_code,
+        result = self._request(
+            "memory.identity_verified_profile",
+            {
+                "username": username,
+                "official_name": official_name,
+                "site_code": self.site_code,
+            },
         )
         if result is None:
             return None
         return _plain(result)
 
     def person_profile(self, person_id: str) -> PersonProfile | None:
-        result = self._client().person_profile(str(person_id or "").strip())
+        result = self._request(
+            "memory.people_profile",
+            {"person_id": str(person_id or "").strip()},
+        )
         if result is None:
             return None
         payload = _plain(result)
@@ -135,9 +145,12 @@ class TailwagPackageIdentityMemoryClient:
                 followup_lines=fallback_followup_lines,
             )
         try:
-            structured = self._client().person_context_structured(
-                rendered_person_id,
-                current_text=current_text,
+            structured = self._request(
+                "memory.person_context_structured",
+                {
+                    "person_id": rendered_person_id,
+                    "current_text": current_text,
+                },
             )
             payload = _plain(structured)
             profile_lines = tuple(payload.get("memory_profile_lines") or ())
@@ -162,10 +175,13 @@ class TailwagPackageIdentityMemoryClient:
 
     def search_face(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
         try:
-            result = self._client().search_face(
-                embedding=_embedding_list(embedding),
-                limit=limit,
-                site_code=self.site_code or None,
+            result = self._request(
+                "memory.biometrics_face_search",
+                {
+                    "embedding": _embedding_list(embedding),
+                    "limit": limit,
+                    "site_code": self.site_code or None,
+                },
             )
             return _search_result(result)
         except Exception:
@@ -180,11 +196,14 @@ class TailwagPackageIdentityMemoryClient:
         metadata: dict[str, Any] | None = None,
         consent_status: str = "consented",
     ) -> BiometricEnrollmentResult:
-        result = self._client().enroll_face_reference(
-            person_id=person_id,
-            embedding=_embedding_list(embedding),
-            metadata=dict(metadata or {}),
-            consent_status=consent_status,
+        result = self._request(
+            "memory.biometrics_face_references",
+            {
+                "person_id": person_id,
+                "embedding": _embedding_list(embedding),
+                "metadata": dict(metadata or {}),
+                "consent_status": consent_status,
+            },
         )
         return _enrollment_result(result)
 
@@ -197,11 +216,14 @@ class TailwagPackageIdentityMemoryClient:
         metadata: dict[str, Any] | None = None,
     ) -> BiometricUpdateResult:
         try:
-            result = self._client().observe_face_embedding(
-                person_id=str(person_id or "").strip(),
-                embedding=_embedding_list(embedding),
-                evidence=dict(evidence or {}),
-                metadata=dict(metadata or {}),
+            result = self._request(
+                "memory.biometrics_face_observations",
+                {
+                    "person_id": str(person_id or "").strip(),
+                    "embedding": _embedding_list(embedding),
+                    "evidence": dict(evidence or {}),
+                    "metadata": dict(metadata or {}),
+                },
             )
             return _update_result(result)
         except Exception:
@@ -216,10 +238,13 @@ class TailwagPackageIdentityMemoryClient:
 
     def search_voice(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
         try:
-            result = self._client().search_voice(
-                embedding=_embedding_list(embedding),
-                limit=limit,
-                site_code=self.site_code or None,
+            result = self._request(
+                "memory.biometrics_voice_search",
+                {
+                    "embedding": _embedding_list(embedding),
+                    "limit": limit,
+                    "site_code": self.site_code or None,
+                },
             )
             return _search_result(result)
         except Exception:
@@ -234,11 +259,14 @@ class TailwagPackageIdentityMemoryClient:
         metadata: dict[str, Any] | None = None,
         consent_status: str = "consented",
     ) -> BiometricEnrollmentResult:
-        result = self._client().enroll_voice_reference(
-            person_id=person_id,
-            embedding=_embedding_list(embedding),
-            metadata=dict(metadata or {}),
-            consent_status=consent_status,
+        result = self._request(
+            "memory.biometrics_voice_references",
+            {
+                "person_id": person_id,
+                "embedding": _embedding_list(embedding),
+                "metadata": dict(metadata or {}),
+                "consent_status": consent_status,
+            },
         )
         return _enrollment_result(result)
 
@@ -251,11 +279,14 @@ class TailwagPackageIdentityMemoryClient:
         metadata: dict[str, Any] | None = None,
     ) -> BiometricUpdateResult:
         try:
-            result = self._client().observe_voice_embedding(
-                person_id=str(person_id or "").strip(),
-                embedding=_embedding_list(embedding),
-                evidence=dict(evidence or {}),
-                metadata=dict(metadata or {}),
+            result = self._request(
+                "memory.biometrics_voice_observations",
+                {
+                    "person_id": str(person_id or "").strip(),
+                    "embedding": _embedding_list(embedding),
+                    "evidence": dict(evidence or {}),
+                    "metadata": dict(metadata or {}),
+                },
             )
             return _update_result(result)
         except Exception:
@@ -270,7 +301,11 @@ class TailwagPackageIdentityMemoryClient:
 
     def has_voice_reference(self, person_id: str) -> bool:
         try:
-            return bool(self._client().has_voice_reference(str(person_id or "").strip()))
+            result = self._request(
+                "memory.biometrics_voice_references_exists",
+                {"person_id": str(person_id or "").strip()},
+            )
+            return bool(result.get("has_voice_reference"))
         except Exception:
             logger.exception("Tailwag voice reference check failed person_id=%s", person_id)
             return False
@@ -284,15 +319,18 @@ class TailwagPackageIdentityMemoryClient:
         policy_context: dict[str, Any] | None = None,
     ) -> OwnerResolution:
         try:
-            result = self._client().resolve_turn_owner(
-                primary_face_candidate=_candidate_payload(primary_face_candidate),
-                visible_face_candidates=[
-                    _candidate_payload(candidate)
-                    for candidate in tuple(visible_face_candidates or ())
-                    if _candidate_payload(candidate)
-                ],
-                voice_candidate=_candidate_payload(voice_candidate),
-                policy_context=dict(policy_context or {}),
+            result = self._request(
+                "memory.turn_owner_resolve",
+                {
+                    "primary_face_candidate": _candidate_payload(primary_face_candidate),
+                    "visible_face_candidates": [
+                        payload
+                        for candidate in tuple(visible_face_candidates or ())
+                        if (payload := _candidate_payload(candidate))
+                    ],
+                    "voice_candidate": _candidate_payload(voice_candidate),
+                    "policy_context": dict(policy_context or {}),
+                },
             )
             payload = _plain(result)
             return OwnerResolution(
@@ -344,7 +382,7 @@ class TailwagPackageIdentityMemoryClient:
             return
         terminal = _is_terminal_flush(reason)
         try:
-            result = self._client().record_episode(
+            result = self.record_episode(
                 episode,
                 extract_memory=self.extract_live_turn_memory,
             )
@@ -352,7 +390,7 @@ class TailwagPackageIdentityMemoryClient:
                 event="tailwag_episode_recorded",
                 segment=segment,
                 reason=reason,
-                episode_id=str(getattr(result, "episode_id", "") or getattr(episode, "id", "") or ""),
+                episode_id=str(_field(result, "episode_id", "") or episode.get("id", "") or ""),
                 extract_memory=self.extract_live_turn_memory,
                 result=result,
             )
@@ -362,7 +400,7 @@ class TailwagPackageIdentityMemoryClient:
                 event="tailwag_episode_failed",
                 segment=segment,
                 reason=reason,
-                episode_id=str(getattr(episode, "id", "") or ""),
+                episode_id=str(episode.get("id", "") or ""),
                 extract_memory=self.extract_live_turn_memory,
                 error="record_episode_failed",
             )
@@ -374,8 +412,14 @@ class TailwagPackageIdentityMemoryClient:
         del reason
         self._reset_active_episode()
 
-    def record_episode(self, episode: Any, *, extract_memory: bool = True) -> Any:
-        return self._client().record_episode(episode, extract_memory=extract_memory)
+    def record_episode(self, episode: Any, *, extract_memory: bool = False) -> Any:
+        return self._request(
+            "memory.episodes_record",
+            {
+                "episode": _plain(episode),
+                "extract_memory": bool(extract_memory),
+            },
+        )
 
     def search_semantic_memory(
         self,
@@ -389,22 +433,22 @@ class TailwagPackageIdentityMemoryClient:
         rendered_person_id = str(person_id or "").strip()
         if not rendered_text or not rendered_person_id:
             return {"episodes": [], "memory_items": []}
-        return self._client().search_semantic_memory(
-            text=rendered_text,
-            person_id=rendered_person_id,
-            building_code=building_code,
-            limit=limit,
+        return self._request(
+            "memory.semantic_search",
+            {
+                "text": rendered_text,
+                "person_id": rendered_person_id,
+                "building_code": building_code,
+                "limit": limit,
+            },
         )
 
-    def _client(self) -> Any:
-        if self._client_instance is None:
-            if self._client_factory is not None:
-                self._client_instance = self._client_factory()
-            else:
-                from tailwag_memory import TailwagMemoryClient
-
-                self._client_instance = TailwagMemoryClient.from_env()
-        return self._client_instance
+    def _request(self, operation: str, args: dict[str, Any]) -> Any:
+        return self._provider_client.request(
+            resource_id=self._resource_id,
+            operation=operation,
+            args=args,
+        )
 
     def _episode_from_segment(self, segment: PreferenceSegment) -> Any | None:
         person_id = str(getattr(segment, "person_id", "") or "").strip()
@@ -426,22 +470,22 @@ class TailwagPackageIdentityMemoryClient:
             started_at = self._active_started_at or now
             transcript = "\n\n".join(self._active_segment_text.values())
             participants = tuple(sorted(self._active_person_ids))
-        return self._episode_input(
-            id=episode_id,
-            episode_type="conversation",
-            start_time=started_at,
-            end_time=now,
-            transcript=transcript,
-            retention_class=self.retention_class,
-            place=self._place_input(
-                building_code=self.site_code or DEFAULT_PLACE_BUILDING,
-                room_id=self.place_room_id,
-            ),
-            participants=[
-                self._person_input(id=participant_id, role="speaker", source="live_chat")
+        return {
+            "id": episode_id,
+            "episode_type": "conversation",
+            "start_time": started_at,
+            "end_time": now,
+            "transcript": transcript,
+            "retention_class": self.retention_class,
+            "place": {
+                "building_code": self.site_code or DEFAULT_PLACE_BUILDING,
+                "room_id": self.place_room_id,
+            },
+            "participants": [
+                {"id": participant_id, "role": "speaker", "source": "live_chat"}
                 for participant_id in participants
             ],
-        )
+        }
 
     def _reset_active_episode(self) -> None:
         with self._episode_lock:
@@ -463,23 +507,23 @@ class TailwagPackageIdentityMemoryClient:
     ) -> None:
         turns = tuple(getattr(segment, "turns", ()) or ())
         last_turn_id = str(getattr(turns[-1], "turn_id", "") or "") if turns else ""
-        memory_results = tuple(getattr(result, "memory_results", ()) or ())
+        memory_results = tuple(_field(result, "memory_results", ()) or ())
         created_count = sum(
-            len(tuple(getattr(item, "created_memory_ids", ()) or ()))
+            len(tuple(_field(item, "created_memory_ids", ()) or ()))
             for item in memory_results
         )
         addressed_count = sum(
-            len(tuple(getattr(item, "addressed_memory_ids", ()) or ()))
+            len(tuple(_field(item, "addressed_memory_ids", ()) or ()))
             for item in memory_results
         )
         supported_count = sum(
-            len(tuple(getattr(item, "supported_memory_ids", ()) or ()))
+            len(tuple(_field(item, "supported_memory_ids", ()) or ()))
             for item in memory_results
         )
         error_count = sum(
             1
             for item in memory_results
-            if str(getattr(item, "error", "") or "").strip()
+            if str(_field(item, "error", "") or "").strip()
         )
         self._latency.emit(
             event=event,
@@ -497,24 +541,6 @@ class TailwagPackageIdentityMemoryClient:
             tailwag_memory_error_count=error_count,
             tailwag_episode_error=error or None,
         )
-
-    @staticmethod
-    def _person_input(**kwargs: Any) -> Any:
-        from tailwag_memory import PersonInput
-
-        return PersonInput(**kwargs)
-
-    @staticmethod
-    def _place_input(**kwargs: Any) -> Any:
-        from tailwag_memory import PlaceInput
-
-        return PlaceInput(**kwargs)
-
-    @staticmethod
-    def _episode_input(**kwargs: Any) -> Any:
-        from tailwag_memory import EpisodeInput
-
-        return EpisodeInput(**kwargs)
 
 
 def _embedding_list(value: Any) -> list[float]:
@@ -597,6 +623,12 @@ def _plain(value: Any) -> dict[str, Any]:
         return asdict(value)
     payload = getattr(value, "__dict__", None)
     return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def _segment_transcript(segment: PreferenceSegment) -> str:

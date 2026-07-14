@@ -14,7 +14,7 @@ from .models import (
     PersonProfile,
 )
 from .noop import NoopIdentityMemoryClient
-from .tailwag_package import TailwagPackageIdentityMemoryClient
+from .tailwag_http import TailwagHttpIdentityMemoryClient
 
 __all__ = [
     "BiometricCandidate",
@@ -27,5 +27,5 @@ __all__ = [
     "OwnerResolution",
     "PersonMemoryContext",
     "PersonProfile",
-    "TailwagPackageIdentityMemoryClient",
+    "TailwagHttpIdentityMemoryClient",
 ]

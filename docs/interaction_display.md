@@ -24,6 +24,8 @@ resources:
     capabilities:
       - display.command
       - display.interaction
+      - display.image
+      - display.response
 ```
 
 The default `static_interaction` profile selects:
