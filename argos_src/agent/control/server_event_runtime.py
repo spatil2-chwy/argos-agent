@@ -649,7 +649,7 @@ class ServerEventRuntime:
                     "status": "completed",
                     "content": [
                         {
-                            "type": "text",
+                            "type": "output_text",
                             "text": turn.assistant_transcript.strip(),
                         }
                     ],
@@ -702,7 +702,7 @@ class ServerEventRuntime:
                                 "status": "completed",
                                 "content": [
                                     {
-                                        "type": "text",
+                                        "type": "output_text",
                                         "text": turn.assistant_transcript.strip(),
                                     }
                                 ],

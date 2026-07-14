@@ -1352,6 +1352,18 @@ def test_response_done_flushes_complete_audio_transcript_to_display():
         "subtitle",
         {"text": "partial transcript completed", "duration_ms": 5000},
     )
+    assert agent._history_items["asst-final-display"].input_item == {
+        "id": "asst-final-display",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "partial transcript completed",
+            }
+        ],
+    }
 
 
 def test_owner_turn_is_requested_when_audio_turn_commits():
