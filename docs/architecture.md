@@ -190,8 +190,10 @@ History does not include:
 - dynamic prompt blocks
 - raw VAD/wake/admission decisions
 
-The runtime clears older Realtime conversation items on resolved owner handoff
-while protecting active unresolved items.
+The runtime selects explicit inference-history scopes before each response:
+known owners reuse `owner:<person_id>` scopes, and unknown speakers use
+contiguous anonymous patch scopes. Server-side conversation deletion is not the
+owner privacy boundary.
 
 ## Tool Calling Model
 

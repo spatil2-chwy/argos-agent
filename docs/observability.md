@@ -44,7 +44,8 @@ Typical human turn flow:
 | `realtime` | `event=speech_end` | local end-of-speech detection fired |
 | `realtime` | `event=audio_commit` | mic audio was committed into the Realtime session |
 | `realtime` | `event=exchange_context` | face, speaker, owner, and pending internal-event context captured for the exchange |
-| `realtime` | `event=owner_handoff` | resolved owner key changed and prior Realtime history was server-acknowledged as cleared |
+| `realtime` | `event=inference_scope_selected` | local owner/anonymous inference scope selected for the next model request |
+| `realtime` | `event=anonymous_history_quarantined` | an anonymous assistant item mentioned a known name and was excluded from future anonymous inference |
 | `realtime` | `event=response_create` | the model response was explicitly requested |
 | `realtime` | `metric=first_audio_latency_s` | speech end to first playback audio delta |
 | `realtime` | `event=tool_call_requested` | the model requested a tool call |
@@ -179,21 +180,18 @@ available. Realtime server failures also preserve provider-specific
 ## Conversation Segments
 
 The dashboard derives conversation segments from consecutive human exchanges in
-the same run that share the same history owner key:
+the same run that share the same displayed owner key:
 
 - `owner:<person_id>` for recognized owners
 - `anonymous` when no owner is safely resolved
 
-This mirrors owner-scoped Realtime history. Consecutive exchanges with the same
-owner key keep the model-visible conversation context. When the key changes,
-the runtime deletes older Realtime conversation items while protecting current
-in-flight items, waits for `conversation.item.deleted` acknowledgements, then
-emits `owner_handoff` with `history_action=cleared`. If acknowledgements time
-out, the runtime emits `history_action=clear_timeout`; if a delete cannot be
-sent, it emits `history_action=clear_failed`. Either failure cancels the turn
-before `response.create`. The dashboard nests exchanges under these conversation
-segments so an operator can see when Argos was carrying one person's context
-versus when it reset for a new or unknown speaker.
+Model-visible context is now shown through `inference_scope_selected` and the
+`response_create` prompt snapshot fields. Known owners use reusable
+`owner:<person_id>` inference scopes. Unknown speakers use contiguous
+`anonymous:<patch_id>` scopes, so a new unknown patch after a known owner does
+not inherit the earlier unknown patch. The dashboard nests exchanges under
+displayed conversation segments and shows the explicit selected inference items
+in each response prompt panel.
 
 Memory extraction has a related but separate signal. Completed attributed turns
 are buffered into speaker-owned segments and flushed on speaker handoff,

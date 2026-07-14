@@ -131,17 +131,32 @@ class ToolRuntime:
                 else {}
             ),
         )
-        host._queue_pending_local_created_item(turn.req_id, "function_call_output")
-        host._send_event(
-            {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "function_call_output",
-                    "call_id": pending.call_id,
-                    "output": host._stringify_tool_output(content),
-                },
-            }
+        output = host._stringify_tool_output(content)
+        item_id = host._state_controller()._new_local_history_item_id()
+        host._register_turn_history_item(
+            turn,
+            item_id,
+            item_type="function_call_output",
+            status="done",
+            permitted_for_inference=True,
+            input_item={
+                "id": item_id,
+                "type": "function_call_output",
+                "call_id": pending.call_id,
+                "output": output,
+                "status": "completed",
+            },
         )
+        update_snapshot = getattr(host, "_update_history_item_snapshot", None)
+        if callable(update_snapshot):
+            update_snapshot(
+                item_id,
+                text="\n".join(
+                    part for part in (f"call_id={pending.call_id}", output) if part
+                ),
+                item_type="function_call_output",
+                status="done",
+            )
         self.maybe_append_artifact_message(turn, pending.tool_name, artifact)
         turn.pending_tool_calls = max(0, turn.pending_tool_calls - 1)
         turn.pending_call_ids.discard(pending.call_id)
@@ -203,17 +218,31 @@ class ToolRuntime:
             content.append({"type": "input_image", "image_url": rendered})
         if len(content) == 1:
             return
-        self._host._queue_pending_local_created_item(turn.req_id, "message", "user")
-        self._host._send_event(
-            {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "user",
-                    "content": content,
-                },
-            }
+        item_id = self._host._state_controller()._new_local_history_item_id()
+        self._host._register_turn_history_item(
+            turn,
+            item_id,
+            item_type="message",
+            role="user",
+            status="done",
+            permitted_for_inference=True,
+            input_item={
+                "id": item_id,
+                "type": "message",
+                "role": "user",
+                "status": "completed",
+                "content": content,
+            },
         )
+        update_snapshot = getattr(self._host, "_update_history_item_snapshot", None)
+        if callable(update_snapshot):
+            update_snapshot(
+                item_id,
+                text="[TOOL ARTIFACT] Visual result from " + str(tool_name),
+                item_type="message",
+                role="user",
+                status="done",
+            )
 
     @staticmethod
     def build_schema(tool: Any) -> dict[str, Any]:

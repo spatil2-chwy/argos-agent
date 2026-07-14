@@ -117,11 +117,14 @@ type ModelPrompt = {
   dynamic_context_chars?: number | null;
   delivery_instructions_chars?: number | null;
   history_snapshot_chars?: number | null;
-  history_owner_key?: string | null;
-  history_item_count?: number | null;
-  turn_history_item_count?: number | null;
-  history_item_ids?: string | null;
-  turn_history_item_ids?: string | null;
+  inference_owner_key?: string | null;
+  inference_scope_id?: string | null;
+  selected_history_item_count?: number | null;
+  selected_current_turn_item_count?: number | null;
+  selected_item_count?: number | null;
+  selected_item_ids?: string | null;
+  selected_history_item_ids?: string | null;
+  selected_current_turn_item_ids?: string | null;
 };
 
 type LifecycleStage = {
@@ -238,7 +241,8 @@ const stageIcon: Record<string, React.ReactNode> = {
   speech_end: <Mic size={18} />,
   audio_commit: <Radio size={18} />,
   identity: <UserRound size={18} />,
-  owner_handoff: <MessagesSquare size={18} />,
+  inference_scope: <MessagesSquare size={18} />,
+  history_quarantined: <AlertTriangle size={18} />,
   memory_flushed: <MessagesSquare size={18} />,
   tailwag_episode_recorded: <Database size={18} />,
   tailwag_episode_failed: <AlertTriangle size={18} />,
@@ -358,7 +362,8 @@ const stageDetailKeys: Record<string, string[]> = {
     "audio_duration_s",
     "capture_vad_positive_blocks"
   ],
-  owner_handoff: ["old_owner_key", "new_owner_key", "deleted_items", "protected_items", "history_action"],
+  inference_scope: ["old_scope_id", "new_scope_id", "scope_kind", "scope_reused", "selected_item_count", "excluded_item_count"],
+  history_quarantined: ["quarantined_item_ids", "known_name_hits"],
   memory_flushed: [
     "memory_person_id",
     "memory_turn_count",
@@ -597,9 +602,11 @@ function ModelPromptList({ prompts }: { prompts: ModelPrompt[] }) {
               ["static_prompt_chars", prompt.static_prompt_chars],
               ["dynamic_context_chars", prompt.dynamic_context_chars],
               ["history_snapshot_chars", prompt.history_snapshot_chars],
-              ["history_owner", prompt.history_owner_key],
-              ["history_items", prompt.history_item_count],
-              ["turn_history_items", prompt.turn_history_item_count]
+              ["inference_owner", prompt.inference_owner_key],
+              ["inference_scope", prompt.inference_scope_id],
+              ["selected_history_items", prompt.selected_history_item_count],
+              ["selected_current_items", prompt.selected_current_turn_item_count],
+              ["selected_items", prompt.selected_item_count]
             ]}
           />
           <TextBlock label="dynamic context" text={prompt.dynamic_context} />
@@ -679,7 +686,7 @@ function ConversationSummary({ segment }: { segment?: ConversationSegment }) {
   return (
     <section className={`conversation-summary ${segment.owner_id ? "resolved" : "anonymous"}`}>
       <div>
-        <span>{segment.boundary_reason === "owner_handoff" ? "Owner handoff" : "Conversation segment"}</span>
+        <span>{segment.boundary_reason === "inference_scope_selected" ? "Scope selected" : "Conversation segment"}</span>
         <strong>{segment.owner_label}</strong>
       </div>
       <div className="conversation-summary-stats">

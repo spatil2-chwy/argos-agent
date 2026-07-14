@@ -649,7 +649,7 @@ button {
   color: #b54708;
 }
 
-.stage-owner_handoff .stage-icon,
+.stage-inference_scope .stage-icon,
 .stage-memory_flushed .stage-icon,
 .stage-tailwag_episode_recorded .stage-icon,
 .stage-tailwag_episode_skipped .stage-icon,

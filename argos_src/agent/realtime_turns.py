@@ -105,6 +105,10 @@ class QueuedTurn:
     assistant_item_ids: set[str] = field(default_factory=set)
     function_call_item_ids: set[str] = field(default_factory=set)
     pending_call_ids: set[str] = field(default_factory=set)
+    inference_owner_key: str = ""
+    inference_scope_id: str = ""
+    selected_inference_history_item_ids: list[str] = field(default_factory=list)
+    selected_inference_current_item_ids: list[str] = field(default_factory=list)
     response_finished: threading.Event = field(default_factory=threading.Event)
     playback_finished: threading.Event = field(default_factory=threading.Event)
 
@@ -126,7 +130,7 @@ class PendingToolCall:
 
 @dataclass
 class PendingCreatedItem:
-    """Local conversation.item.create awaiting server item creation."""
+    """Client-created server item awaiting a matching creation event."""
 
     owner_req_id: str
     expected_type: str

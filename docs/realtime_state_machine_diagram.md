@@ -118,8 +118,8 @@ flowchart TD
     dedup --> render["render [INTERNAL EVENT] or [PENDING EVENTS]"]
     render --> enqueue["enqueue_internal_event"]
     enqueue --> textTurn["turn: queued text/internal turn"]
-    textTurn --> item["conversation.item.create role=system"]
-    item --> response["response.create"]
+    textTurn --> item["local explicit-input system item"]
+    item --> response["response.create(input=[selected items])"]
     response --> model["Realtime model audio/tools"]
 ```
 

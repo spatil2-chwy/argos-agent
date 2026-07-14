@@ -35,6 +35,18 @@ class _Host:
         self.pending_items = []
         self.followups = []
         self.armed_person_ids = []
+        self.registered_items = []
+        self.snapshots = {}
+
+    def _state_controller(self):
+        return SimpleNamespace(_new_local_history_item_id=lambda: f"local-{len(self.registered_items) + 1}")
+
+    def _register_turn_history_item(self, turn, item_id, **kwargs):
+        turn.history_item_ids.add(item_id)
+        self.registered_items.append((turn.req_id, item_id, kwargs))
+
+    def _update_history_item_snapshot(self, item_id, **kwargs):
+        self.snapshots[item_id] = kwargs
 
     def _is_turn_terminal(self, turn):
         return turn is None or bool(getattr(turn, "finalized", False))
@@ -95,8 +107,10 @@ def test_tool_runtime_waits_for_all_tool_results_before_followup() -> None:
 
     assert turn.pending_tool_calls == 0
     assert host.followups == [turn.req_id]
-    assert host.pending_items[-1] == (turn.req_id, "function_call_output", "")
-    assert host.sent_events[-1]["item"]["type"] == "function_call_output"
+    assert host.pending_items == []
+    assert host.sent_events == []
+    assert host.registered_items[-1][2]["item_type"] == "function_call_output"
+    assert host.registered_items[-1][2]["permitted_for_inference"] is True
 
 
 def test_tool_runtime_appends_tool_artifact_message() -> None:
@@ -110,8 +124,9 @@ def test_tool_runtime_appends_tool_artifact_message() -> None:
         {"images": ["abc123"]},
     )
 
-    assert host.pending_items == [(turn.req_id, "message", "user")]
-    item = host.sent_events[0]["item"]
+    assert host.pending_items == []
+    assert host.sent_events == []
+    item = host.registered_items[0][2]["input_item"]
     assert item["role"] == "user"
     assert item["content"][1]["image_url"] == "data:image/png;base64,abc123"
 
