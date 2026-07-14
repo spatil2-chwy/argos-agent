@@ -2787,6 +2787,27 @@ def test_closed_admission_clears_passive_alert_display():
     assert agent._display_mode == "idle"
 
 
+def test_wakeword_debug_uses_environment_without_callback_error(monkeypatch):
+    agent = _make_agent()
+    messages = []
+    agent.logger = SimpleNamespace(
+        info=lambda *args, **kwargs: messages.append((args, kwargs)),
+        warning=lambda *args, **kwargs: None,
+        exception=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+    )
+    agent._last_wake_debug_log_s = 0.0
+    agent._wake_word = SimpleNamespace(threshold=0.5)
+    monkeypatch.setenv("ARGOS_WAKEWORD_DEBUG", "1")
+
+    agent._log_wakeword_debug(
+        wake_detected=False,
+        wake_output={"open_wake_word": {"predictions": {"hey_puffle": 0.1}}},
+    )
+
+    assert messages
+
+
 def test_wake_word_during_speaking_does_not_interrupt_response():
     import numpy as np
 
