@@ -192,7 +192,8 @@ def test_commit_modality_enrolls_once_then_observes_remaining_face_samples() -> 
     ]
     assert result["enrollment"]["saved"] is True
     assert len(result["updates"]) == 4
-    assert fake.calls[1][1]["evidence"]["owner_source"] == "audio_face_agree"
+    assert fake.calls[0][1]["consent_status"] == "consented"
+    assert fake.calls[1][1]["evidence"] == lab._operator_enrollment_evidence("person_jane")
     assert fake.calls[1][1]["metadata"]["enrollment_mode"] == "operator_controlled_live"
 
 
@@ -217,6 +218,8 @@ def test_commit_modality_enrolls_once_then_observes_remaining_voice_samples() ->
     ]
     assert result["enrollment"]["saved"] is True
     assert len(result["updates"]) == 4
+    assert fake.calls[0][1]["consent_status"] == "consented"
+    assert fake.calls[1][1]["evidence"] == lab._operator_enrollment_evidence("person_jane")
     assert fake.calls[1][1]["evidence"]["audio_speaker_id"] == "person_jane"
 
 

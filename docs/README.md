@@ -25,7 +25,7 @@ Start with these in order:
 
 - `face_recognition.md`: face enrollment, recognition preprocessing, strict primary face ownership, and display review.
 - `speaker_recognition.md`: turn-owned speaker matching, voice enrollment, and ownership fallback.
-- `identity_memory.md`: the package boundary between Argos sensing and Tailwag-owned identity, biometrics, Slack ingestion, and memory.
+- `identity_memory.md`: the HTTP provider boundary between Argos sensing and Tailwag-owned identity, biometrics, Slack ingestion, and memory.
 
 ## Providers, Tools, And Surfaces
 

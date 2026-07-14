@@ -86,9 +86,10 @@ camera + optional depth
 
 Tailwag is the semantic memory writer and person-context source. Argos sends the
 full active conversation episode to Tailwag from speaker-owned realtime turn
-text. Prompt views still surface as `About` and `Potential Followups`, but the
-storage and extraction contract lives outside Argos. See `identity_memory.md`
-for the Tailwag-backed provider contract.
+text. Prompt views keep Argos-owned `Directory` lines and paste Tailwag's
+`context_markdown` block, currently headed `[PERSON MEMORY]`, into the resolved
+speaker context. See `identity_memory.md` for the Tailwag-backed provider
+contract.
 
 Important distinctions:
 

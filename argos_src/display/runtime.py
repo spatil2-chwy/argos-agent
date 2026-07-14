@@ -288,10 +288,14 @@ class DisplayRuntime:
                     "requestId": rendered_request_id,
                 }
             try:
+                response_timeout_ms = max(1, int(float(timeout_sec) * 1000))
                 response = self._request(
                     OP_DISPLAY_AWAIT_RESPONSE,
-                    {"requestId": rendered_request_id},
-                    timeout_ms=max(1, int(float(timeout_sec) * 1000)),
+                    {
+                        "requestId": rendered_request_id,
+                        "timeoutMs": response_timeout_ms,
+                    },
+                    timeout_ms=response_timeout_ms + 1000,
                 )
             except ProviderTimeout:
                 self.clear()

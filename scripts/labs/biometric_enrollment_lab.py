@@ -31,12 +31,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from argos_src.identity_memory import TailwagPackageIdentityMemoryClient
+from argos_src.identity_memory import TailwagHttpIdentityMemoryClient
 from argos_src.speaker_recognition.policy import SAMPLE_RATE, clip_stats, enrollment_rejection_reason
 from scripts.labs.enrollment_audio_collection import _capture_microphone_utterance_raw
 from scripts.labs.enrollment_collection_common import (
     DEFAULT_COLLECTION_ROOT,
     create_display_runtime_for_profile,
+    create_identity_memory_client_for_profile,
     json_ready,
     load_profile,
     resolve_collection_session,
@@ -281,7 +282,7 @@ def _countdown(display: Any | None, seconds: int) -> None:
 def _identity_from_args(
     args: argparse.Namespace,
     *,
-    identity_memory: TailwagPackageIdentityMemoryClient,
+    identity_memory: TailwagHttpIdentityMemoryClient,
     site_code: str,
 ) -> dict[str, Any]:
     person_name = str(args.person_name or "").strip()
@@ -701,7 +702,7 @@ def _operator_enrollment_evidence(person_id: str) -> dict[str, Any]:
 
 def _commit_modality(
     *,
-    identity_memory: TailwagPackageIdentityMemoryClient,
+    identity_memory: TailwagHttpIdentityMemoryClient,
     modality: str,
     person_id: str,
     embeddings: list[Any],
@@ -781,7 +782,7 @@ def main() -> int:
     from scripts.labs.face_lab_common import build_enrollment_policy, build_face_service
 
     configure_logging(bool(args.verbose))
-    identity_memory: TailwagPackageIdentityMemoryClient | None = None
+    identity_memory: TailwagHttpIdentityMemoryClient | None = None
     display = None
     face_service = None
     face_config: dict[str, Any] = {}
@@ -801,7 +802,10 @@ def main() -> int:
         session_dir = Path(session["session_dir"])
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        identity_memory = TailwagPackageIdentityMemoryClient(site_code=site_code)
+        identity_memory = create_identity_memory_client_for_profile(
+            profile,
+            site_code=site_code,
+        )
         person = _identity_from_args(args, identity_memory=identity_memory, site_code=site_code)
         person_id = str(person.get("person_id") or "").strip()
         if not person_id:

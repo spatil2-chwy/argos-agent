@@ -405,6 +405,10 @@ has turn watchdogs so one stuck response does not hold the runtime forever:
 - tool waits terminate the turn with `tool_timeout`
 - local playback stalls after model completion force playback completion
 
+`enroll_visible_person` gets a longer local tool watchdog budget because face
+enrollment can block on the display accept/reject review before returning a tool
+result.
+
 These watchdogs are local recovery paths, not Realtime API features.
 
 ## Navigation and Patrol Interaction

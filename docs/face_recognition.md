@@ -9,7 +9,7 @@ Read this with:
 - `argos_src/face_recognition/presence_cache.py`
 - `argos_src/tools/unitree_go2/vision/enroll_visible_person.py`
 - `argos_src/tools/unitree_go2/vision/resolve_employee_identity.py`
-- `argos_src/identity_memory/tailwag_package.py`
+- `argos_src/identity_memory/tailwag_http.py`
 - `argos_src/agent/control/audio_runtime.py`
 - `argos_src/agent/agent_runtime.py`
 - `argos_src/agent/runtime_context.py`
@@ -65,7 +65,7 @@ owner policy       -> owner_id for the turn
 | `presence_cache.py` | Stores current visible people, strict primary face identity, and `/go2/face_presence` snapshot. |
 | `enroll_visible_person.py` | LLM tool wrapper for safe live enrollment. The LLM passes only name and optional username. |
 | `resolve_employee_identity.py` | LLM tool for employee-directory lookup before enrollment. |
-| `identity_memory/tailwag_package.py` | Calls Tailwag for directory lookup, biometric search/enrollment, encounters, and prompt context. |
+| `identity_memory/tailwag_http.py` | Calls Tailwag for directory lookup, biometric search/enrollment, encounters, and prompt context. |
 | `control/tool_runtime.py` | Arms voice enrollment after face enrollment succeeds. |
 
 ## Live Enrollment Flow

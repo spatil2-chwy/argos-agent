@@ -17,6 +17,7 @@ def create_provider_client(
     connect_endpoints: list[str] | tuple[str, ...] | None = None,
     resource_id: str | None = None,
     manifest=None,
+    auth_token_env: str | None = None,
 ) -> ProviderClient:
     """Create a provider client for the selected transport."""
     selected = str(
@@ -33,12 +34,12 @@ def create_provider_client(
                 "and resource_id."
             )
         from argos_src.provider_api.transports.http import HttpProviderClient
-
         return HttpProviderClient(
             connect_endpoints=connect_endpoints,
             key_prefix=key_prefix,
             resource_id=resource_id,
             manifest=manifest,
+            auth_token_env=auth_token_env,
         )
     if selected in {"zenoh", "bridge"}:
         if not key_prefix or not resource_id:

@@ -332,7 +332,7 @@ def _load_factory_for_memory_tests(monkeypatch, *, created):
     monkeypatch.setitem(sys.modules, "argos_src.agent.startup", startup_mod)
 
     identity_memory_mod = types.ModuleType("argos_src.identity_memory")
-    identity_memory_mod.TailwagPackageIdentityMemoryClient = _FakeIdentityMemoryClient
+    identity_memory_mod.TailwagHttpIdentityMemoryClient = _FakeIdentityMemoryClient
     identity_memory_mod.NoopIdentityMemoryClient = _FakeIdentityMemoryClient
     monkeypatch.setitem(sys.modules, "argos_src.identity_memory", identity_memory_mod)
 
@@ -3071,9 +3071,13 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
         def person_context(self, person_id, **_kwargs):
             calls.append(person_id)
             return SimpleNamespace(
-                directory_profile_lines=(f"directory for {person_id}",),
-                profile_lines=(f"memory for {person_id}",),
-                followup_lines=(f"followup for {person_id}",),
+                context_markdown=(
+                    "[PERSON MEMORY]\n"
+                    "Preferences:\n"
+                    f"- memory for {person_id}\n"
+                    "Potential Follow-Ups:\n"
+                    f"- followup for {person_id}"
+                ),
                 preferred_language=f"language-{person_id}",
             )
 
@@ -3125,9 +3129,17 @@ def test_capture_turn_context_enriches_memory_only_for_owner():
     assert alice.directory_profile_lines == ("title: Engineer",)
     assert alice.memory_profile_lines == ()
     assert alice.potential_followups == ()
-    assert bob.directory_profile_lines == ("directory for person-2",)
-    assert bob.memory_profile_lines == ("memory for person-2",)
-    assert bob.potential_followups == ("followup for person-2",)
+    assert alice.__dict__.get("context_markdown", "") == ""
+    assert bob.directory_profile_lines == ("title: PM",)
+    assert bob.memory_profile_lines == ()
+    assert bob.potential_followups == ()
+    assert bob.context_markdown == (
+        "[PERSON MEMORY]\n"
+        "Preferences:\n"
+        "- memory for person-2\n"
+        "Potential Follow-Ups:\n"
+        "- followup for person-2"
+    )
     assert bob.preferred_language == "language-person-2"
 
 
@@ -3211,12 +3223,12 @@ def test_factory_wires_identity_memory_into_prompt_extraction_and_face(monkeypat
 
     assert len(created["identity_memory_clients"]) == 1
     client = created["identity_memory_clients"][0]
-    assert client.kwargs == {
-        "site_code": "",
-        "place_room_id": "lab",
-        "retention_class": "priority",
-        "extract_live_turn_memory": False,
-    }
+    assert client.kwargs["site_code"] == ""
+    assert client.kwargs["place_room_id"] == "lab"
+    assert client.kwargs["retention_class"] == "priority"
+    assert client.kwargs["extract_live_turn_memory"] is False
+    assert client.kwargs["resource_id"] == "memory"
+    assert client.kwargs["provider_client"] is not None
     assert agent.kwargs["identity_memory_client"] is client
     assert agent.kwargs["memory_context_compiler"] is client
     assert agent.kwargs["preference_extractor"] is client
@@ -3379,8 +3391,7 @@ def test_people_context_includes_directory_profile_lines():
                 "manager: Dan Burns",
                 "tenure: 0 year(s), 3 month(s), 5 day(s)",
             ),
-            memory_profile_lines=("preferred name: sash",),
-            potential_followups=(),
+            context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: sash",
             preferred_language="",
         ),
     ]
@@ -3407,7 +3418,40 @@ def test_people_context_includes_directory_profile_lines():
     ) in rendered
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- Alice (met 2 times)" in rendered
-    assert "About: preferred name: sash" in rendered
+    assert "[PERSON MEMORY]\nPreferences:\n- preferred name: sash" in rendered
+
+
+def test_people_context_treats_string_directory_profile_as_one_line():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            directory_profile_lines="title: AI Technologist II (Analyst)",
+            context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: sash",
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice"],
+        },
+        audio_speaker_id="person-1",
+        owner_id="person-1",
+        owner_source="audio_face_agree",
+        speaker_visible=True,
+    )
+
+    assert "Directory: title: AI Technologist II (Analyst)" in rendered
+    assert "Directory: t; i; t; l; e" not in rendered
 
 
 def test_people_context_includes_directory_only_for_visible_non_owner_people():
@@ -3418,8 +3462,7 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
             bbox_area=20.0,
             interaction_count=2,
             directory_profile_lines=("title: Robotics Engineer",),
-            memory_profile_lines=("pet: Luna is her dog.",),
-            potential_followups=("Ask about the Cape Cod trip.",),
+            context_markdown="[PERSON MEMORY]\nPets:\n- Luna is her dog.",
             preferred_language="",
         ),
         SimpleNamespace(
@@ -3428,8 +3471,7 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
             bbox_area=15.0,
             interaction_count=1,
             directory_profile_lines=("title: Product Manager",),
-            memory_profile_lines=("preferred name: Bobby",),
-            potential_followups=(),
+            context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: Bobby",
             preferred_language="",
         ),
     ]
@@ -3453,12 +3495,11 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
     assert "Directory: title: Robotics Engineer" not in rendered
-    assert "About: pet: Luna is her dog." not in rendered
-    assert "Potential Followups: Ask about the Cape Cod trip." not in rendered
+    assert "Pets:\n- Luna is her dog." not in rendered
     assert "[PERSON SPEAKING TO YOU]" in rendered
     assert "- Bob (met once before)" in rendered
     assert "Directory: title: Product Manager" in rendered
-    assert "About: preferred name: Bobby" in rendered
+    assert "[PERSON MEMORY]\nPreferences:\n- preferred name: Bobby" in rendered
 
 
 def test_people_context_omits_audio_face_agreement_logistics():

@@ -13,6 +13,15 @@ providers:
     connect_endpoints:
       - http://localhost:4173
 
+  - id: memory
+    transport: http
+    key_prefix: argos/providers/memory
+    connect_endpoints:
+      - http://localhost:8000
+    auth:
+      type: bearer
+      token_env: TAILWAG_API_BEARER_TOKEN
+
 resources:
   - id: base
     kind: robot_base
@@ -43,3 +52,16 @@ resources:
     capabilities:
       - display.command
       - display.interaction
+      - display.image
+      - display.response
+
+  - id: memory
+    kind: memory
+    provider: memory
+    capabilities:
+      - memory.identity
+      - memory.person_context
+      - memory.episodes
+      - memory.semantic_search
+      - memory.biometrics
+      - memory.owner_resolution

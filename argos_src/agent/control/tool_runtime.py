@@ -160,6 +160,7 @@ class ToolRuntime:
         self.maybe_append_artifact_message(turn, pending.tool_name, artifact)
         turn.pending_tool_calls = max(0, turn.pending_tool_calls - 1)
         turn.pending_call_ids.discard(pending.call_id)
+        turn.pending_tool_names_by_call_id.pop(pending.call_id, None)
         if pending.function_item_id:
             turn.function_call_item_ids.add(pending.function_item_id)
         if host._is_turn_terminal(turn):

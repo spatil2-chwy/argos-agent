@@ -14,6 +14,10 @@ from argos_src.agent.realtime_turns import (
     TURN_PHASE_WAITING_TOOLS,
 )
 
+LONG_RUNNING_TOOL_TIMEOUTS_SEC = {
+    "enroll_visible_person": 45.0,
+}
+
 
 class TurnWatchdogRuntime:
     """Cancel or recover turns that stop making progress."""
@@ -60,7 +64,11 @@ class TurnWatchdogRuntime:
                     continue
             if turn.phase == TURN_PHASE_WAITING_TOOLS and turn.pending_tool_calls > 0:
                 started_at = turn.phase_updated_at
-                if current_time - started_at >= response_timeout_s:
+                effective_timeout_s = self._tool_timeout_s(
+                    turn,
+                    default_timeout_s=response_timeout_s,
+                )
+                if current_time - started_at >= effective_timeout_s:
                     host.logger.warning(
                         "Realtime tool watchdog cancel req_id=%s pending_tool_calls=%s",
                         turn.req_id,
@@ -89,3 +97,13 @@ class TurnWatchdogRuntime:
                         turn.response_id,
                     )
                     host._force_complete_stalled_playback(turn, reason="stall_timeout")
+
+    @staticmethod
+    def _tool_timeout_s(turn: Any, *, default_timeout_s: float) -> float:
+        timeout_s = float(default_timeout_s)
+        pending_names = getattr(turn, "pending_tool_names_by_call_id", {}) or {}
+        for tool_name in pending_names.values():
+            override_s = LONG_RUNNING_TOOL_TIMEOUTS_SEC.get(str(tool_name or "").strip())
+            if override_s is not None:
+                timeout_s = max(timeout_s, float(override_s))
+        return timeout_s

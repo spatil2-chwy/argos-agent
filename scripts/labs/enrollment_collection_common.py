@@ -17,6 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from argos_src.display import DisplayRuntime
+from argos_src.identity_memory import TailwagHttpIdentityMemoryClient
 from argos_src.profile_config import ScenarioProfile, load_scenario_profile
 from argos_src.provider_api.factory import create_provider_client
 from scripts.labs.perception_lab_common import current_git_commit, write_json
@@ -201,6 +202,49 @@ def create_provider_for_resource(
         connect_endpoints=connect_endpoints,
         resource_id=resource_id,
         manifest=manifest,
+    )
+
+
+def create_identity_memory_client_for_profile(
+    profile: ScenarioProfile,
+    *,
+    site_code: str = "",
+) -> TailwagHttpIdentityMemoryClient:
+    if not bool(getattr(profile.identity_memory, "enabled", True)):
+        raise ValueError("identity_memory.enabled must be true for biometric enrollment.")
+    if str(getattr(profile.identity_memory, "backend", "") or "").strip() == "noop":
+        raise ValueError("biometric enrollment requires identity_memory.backend=tailwag_http.")
+    resource_id = str(getattr(profile.resources, "identity_memory", "") or "").strip()
+    manifest = profile.manifest
+    if not resource_id or manifest is None:
+        raise ValueError("identity_memory.enabled requires resources.identity_memory.")
+    resource = manifest.resource_by_id(resource_id)
+    if resource is None or not resource.has_capability("memory.identity"):
+        raise ValueError(
+            "resources.identity_memory must select a manifest resource with memory.identity."
+        )
+    provider = manifest.provider_by_id(resource.provider)
+    if provider is None:
+        raise ValueError(
+            f"Memory resource '{resource.id}' references unknown provider '{resource.provider}'."
+        )
+    client = create_provider_client(
+        transport=provider.transport,
+        key_prefix=provider.key_prefix,
+        connect_endpoints=provider.connect_endpoints,
+        resource_id=resource.id,
+        manifest=manifest,
+        auth_token_env=(
+            getattr(provider.auth, "token_env", "") if provider.auth is not None else ""
+        ),
+    )
+    return TailwagHttpIdentityMemoryClient(
+        provider_client=client,
+        resource_id=resource.id,
+        site_code=str(site_code or profile.identity_memory.site_code or "").strip(),
+        place_room_id=profile.identity_memory.place_room_id,
+        retention_class=profile.identity_memory.retention_class,
+        extract_live_turn_memory=profile.identity_memory.extract_live_turn_memory,
     )
 
 

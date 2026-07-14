@@ -8,7 +8,7 @@ Read this with:
 - `argos_src/speaker_recognition/service.py`
 - `argos_src/speaker_recognition/policy.py`
 - `argos_src/speaker_recognition/backend.py`
-- `argos_src/identity_memory/tailwag_package.py`
+- `argos_src/identity_memory/tailwag_http.py`
 
 This document explains the Argos speaker path:
 
@@ -57,7 +57,7 @@ successful face enrollment
 | `argos_src/speaker_recognition/service.py` | Main orchestration layer for query embedding lookup and voice reference storage. |
 | `argos_src/speaker_recognition/policy.py` | Clip stats, minimal safety gates, and owner-resolution rules. |
 | `argos_src/speaker_recognition/backend.py` | SpeechBrain ECAPA backend wrapper. |
-| `argos_src/identity_memory/tailwag_package.py` | Calls Tailwag for voice search, voice enrollment, owner resolution, and prompt context. |
+| `argos_src/identity_memory/tailwag_http.py` | Calls Tailwag for voice search, voice enrollment, owner resolution, and prompt context. |
 
 ## Query Flow
 
@@ -175,7 +175,7 @@ If the clip passes local gates, Argos sends the normalized embedding to Tailwag.
 ## Storage Model
 
 Durable voice references live in `tailwag-memory`, reached through
-`identity_memory_client` and `argos_src/identity_memory/tailwag_package.py`.
+`identity_memory_client` and `argos_src/identity_memory/tailwag_http.py`.
 Argos does not maintain a separate in-repo speaker-reference database.
 
 When `SpeakerRecognitionService.try_store_reference()` enrolls a voice

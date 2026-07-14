@@ -567,6 +567,7 @@ class ServerEventRuntime:
                 )
         turn.pending_tool_calls += 1
         turn.pending_call_ids.add(call_id)
+        turn.pending_tool_names_by_call_id[call_id] = tool_name
         self._set_turn_phase(
             turn,
             TURN_PHASE_WAITING_TOOLS,

@@ -11,6 +11,7 @@ class PersonMemoryContext:
     directory_profile_lines: tuple[str, ...] = ()
     profile_lines: tuple[str, ...] = ()
     followup_lines: tuple[str, ...] = ()
+    context_markdown: str = ""
     preferred_language: str = "English"
 
 

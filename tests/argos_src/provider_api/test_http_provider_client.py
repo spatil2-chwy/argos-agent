@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from urllib.error import HTTPError
 
 import pytest
 
 from argos_src.provider_api.errors import ProviderTimeout
 from argos_src.provider_api.factory import create_provider_client
+from argos_src.provider_api.manifest import parse_provider_manifest
 from argos_src.provider_api.transports.http import HttpProviderClient
 from argos_src.provider_api.wire import (
     OP_DISPLAY_AWAIT_RESPONSE,
@@ -65,7 +67,7 @@ def test_http_display_command_posts_to_display():
     }
 
 
-def test_http_display_health_and_state_use_get_endpoints():
+def test_http_health_and_state_use_operational_get_endpoints():
     paths = []
 
     def fake_urlopen(request, timeout):
@@ -179,6 +181,109 @@ def test_http_display_await_response_times_out():
             args={"requestId": "capture-1", "poll_sec": 0.001},
             timeout_ms=1,
         )
+
+
+def test_http_provider_maps_408_response_to_timeout():
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            request.full_url,
+            408,
+            "Timed out waiting for response",
+            hdrs=None,
+            fp=None,
+        )
+
+    client = HttpProviderClient(
+        base_url="http://localhost:4173",
+        key_prefix=KEY_PREFIX,
+        resource_id=RESOURCE_ID,
+        urlopen_fn=fake_urlopen,
+    )
+
+    with pytest.raises(ProviderTimeout):
+        client.request(
+            resource_id=RESOURCE_ID,
+            operation=OP_DISPLAY_AWAIT_RESPONSE,
+            args={"requestId": "capture-1"},
+            timeout_ms=200,
+        )
+
+
+def test_http_provider_returns_top_level_json_null():
+    def fake_urlopen(request, timeout):
+        del request, timeout
+        return _Response(None)
+
+    client = HttpProviderClient(
+        base_url="http://localhost:8000",
+        key_prefix="argos/providers/memory",
+        resource_id="memory",
+        urlopen_fn=fake_urlopen,
+    )
+
+    assert client.request(
+        resource_id="memory",
+        operation="memory.people_profile",
+        args={"person_id": "missing"},
+    ) is None
+
+
+def test_http_provider_sends_bearer_token_from_manifest_auth(monkeypatch):
+    monkeypatch.setenv("TAILWAG_API_BEARER_TOKEN", "secret-token")
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _Response({"ok": True})
+
+    manifest = parse_provider_manifest(
+        {
+            "id": "memory-test",
+            "providers": [
+                {
+                    "id": "memory",
+                    "transport": "http",
+                    "key_prefix": "argos/providers/memory",
+                    "connect_endpoints": ["http://localhost:8000"],
+                    "auth": {
+                        "type": "bearer",
+                        "token_env": "TAILWAG_API_BEARER_TOKEN",
+                    },
+                }
+            ],
+            "resources": [
+                {
+                    "id": "memory",
+                    "kind": "memory",
+                    "provider": "memory",
+                    "capabilities": ["memory.identity"],
+                }
+            ],
+        }
+    )
+    provider = manifest.provider_by_id("memory")
+    assert provider is not None
+    client = HttpProviderClient(
+        base_url="http://localhost:8000",
+        key_prefix=provider.key_prefix,
+        resource_id="memory",
+        manifest=manifest,
+        auth_token_env=provider.auth.token_env,
+        urlopen_fn=fake_urlopen,
+    )
+
+    client.request(
+        resource_id="memory",
+        operation="memory.semantic_search",
+        args={"text": "robot", "person_id": "person-1"},
+    )
+
+    request, _timeout = calls[-1]
+    assert request.full_url == (
+        "http://localhost:8000/argos/providers/memory/resources/memory/"
+        "request/semantic_search"
+    )
+    assert request.get_header("Authorization") == "Bearer secret-token"
 
 
 def test_factory_passes_http_provider_routing_options():

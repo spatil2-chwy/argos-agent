@@ -105,6 +105,7 @@ class QueuedTurn:
     assistant_item_ids: set[str] = field(default_factory=set)
     function_call_item_ids: set[str] = field(default_factory=set)
     pending_call_ids: set[str] = field(default_factory=set)
+    pending_tool_names_by_call_id: dict[str, str] = field(default_factory=dict)
     inference_owner_key: str = ""
     inference_scope_id: str = ""
     selected_inference_history_item_ids: list[str] = field(default_factory=list)

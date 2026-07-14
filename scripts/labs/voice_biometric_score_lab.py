@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, is_dataclass
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
 import numpy as np
+import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -25,6 +27,8 @@ from scripts.labs.speaker_lab_common import (
 
 VOICE_THRESHOLD = 0.50
 VOICE_MARGIN_THRESHOLD = 0.20
+DEFAULT_TAILWAG_BASE_URL = "http://localhost:8000"
+TAILWAG_MEMORY_RESOURCE_BASE = "/argos/providers/memory/resources/memory"
 
 
 def _neo4j_cosine_to_raw(score: Any) -> float:
@@ -84,19 +88,80 @@ def _cosine(left: Any, right: Any) -> float:
     return float(np.dot(lhs, rhs))
 
 
-def _load_tailwag() -> tuple[Any, Any, Any]:
+class _Neo4jRunner:
+    def __init__(self, *, uri: str, user: str, password: str) -> None:
+        try:
+            from neo4j import GraphDatabase
+        except Exception as exc:
+            raise RuntimeError(
+                "The Neo4j Python driver is required for direct vector diagnostics. "
+                "Install `neo4j` in the Argos lab environment or run a Tailwag-side "
+                "diagnostic for raw database comparisons."
+            ) from exc
+        self._driver = GraphDatabase.driver(uri, auth=(user, password))
+
+    def run(self, query: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        with self._driver.session() as session:
+            return [dict(row) for row in session.run(query, params)]
+
+    def close(self) -> None:
+        self._driver.close()
+
+
+class _TailwagHttpClient:
+    def __init__(self, *, base_url: str, bearer_token: str) -> None:
+        self._base_url = str(base_url or DEFAULT_TAILWAG_BASE_URL).rstrip("/")
+        self._bearer_token = str(bearer_token or "").strip()
+        if not self._bearer_token:
+            raise RuntimeError("TAILWAG_API_BEARER_TOKEN is required for Tailwag HTTP search.")
+
+    def search_voice(self, *, embedding: list[float], limit: int, site_code: str | None) -> dict[str, Any]:
+        url = f"{self._base_url}{TAILWAG_MEMORY_RESOURCE_BASE}/request/biometrics_voice_search"
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {self._bearer_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "embedding": embedding,
+                "limit": max(1, int(limit)),
+                "site_code": site_code,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Tailwag voice search returned non-object JSON.")
+        return payload
+
+
+def _load_tailwag_http() -> tuple[Any, Any, dict[str, Any]]:
+    base_url = os.getenv("TAILWAG_API_BASE_URL", DEFAULT_TAILWAG_BASE_URL)
+    token = os.getenv("TAILWAG_API_BEARER_TOKEN", "")
+    client = _TailwagHttpClient(base_url=base_url, bearer_token=token)
+    runner = _Neo4jRunner(
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", ""),
+    )
+    settings = {
+        "voice_embedding_model": os.getenv("TAILWAG_VOICE_EMBEDDING_MODEL", ""),
+        "voice_embedding_dimension": int(os.getenv("TAILWAG_VOICE_EMBEDDING_DIMENSION", "0") or 0),
+    }
+    return client, runner, settings
+
+
+def _load_tailwag() -> tuple[Any, Any, dict[str, Any]]:
     try:
-        from tailwag_memory import TailwagMemoryClient, load_settings
-        from tailwag_memory.db import Neo4jQueryRunner
+        return _load_tailwag_http()
     except Exception as exc:
         raise RuntimeError(
-            "tailwag-memory is required. Run from an Argos shell where "
-            "`python3 -m pip install -e ../tailwag-memory` has been done."
+            "Tailwag HTTP diagnostics require TAILWAG_API_BEARER_TOKEN, Tailwag "
+            "reachable at TAILWAG_API_BASE_URL or http://localhost:8000, and Neo4j "
+            "connection envs NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD."
         ) from exc
-    settings = load_settings()
-    runner = Neo4jQueryRunner(settings)
-    client = TailwagMemoryClient(runner, settings)
-    return client, runner, settings
 
 
 def _tailwag_search(
@@ -322,8 +387,8 @@ def main() -> int:
         },
         "tailwag_settings": {
             "site_code_filter": site_code or None,
-            "configured_voice_embedding_model": getattr(settings, "voice_embedding_model", ""),
-            "configured_voice_embedding_dimension": getattr(settings, "voice_embedding_dimension", 0),
+            "configured_voice_embedding_model": settings.get("voice_embedding_model", ""),
+            "configured_voice_embedding_dimension": settings.get("voice_embedding_dimension", 0),
             "default_voice_threshold": VOICE_THRESHOLD,
             "default_voice_margin_threshold": VOICE_MARGIN_THRESHOLD,
         },
@@ -332,6 +397,9 @@ def main() -> int:
         "neo4j_vector_index_rows": vector_rows,
         "direct_cosine_rows": direct_rows,
     }
+    close_runner = getattr(runner, "close", None)
+    if callable(close_runner):
+        close_runner()
     rendered = json.dumps(report, indent=2, sort_keys=True, default=str) + "\n"
     if args.output_json:
         output_path = Path(args.output_json).expanduser().resolve()
