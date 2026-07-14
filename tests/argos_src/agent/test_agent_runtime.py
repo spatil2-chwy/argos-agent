@@ -3009,6 +3009,39 @@ def test_people_context_includes_directory_profile_lines():
     assert "[PERSON MEMORY]\nPreferences:\n- preferred name: sash" in rendered
 
 
+def test_people_context_treats_string_directory_profile_as_one_line():
+    persons = [
+        SimpleNamespace(
+            person_id="person-1",
+            name="Alice",
+            bbox_area=20.0,
+            interaction_count=2,
+            directory_profile_lines="title: AI Technologist II (Analyst)",
+            context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: sash",
+            preferred_language="",
+        ),
+    ]
+
+    rendered = format_people_context(
+        persons,
+        primary_face_person_id="person-1",
+        face_snapshot={
+            "recognized_count": 1,
+            "unknown_count": 0,
+            "primary_face_kind": "recognized",
+            "primary_face_name": "Alice",
+            "recognized_names": ["Alice"],
+        },
+        audio_speaker_id="person-1",
+        owner_id="person-1",
+        owner_source="audio_face_agree",
+        speaker_visible=True,
+    )
+
+    assert "Directory: title: AI Technologist II (Analyst)" in rendered
+    assert "Directory: t; i; t; l; e" not in rendered
+
+
 def test_people_context_includes_directory_only_for_visible_non_owner_people():
     persons = [
         SimpleNamespace(

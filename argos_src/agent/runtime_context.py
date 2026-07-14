@@ -68,9 +68,12 @@ def format_people_context(
         if owner_person is not None
         else ()
     )
-    directory_profile_lines = tuple(
-        str(item).strip() for item in (directory_items or ()) if str(item).strip()
-    )
+    if isinstance(directory_items, str):
+        directory_profile_lines = (directory_items.strip(),) if directory_items.strip() else ()
+    else:
+        directory_profile_lines = tuple(
+            str(item).strip() for item in (directory_items or ()) if str(item).strip()
+        )
     if directory_profile_lines:
         lines.append(f"  Directory: {'; '.join(directory_profile_lines)}")
 
