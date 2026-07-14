@@ -7,6 +7,7 @@ import threading
 from argos_src.agent.control.turn_runner import TurnRunner
 from argos_src.agent.realtime_turns import (
     QueuedTurn,
+    TURN_PHASE_CANCELED,
     TURN_PHASE_FINALIZED,
     TURN_PHASE_PREPARING_HISTORY,
 )
@@ -19,12 +20,14 @@ class _Host:
         self._turn_lock = threading.RLock()
         self._active_turn = None
         self._turns_by_req_id = {}
+        self._stop_reason = ""
         self.rotated = []
         self.text_items = []
         self.response_creates = []
         self.voice_refs = []
         self.preferences = []
         self.phases = []
+        self.terminated = []
 
     def _clear_playback_tracking_locked(self):
         return
@@ -51,6 +54,14 @@ class _Host:
         turn.finalized = True
         turn.finalized_reason = "completed"
         turn.phase = TURN_PHASE_FINALIZED
+
+    def _terminate_turn(self, turn, phase, reason, **kwargs):
+        self.terminated.append((turn.req_id, phase, reason, kwargs))
+        turn.finalized = True
+        turn.finalized_reason = reason
+        turn.phase = phase
+        turn.response_finished.set()
+        turn.playback_finished.set()
 
     def _maybe_capture_voice_reference(self, turn):
         self.voice_refs.append(turn.req_id)
@@ -114,3 +125,34 @@ def test_turn_runner_clears_active_turn_on_exception() -> None:
 
     assert host._active_turn is None
     assert host._turns_by_req_id[turn.req_id] is turn
+
+
+def test_turn_runner_cancels_unsettled_turn_when_runtime_stops() -> None:
+    host = _Host()
+    runner = TurnRunner(host)
+    turn = _turn("rt-websocket-closed")
+
+    def stop_runtime(_turn):
+        host.response_creates.append(_turn.req_id)
+        host._stop_reason = "websocket_closed"
+        host._stop_event.set()
+
+    host._send_response_create = stop_runtime
+
+    runner.run(turn)
+
+    assert host.response_creates == [turn.req_id]
+    assert turn.finalized is True
+    assert turn.finalized_reason == "websocket_closed"
+    assert turn.phase == TURN_PHASE_CANCELED
+    assert host.terminated == [
+        (
+            turn.req_id,
+            TURN_PHASE_CANCELED,
+            "websocket_closed",
+            {"send_cancel": False},
+        )
+    ]
+    assert host.voice_refs == []
+    assert host.preferences == []
+    assert host._active_turn is None

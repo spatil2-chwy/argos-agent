@@ -329,6 +329,7 @@ class RealtimeRobotAgent:
         self._server_event_runtime = ServerEventRuntime(self)
 
         self._stop_event = threading.Event()
+        self._stop_reason = ""
         self._audio_send_queue: queue.Queue[bytes] = queue.Queue()
         self._turn_queue: queue.Queue[QueuedTurn] = queue.Queue()
         self._tool_queue: queue.Queue[PendingToolCall] = queue.Queue()
@@ -1255,6 +1256,7 @@ class RealtimeRobotAgent:
         if self._stop_event.is_set():
             return
         self._set_session_state(SessionState.SHUTTING_DOWN, trigger="shutdown")
+        self._stop_reason = "shutdown"
         self._stop_event.set()
 
         self._cancel_preference_idle_flush()
@@ -2285,11 +2287,13 @@ class RealtimeRobotAgent:
             except websocket.WebSocketConnectionClosedException:
                 if not self._stop_event.is_set():
                     self.logger.warning("Realtime websocket closed during receive; stopping runtime")
+                    self._stop_reason = "websocket_closed"
                     self._stop_event.set()
                 return
             except Exception:
                 if not self._stop_event.is_set():
                     self.logger.exception("Realtime websocket receive failed")
+                    self._stop_reason = "websocket_receive_failed"
                     self._stop_event.set()
                 return
 

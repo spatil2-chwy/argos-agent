@@ -36,6 +36,7 @@ class TransportRuntime:
                     host.logger.warning(
                         "Realtime websocket closed during send; stopping runtime"
                     )
+                    host._stop_reason = "websocket_closed"
                     host._stop_event.set()
                 host._ws = None
                 return
@@ -46,6 +47,7 @@ class TransportRuntime:
                     host.logger.warning(
                         "Realtime websocket closed during send; stopping runtime"
                     )
+                    host._stop_reason = "websocket_closed"
                     host._stop_event.set()
                 host._ws = None
                 return
