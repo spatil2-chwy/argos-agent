@@ -39,6 +39,9 @@ You also need:
 - `OPENAI_API_KEY` exported in the shell that will run Argos
 - the dedicated Argos Poetry environment installed with `cd ~/argos-agent && poetry install`
 - working microphone and speaker devices on the host machine
+- outbound HTTPS connectivity to the Tailwag API Gateway
+- `TAILWAG_API_BEARER_TOKEN` injected from AWS Secrets Manager secret
+  `aaggarwal1-tailwag/api-bearer-token` without committing it
 
 `setup_shell.sh` is the canonical Argos activation path. It activates the
 Argos Poetry environment and exposes the repo root for `argos_src` imports. Prefer
@@ -78,6 +81,7 @@ Terminal 2: Argos realtime runtime
 cd ~/argos-agent
 source setup_shell.sh
 export OPENAI_API_KEY=...
+export TAILWAG_API_BEARER_TOKEN=...
 python3 run_profile.py --profile static_interaction
 ```
 
@@ -214,8 +218,9 @@ face-capture preview on the Puffle screen and saves only after Accept.
 ## Identity and Voice References
 
 Identities, face references, voice references, Slack ingestion, and durable
-memory are owned by Tailwag. Use Tailwag CLI tooling from `tailwag-memory` when
-you need to inspect or delete a person completely.
+memory are owned by Tailwag. Use approved Tailwag-side administrative tooling
+when you need to inspect or delete a person completely; no Tailwag checkout or
+process is needed on the Argos host.
 
 ## Camera Preview
 
@@ -253,7 +258,7 @@ python3 -B -m pytest \
 
 Employee-directory resolution is covered through
 `tests/argos_src/tools/unitree_go2/vision/test_resolve_employee_identity_tool.py`
-and Tailwag tests in `tailwag-memory`.
+and the tests in the separate Tailwag repository.
 
 ## Logs and Observability
 

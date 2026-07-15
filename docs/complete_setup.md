@@ -101,9 +101,8 @@ python3 -m pip install --no-deps -r argos_src/face_recognition/requirements.txt
 `setup_shell.sh` activates the Argos Poetry environment and exposes the repo
 root on `PYTHONPATH`. It does not source ROS.
 
-Tailwag-backed memory now runs as an HTTP provider. Keep the sibling
-`../tailwag-memory` checkout available to run the Tailwag service, but Argos no
-longer installs it as a Python package.
+Tailwag-backed memory runs as a hosted HTTP provider in AWS. Argos does not need
+a sibling `tailwag-memory` checkout or a local Tailwag process.
 
 ### 4. Configure Argos
 
@@ -119,40 +118,27 @@ discovered automatically, configure endpoints:
 export ARGOS_ZENOH_CONNECT=tcp/ROBOT_OR_PROVIDER_HOST:7447
 ```
 
-Optional integrations:
-
-```bash
-export SLACK_BOT_TOKEN=...
-```
-
-Tailwag-backed memory requires Tailwag runtime configuration when
-`identity_memory.enabled: true`:
+When `identity_memory.enabled: true`, Argos needs outbound HTTPS connectivity
+to the Tailwag API Gateway and its bearer token in the runtime environment:
 
 ```bash
 export TAILWAG_API_BEARER_TOKEN=...
-export NEO4J_URI=bolt://localhost:7687
-export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=tailwag-memory
-export OPENAI_API_KEY=...
-export TAILWAG_EMBEDDING_MODEL=text-embedding-3-small
-export TAILWAG_EMBEDDING_DIMENSION=64
-export TAILWAG_SYNTHESIS_MODEL=gpt-5.5
 ```
 
-The bundled manifests expect Tailwag on `http://localhost:8000` at
+Load the current value from AWS Secrets Manager secret
+`aaggarwal1-tailwag/api-bearer-token` through the host's approved secret
+injection mechanism. Do not commit the token. The bundled manifests connect to
+the AWS Tailwag API Gateway and send requests under
 `/argos/providers/memory/resources/memory/...`.
 
-`SLACK_BOT_TOKEN` is only required when Tailwag Slack polling is enabled. Keep
-the token in the environment and put only `bot_token_env: SLACK_BOT_TOKEN` in
-the profile YAML.
+Tailwag's Neo4j, OpenAI, Slack, Snowflake, embedding, and model
+configuration belong to the hosted service and are not configured in Argos.
+Argos still requires its own `OPENAI_API_KEY` for the Realtime session.
 
 For Puffle's local browser screen, run the display control server separately at
 `http://localhost:4173`. The `puffle` manifest selects the HTTP-backed
 `screen_001` resource through provider `puffle-go2-display`.
 Set `display.enabled: false` in a profile when running without the screen.
-
-Snowflake-backed employee directory variables are still optional and only needed
-when that profile feature is enabled.
 
 ### 5. Start Argos
 

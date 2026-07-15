@@ -16,6 +16,22 @@ from argos_src.provider_api.namespaces import (
 )
 
 
+TAILWAG_API_GATEWAY_URL = "https://a9vhnyd929.execute-api.us-east-2.amazonaws.com"
+
+
+@pytest.mark.parametrize("manifest_id", ("puffle", "navigation", "cody"))
+def test_runtime_manifests_select_aws_tailwag_with_bearer_auth(manifest_id):
+    manifest = load_provider_manifest(manifest_id)
+
+    memory_provider = manifest.provider_by_id("memory")
+    assert memory_provider is not None
+    assert memory_provider.transport == "http"
+    assert memory_provider.connect_endpoints == (TAILWAG_API_GATEWAY_URL,)
+    assert memory_provider.auth is not None
+    assert memory_provider.auth.type == "bearer"
+    assert memory_provider.auth.token_env == "TAILWAG_API_BEARER_TOKEN"
+
+
 def test_puffle_manifest_loads_resources_and_capabilities():
     manifest = load_provider_manifest("puffle")
 
@@ -35,12 +51,6 @@ def test_puffle_manifest_loads_resources_and_capabilities():
     assert display.has_capability("display.command")
     assert display.has_capability("display.interaction")
     assert manifest.provider_by_id("puffle-go2-display").transport == "http"
-    memory_provider = manifest.provider_by_id("memory")
-    assert memory_provider is not None
-    assert memory_provider.transport == "http"
-    assert memory_provider.auth is not None
-    assert memory_provider.auth.type == "bearer"
-    assert memory_provider.auth.token_env == "TAILWAG_API_BEARER_TOKEN"
     memory = manifest.resource_by_id("memory")
     assert memory is not None
     assert memory.kind == "memory"

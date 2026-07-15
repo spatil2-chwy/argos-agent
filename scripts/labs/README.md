@@ -4,9 +4,9 @@ These scripts are small lab tools for testing Argos functionality without starti
 the full realtime agent.
 
 They still use the real Argos service code, profile config, provider camera
-resources, and embedding models. Durable identity and memory now live in
-`tailwag-memory`; these scripts are meant for diagnosis and parameter tuning,
-not for normal user-facing registration.
+resources, and embedding models. Durable identity and memory now live in the
+hosted Tailwag service; these scripts are meant for diagnosis and parameter
+tuning, not for normal user-facing registration.
 
 Run from the repo root:
 
@@ -82,7 +82,8 @@ instructions, countdowns, and recording state. It is dry-run by default. With
 reference, and the next accepted samples update that same reference toward
 Tailwag's target sample count. The selected profile must provide a
 `resources.identity_memory` manifest resource with `memory.identity`, and the
-Tailwag HTTP provider must be running with any required auth environment such as
+Tailwag HTTP provider must be reachable through the selected manifest route with
+any required auth environment such as
 `TAILWAG_API_BEARER_TOKEN`. `--provider-transport` can override capture/display
 providers for lab smoke tests, but identity memory always uses the selected
 manifest's Tailwag provider route.
