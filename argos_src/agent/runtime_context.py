@@ -148,8 +148,8 @@ def format_saved_locations(store: LocationStore) -> str:
     names = store.names()
     if not names:
         return (
-            "[SAVED LOCATIONS] (none yet - use get_current_location "
-            "with save=True to save a spot)"
+            "[SAVED LOCATIONS] (none yet - use save_current_location "
+            "to save a named spot)"
         )
     return "[SAVED LOCATIONS] " + ", ".join(names)
 

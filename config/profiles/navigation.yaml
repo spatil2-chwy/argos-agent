@@ -29,13 +29,14 @@ tools:
     - vision.capture_scene
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
-    - navigation.navigate_to_location
     - navigation.navigate_to_location_blocking
-    - navigation.navigate_relative
+    - navigation.localize_current_location
+    - navigation.mark_return_point
+    - navigation.navigate_to_return_point_blocking
+    - navigation.save_current_location
     - navigation.follow_waypoints
     - navigation.cancel
     - navigation.stop_patrol
-    - navigation.get_current_location
     - dock.charging
 
 identity_memory:

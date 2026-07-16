@@ -109,6 +109,62 @@ def test_watchdog_cancels_enrollment_after_extended_timeout() -> None:
     assert host.terminated == [(turn.req_id, TURN_PHASE_CANCELED, "tool_timeout")]
 
 
+def test_watchdog_allows_blocking_navigation_tool() -> None:
+    host = _Host()
+    runtime = TurnWatchdogRuntime(host)
+    turn = _turn()
+    turn.phase = TURN_PHASE_WAITING_TOOLS
+    turn.phase_updated_at = 1.0
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids.add("call-nav")
+    turn.pending_tool_names_by_call_id["call-nav"] = "navigate_to_location_blocking"
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=60.0)
+
+    assert host.terminated == []
+    assert turn.finalized is False
+
+
+def test_watchdog_cancels_blocking_navigation_after_extended_timeout() -> None:
+    host = _Host()
+    runtime = TurnWatchdogRuntime(host)
+    turn = _turn()
+    turn.phase = TURN_PHASE_WAITING_TOOLS
+    turn.phase_updated_at = 1.0
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids.add("call-nav")
+    turn.pending_tool_names_by_call_id["call-nav"] = "navigate_to_location_blocking"
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=301.0)
+
+    assert host.terminated == []
+
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=317.0)
+
+    assert host.terminated == [(turn.req_id, TURN_PHASE_CANCELED, "tool_timeout")]
+
+
+def test_watchdog_allows_blocking_return_point_navigation_tool() -> None:
+    host = _Host()
+    runtime = TurnWatchdogRuntime(host)
+    turn = _turn()
+    turn.phase = TURN_PHASE_WAITING_TOOLS
+    turn.phase_updated_at = 1.0
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids.add("call-return")
+    turn.pending_tool_names_by_call_id["call-return"] = (
+        "navigate_to_return_point_blocking"
+    )
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=60.0)
+
+    assert host.terminated == []
+    assert turn.finalized is False
+
+
 def test_watchdog_force_completes_stalled_playback() -> None:
     host = _Host()
     runtime = TurnWatchdogRuntime(host)

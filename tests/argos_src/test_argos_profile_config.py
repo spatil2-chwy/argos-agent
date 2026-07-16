@@ -164,8 +164,13 @@ def test_navigation_profile_extends_static_interaction_capabilities():
     assert "vision.capture_scene" in profile.tools.enabled_tool_ids
     assert "identity.enroll_visible_person" in profile.tools.enabled_tool_ids
     assert "identity.resolve_employee_identity" in profile.tools.enabled_tool_ids
-    assert "navigation.navigate_to_location" in profile.tools.enabled_tool_ids
-    assert "navigation.navigate_relative" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_to_location" not in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_to_location_blocking" in profile.tools.enabled_tool_ids
+    assert "navigation.localize_current_location" in profile.tools.enabled_tool_ids
+    assert "navigation.mark_return_point" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_to_return_point_blocking" in profile.tools.enabled_tool_ids
+    assert "navigation.save_current_location" in profile.tools.enabled_tool_ids
+    assert "navigation.navigate_relative" not in profile.tools.enabled_tool_ids
     assert "dock.charging" in profile.tools.enabled_tool_ids
 
     assert profile.identity_memory.site_code == "BOS3"

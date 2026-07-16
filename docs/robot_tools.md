@@ -107,12 +107,16 @@ resource provides the required capabilities.
 | `navigation.follow_waypoints` | `follow_waypoints` | `navigation.goal` | Starts an interruptible waypoint route. |
 | `navigation.cancel` | `cancel_navigation` | `navigation.goal` | Cancels active navigation and may save a resumable mission. |
 | `navigation.stop_patrol` | `stop_patrol` | `navigation.goal` | Stops patrol and optionally cancels active navigation. |
-| `navigation.get_current_location` | `get_current_location` | `navigation.goal`, `transform.lookup` | Reads current pose; with `save=true`, writes a named location. |
+| `navigation.localize_current_location` | `localize_current_location` | `navigation.goal`, `transform.lookup` | Compares current pose to saved locations without saving or marking state. |
+| `navigation.mark_return_point` | `mark_return_point` | `navigation.goal`, `transform.lookup` | Stores a temporary task return point without persisting it. |
+| `navigation.navigate_to_return_point_blocking` | `navigate_to_return_point_blocking` | `navigation.goal`, `transform.lookup` | Returns to a temporary return point and waits for arrival. |
+| `navigation.save_current_location` | `save_current_location` | `navigation.goal`, `transform.lookup` | Persists the current pose as a named saved location. |
 | `dock.charging` | `charging_dock` | `dock.charging` | Uses saved `charge_dock` approach pose and provider docking. |
 
-`get_current_location(save=true)` persists map resources. Treat it as an
-operator-controlled action because overwriting names such as `charge_dock`
-changes future navigation and docking behavior.
+`save_current_location` persists map resources. Treat it as an operator-controlled
+action because overwriting names such as `charge_dock` changes future navigation
+and docking behavior. Use `mark_return_point` for temporary "come back here"
+mission state instead of writing a saved location.
 
 ## Optional Tailwag Memory Tool
 
@@ -141,8 +145,10 @@ navigation requests before touching hardware.
 ## Patrol, Battery, And Charging
 
 Engagement state suppresses patrol while the robot is interacting. Startup
-patrol and patrol resume are emitted as internal events; the model may then call
-navigation tools if those tools are enabled.
+patrol, idle patrol resume, and patrol next hops are runtime-owned navigation
+dispatches; they do not require the model to call navigation tools. Navigation
+result events may still be surfaced as internal context for operator-visible
+status or user-facing updates.
 
 Battery state also gates navigation:
 

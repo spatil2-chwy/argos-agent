@@ -38,7 +38,10 @@ NAVIGATION_TOOL_NAMES = (
     "follow_waypoints",
     "cancel_navigation",
     "stop_patrol",
-    "get_current_location",
+    "localize_current_location",
+    "mark_return_point",
+    "navigate_to_return_point_blocking",
+    "save_current_location",
     "charging_dock",
 )
 
@@ -102,8 +105,17 @@ TOOL_RUNTIME_BY_ID_BY_FAMILY: dict[str, dict[str, str]] = {
     "navigation.stop_patrol": {
         ROBOT_FAMILY_UNITREE_GO2: "stop_patrol",
     },
-    "navigation.get_current_location": {
-        ROBOT_FAMILY_UNITREE_GO2: "get_current_location",
+    "navigation.localize_current_location": {
+        ROBOT_FAMILY_UNITREE_GO2: "localize_current_location",
+    },
+    "navigation.mark_return_point": {
+        ROBOT_FAMILY_UNITREE_GO2: "mark_return_point",
+    },
+    "navigation.navigate_to_return_point_blocking": {
+        ROBOT_FAMILY_UNITREE_GO2: "navigate_to_return_point_blocking",
+    },
+    "navigation.save_current_location": {
+        ROBOT_FAMILY_UNITREE_GO2: "save_current_location",
     },
     "dock.charging": {
         ROBOT_FAMILY_UNITREE_GO2: "charging_dock",
@@ -234,7 +246,13 @@ def required_capability_ids_for_tool_id(
     if raw_name.startswith("identity.resolve"):
         return ()
     if raw_name.startswith("navigation."):
-        if runtime_name in {"navigate_relative", "get_current_location"}:
+        if runtime_name in {
+            "navigate_relative",
+            "localize_current_location",
+            "mark_return_point",
+            "navigate_to_return_point_blocking",
+            "save_current_location",
+        }:
             return ("navigation.goal", "transform.lookup")
         return ("navigation.goal",)
     if raw_name.startswith("dock."):

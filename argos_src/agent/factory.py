@@ -598,8 +598,9 @@ def create_agent(
     patrol_bridge = None
     if nav_state is not None:
         patrol_bridge = PatrolLoopBridge(
-            coalescer=coalescer,
+            robot_client=robot_client,
             nav_state=nav_state,
+            battery_cache=battery_cache,
             next_hop_delay_sec=scenario_profile.engagement.patrol_next_hop_delay_sec,
         )
         wiring.bind_patrol_bridge(patrol_bridge)

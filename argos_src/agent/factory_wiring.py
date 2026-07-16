@@ -48,6 +48,46 @@ class FactoryRuntimeWireup:
     def bind_battery_cache(self, battery_cache: Any) -> None:
         self._battery_cache = battery_cache
 
+    def _start_patrol_navigation(self, target: str, *, trigger: str) -> bool:
+        rendered_target = str(target or "").strip()
+        if not rendered_target or self._nav_state is None:
+            return False
+        try:
+            from argos_src.tools.unitree_go2.navigation.toolset import (
+                start_navigation_to_saved_location,
+            )
+
+            result = start_navigation_to_saved_location(
+                robot_client=self._robot_client,
+                state=self._nav_state,
+                location_name=rendered_target,
+                battery=self._battery_cache,
+                tool_name="patrol_navigation",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to start patrol navigation trigger=%s target=%s",
+                trigger,
+                rendered_target,
+            )
+            return False
+        if not bool(result.get("success", False)):
+            logger.warning(
+                "Patrol navigation not started trigger=%s target=%s status=%s message=%s",
+                trigger,
+                rendered_target,
+                result.get("status"),
+                result.get("message"),
+            )
+            return False
+        logger.info(
+            "Patrol navigation started trigger=%s target=%s goal_id=%s",
+            trigger,
+            rendered_target,
+            result.get("goal_id"),
+        )
+        return True
+
     def on_idle_entered(self) -> None:
         agent = self._agent
         if agent is not None:
@@ -80,19 +120,7 @@ class FactoryRuntimeWireup:
         if not decision.allowed:
             return
         target = str(decision.fields.get("target_label", "") or "").strip()
-        self._coalescer.submit(
-            text=(
-                "PATROL_EVENT: interaction ended, resuming patrol. "
-                "Continue by calling "
-                f"navigate_to_location(location_name='{target}')."
-            ),
-            metadata={
-                "internal": True,
-                "internal_event": "patrol_continue",
-                "source": "navigation",
-                "target_label": target,
-            },
-        )
+        self._start_patrol_navigation(target, trigger="idle_entered")
 
     def publish_voice_cmd(self, cmd: str) -> None:
         agent = self._agent
@@ -126,9 +154,8 @@ class FactoryRuntimeWireup:
             next_target = str(resumed_patrol.get("awaiting_target", "")).strip()
             if next_target:
                 resume_suffix = (
-                    " Patrol was paused for charging. After you stand up, "
-                    "resume patrol by calling "
-                    f"navigate_to_location(location_name='{next_target}')."
+                    " Patrol was paused for charging and will resume from "
+                    f"{next_target} after you return to idle."
                 )
         if self._battery_cache is not None and self._battery_cache.can_self_charge():
             text = (
@@ -153,18 +180,17 @@ class FactoryRuntimeWireup:
         )
 
     def submit_nav_event(self, event: dict[str, Any]) -> None:
-        if self._coalescer is None:
-            return
-        self._coalescer.submit(
-            text=self._format_navigation_event(event),
-            metadata={
-                "internal": True,
-                "internal_event": "navigation",
-                "source": "navigation",
-                "event_type": event.get("event_type", ""),
-                "goal_id": event.get("goal_id", ""),
-            },
-        )
+        if self._coalescer is not None and event.get("tool_name") != "patrol_navigation":
+            self._coalescer.submit(
+                text=self._format_navigation_event(event),
+                metadata={
+                    "internal": True,
+                    "internal_event": "navigation",
+                    "source": "navigation",
+                    "event_type": event.get("event_type", ""),
+                    "goal_id": event.get("goal_id", ""),
+                },
+            )
         if self._patrol_bridge is not None:
             self._patrol_bridge.on_nav_event(event)
 
@@ -198,21 +224,7 @@ class FactoryRuntimeWireup:
 
         def emit_startup_patrol_event_after_delay() -> None:
             time.sleep(startup_delay_sec)
-            if self._coalescer is None:
-                return
-            self._coalescer.submit(
-                text=(
-                    "PATROL_EVENT: startup patrol route is active. "
-                    "Start patrol by calling "
-                    f"navigate_to_location(location_name='{first_target}')."
-                ),
-                metadata={
-                    "internal": True,
-                    "internal_event": "patrol_continue",
-                    "source": "navigation",
-                    "target_label": first_target,
-                },
-            )
+            self._start_patrol_navigation(first_target, trigger="startup_patrol")
 
         threading.Thread(
             target=emit_startup_patrol_event_after_delay,

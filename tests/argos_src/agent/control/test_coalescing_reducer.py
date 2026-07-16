@@ -21,15 +21,6 @@ def test_dedup_events_keeps_latest_face_and_goal_result() -> None:
     ]
 
 
-def test_dedup_events_drops_patrol_when_human_input_shares_batch() -> None:
-    events = [
-        ("PATROL_EVENT: resume.", {"internal": True, "internal_event": "patrol_continue"}),
-        ("hello", {"req_id": "rt-1"}),
-    ]
-
-    assert dedup_events(events) == [("hello", {"req_id": "rt-1"})]
-
-
 def test_render_coalesced_text_preserves_model_visible_headers() -> None:
     text, metadata = render_coalesced_text(
         [

@@ -220,37 +220,3 @@ def test_coalescer_dedups_face_and_navigation_events_for_audio_turn():
         with coalescer._lock:
             coalescer._cancel_timer_locked()
         machine.shutdown()
-
-
-def test_coalescer_drops_patrol_when_face_is_in_same_batch():
-    machine, _ = _make_machine()
-    agent = type(
-        "_FakeAgent",
-        (),
-        {"enqueue_internal_event": lambda self, text, metadata: None},
-    )()
-    coalescer = EventCoalescer(
-        agent=agent,
-        engagement=machine,
-        debounce_sec=60.0,
-        max_wait_sec=60.0,
-    )
-    try:
-        coalescer.submit(
-            "PATROL_EVENT: resume patrol.",
-            {"internal": True, "internal_event": "patrol_continue"},
-        )
-        coalescer.submit(
-            "FACE_EVENT: Sam appeared.",
-            {"internal": True, "internal_event": "face", "person_name": "Sam"},
-        )
-
-        text, _metadata = coalescer.drain_internal_events_for_audio_turn({"req_id": "rt-1"})
-
-        assert text is not None
-        assert "FACE_EVENT" in text
-        assert "PATROL_EVENT" not in text
-    finally:
-        with coalescer._lock:
-            coalescer._cancel_timer_locked()
-        machine.shutdown()

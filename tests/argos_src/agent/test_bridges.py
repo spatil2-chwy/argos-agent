@@ -3,6 +3,9 @@ import sys
 import types
 from pathlib import Path
 
+from argos_src.nav_support.locations import LocationStore, NavigationState
+from argos_src.provider_api.fake import FakeProviderClient
+
 
 def _load_bridges_module(monkeypatch):
     module_name = "test_argos_bridges_module"
@@ -210,9 +213,6 @@ def test_patrol_bridge_drops_delayed_hop_when_active_goal_appears(monkeypatch):
     monkeypatch.setattr(bridges_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(bridges_module.threading, "Thread", _ImmediateThread)
     bridge = bridges_module.PatrolLoopBridge(
-        coalescer=types.SimpleNamespace(
-            submit=lambda text, metadata: submitted.append((text, metadata))
-        ),
         nav_state=_NavState(),
         next_hop_delay_sec=0.0,
     )
@@ -226,6 +226,45 @@ def test_patrol_bridge_drops_delayed_hop_when_active_goal_appears(monkeypatch):
     )
 
     assert submitted == []
+
+
+def test_patrol_bridge_starts_next_hop_directly(monkeypatch, tmp_path):
+    bridges_module = _load_bridges_module(monkeypatch)
+    submitted = []
+    location_store = LocationStore(tmp_path / "locations.json")
+    location_store.set("lobby", {"x": 0.0, "y": 0.0, "theta": 0.0})
+    location_store.set("desk", {"x": 2.0, "y": 0.0, "theta": 0.0})
+    nav_state = NavigationState(location_store)
+    nav_state.start_patrol(["lobby", "desk"])
+    robot_client = FakeProviderClient()
+
+    class _ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(bridges_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bridges_module.threading, "Thread", _ImmediateThread)
+    bridge = bridges_module.PatrolLoopBridge(
+        robot_client=robot_client,
+        nav_state=nav_state,
+        next_hop_delay_sec=0.0,
+    )
+
+    bridge.on_nav_event(
+        {
+            "event_type": "goal_result",
+            "outcome": "succeeded",
+            "target_label": "lobby",
+        }
+    )
+
+    assert submitted == []
+    assert robot_client.navigation_goals[-1]["target_label"] == "desk"
+    assert robot_client.navigation_goals[-1]["blocking"] is False
+    assert robot_client.navigation_goals[-1]["tool_name"] == "patrol_navigation"
 
 
 def test_patrol_bridge_drops_delayed_hop_when_awaiting_target_changes(monkeypatch):
@@ -257,9 +296,6 @@ def test_patrol_bridge_drops_delayed_hop_when_awaiting_target_changes(monkeypatc
     monkeypatch.setattr(bridges_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(bridges_module.threading, "Thread", _ImmediateThread)
     bridge = bridges_module.PatrolLoopBridge(
-        coalescer=types.SimpleNamespace(
-            submit=lambda text, metadata: submitted.append((text, metadata))
-        ),
         nav_state=_NavState(),
         next_hop_delay_sec=0.0,
     )

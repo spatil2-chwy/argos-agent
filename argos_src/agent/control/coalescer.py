@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class EventCoalescer:
     """Buffers rapid events and flushes them as one combined message.
 
-    Internal events (face, nav, patrol, battery) start/extend a debounce timer.
+    Internal events (face, nav, battery) start/extend a debounce timer.
     Human input flushes immediately, bundling any pending internal events into
     the same batch. A max-wait cap prevents indefinite buffering when internal
     events keep arriving.
@@ -49,17 +49,6 @@ class EventCoalescer:
         """Submit an event (human or internal) for coalescing."""
         meta = dict(metadata or {})
         is_human = not meta.get("internal", False)
-        is_patrol = meta.get("internal_event") == "patrol_continue"
-
-        if is_patrol and self._engagement.should_suppress_patrol():
-            safe_ignored(
-                self._state_observer,
-                axis=StateAxis.COALESCER,
-                trigger="submit",
-                reason="patrol_suppressed",
-                internal_event="patrol_continue",
-            )
-            return
 
         with self._lock:
             self._buffer.append((text, meta))
