@@ -25,6 +25,11 @@ tools:
     - posture.sit
     - embodiment.unitree_go2.hello
     - embodiment.unitree_go2.stretch
+    - embodiment.unitree_go2.content
+    - embodiment.unitree_go2.bow_down
+    - embodiment.unitree_go2.look_up
+    - embodiment.unitree_go2.left_tilt
+    - embodiment.unitree_go2.right_tilt
     - motion.move_robot
     - vision.capture_scene
     - identity.enroll_visible_person
@@ -37,7 +42,6 @@ tools:
     - navigation.follow_waypoints
     - navigation.cancel
     - navigation.stop_patrol
-    - dock.charging
 
 identity_memory:
   enabled: true

@@ -2236,7 +2236,8 @@ class RealtimeRobotAgent:
                 "[IDENTITY STATUS] Current speaker is not safely identified. "
                 "Do not use any person's name, claim to recognize them, or infer identity from "
                 "voice, face, prior session history, tool history, memory, or conversational context. "
-                "Only use a person's name when a current [PERSON SPEAKING TO YOU] block is present. "
+                "Only use a person's name when a current "
+                "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED] block is present. "
             )
         voice_prompt = self._consume_voice_enrollment_prompt_note(turn)
         if voice_prompt:
