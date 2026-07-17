@@ -146,11 +146,9 @@ class TailwagHttpIdentityMemoryClient:
                 "memory.person_context",
                 {
                     "person_id": rendered_person_id,
-                    "limit": 10,
                     "semantic_scope": None,
                     "current_text": current_text,
                     "memory_limit": 12,
-                    "recent_episode_limit": 5,
                 },
             )
             payload = _plain(response)

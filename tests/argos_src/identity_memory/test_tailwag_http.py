@@ -191,10 +191,8 @@ def test_tailwag_person_context_uses_markdown_provider_contract():
     assert call["resource_id"] == "memory"
     assert call["person_id"] == "person-1"
     assert call["current_text"] == "robot demo"
-    assert call["limit"] == 10
     assert call["semantic_scope"] is None
     assert call["memory_limit"] == 12
-    assert call["recent_episode_limit"] == 5
 
 
 def test_tailwag_record_episode_defaults_to_no_memory_extraction():
