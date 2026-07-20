@@ -57,6 +57,9 @@ class TurnWatchdogRuntime:
                 continue
             if turn.phase in {TURN_PHASE_RESPONSE_REQUESTED, TURN_PHASE_WAITING_FIRST_AUDIO}:
                 started_at = turn.response_requested_at or turn.phase_updated_at
+                response_state = turn.response_outputs.get(turn.response_id)
+                if response_state is not None and not response_state.response_done:
+                    started_at = max(started_at, response_state.last_progress_at)
                 if current_time - started_at >= response_timeout_s:
                     host.logger.warning(
                         "Realtime response watchdog cancel req_id=%s phase=%s",

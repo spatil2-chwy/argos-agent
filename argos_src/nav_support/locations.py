@@ -13,6 +13,10 @@ CHARGE_DOCK_LOCATION_NAME = "charge_dock"
 # Type for a single location: x, y, theta in map frame
 LocationCoords = dict[str, float]  # {"x": float, "y": float, "theta": float}
 
+NAV_RESULT_DELIVERY_MODEL_EVENT = "model_event"
+NAV_RESULT_DELIVERY_TOOL_RESULT = "tool_result"
+NAV_RESULT_DELIVERY_RUNTIME_ONLY = "runtime_only"
+
 
 @dataclass(frozen=True)
 class NavigationPolicy:
@@ -21,6 +25,7 @@ class NavigationPolicy:
     source: str
     interruptible: bool = True
     passive_listen_allowed: bool = True
+    result_delivery: str = NAV_RESULT_DELIVERY_MODEL_EVENT
 
     def allows_auto_interrupt(self) -> bool:
         return self.interruptible
@@ -41,11 +46,19 @@ FOCUSED_NAVIGATION_POLICY = NavigationPolicy(
     source="human_task",
     interruptible=False,
     passive_listen_allowed=False,
+    result_delivery=NAV_RESULT_DELIVERY_TOOL_RESULT,
 )
 CHARGING_DOCK_NAVIGATION_POLICY = NavigationPolicy(
     source="charging_dock",
     interruptible=False,
     passive_listen_allowed=False,
+    result_delivery=NAV_RESULT_DELIVERY_TOOL_RESULT,
+)
+PATROL_NAVIGATION_POLICY = NavigationPolicy(
+    source="patrol",
+    interruptible=True,
+    passive_listen_allowed=True,
+    result_delivery=NAV_RESULT_DELIVERY_RUNTIME_ONLY,
 )
 
 
@@ -156,6 +169,8 @@ class NavigationState:
         self._active_goal: Optional[dict[str, Any]] = None
         self._goal_lock = threading.Lock()
         self._goal_counter = 0
+        self._goal_result_delivery: dict[str, str] = {}
+        self._goal_result_delivery_limit = 128
         self._interrupted_mission: Optional[dict[str, Any]] = None
         self._return_points: dict[str, LocationCoords] = {}
         self._active_goal_changed_callback: Optional[Callable[[], None]] = None
@@ -224,6 +239,9 @@ class NavigationState:
                 "reported_waypoint_indices": set(),
                 "policy": policy,
             }
+            self._goal_result_delivery[rendered_goal_id] = policy.result_delivery
+            while len(self._goal_result_delivery) > self._goal_result_delivery_limit:
+                self._goal_result_delivery.pop(next(iter(self._goal_result_delivery)))
             self._last_goal_handle = handle
             # New accepted navigation intent supersedes any previously interrupted one.
             self._interrupted_mission = None
@@ -236,6 +254,27 @@ class NavigationState:
             }
         self._notify_active_goal_changed()
         return goal_meta
+
+    def result_delivery_for_goal(self, goal_id: str, *, tool_name: str = "") -> str:
+        """Return the single consumer for a completion, including late duplicates."""
+        rendered_goal_id = str(goal_id or "").strip()
+        rendered_tool_name = str(tool_name or "").strip()
+        with self._goal_lock:
+            delivery = self._goal_result_delivery.get(rendered_goal_id)
+        if delivery in {
+            NAV_RESULT_DELIVERY_MODEL_EVENT,
+            NAV_RESULT_DELIVERY_TOOL_RESULT,
+            NAV_RESULT_DELIVERY_RUNTIME_ONLY,
+        }:
+            return delivery
+        if rendered_tool_name == "patrol_navigation":
+            return NAV_RESULT_DELIVERY_RUNTIME_ONLY
+        if rendered_tool_name.endswith("_blocking") or rendered_tool_name in {
+            "navigation_blocking",
+            "charging_dock",
+        }:
+            return NAV_RESULT_DELIVERY_TOOL_RESULT
+        return NAV_RESULT_DELIVERY_MODEL_EVENT
 
     def is_active_goal(self, goal_id: str) -> bool:
         with self._goal_lock:

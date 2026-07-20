@@ -180,7 +180,22 @@ class FactoryRuntimeWireup:
         )
 
     def submit_nav_event(self, event: dict[str, Any]) -> None:
-        if self._coalescer is not None and event.get("tool_name") != "patrol_navigation":
+        from argos_src.nav_support.locations import (
+            NAV_RESULT_DELIVERY_MODEL_EVENT,
+            NAV_RESULT_DELIVERY_RUNTIME_ONLY,
+        )
+
+        delivery_fn = getattr(self._nav_state, "result_delivery_for_goal", None)
+        if callable(delivery_fn):
+            delivery = delivery_fn(
+                str(event.get("goal_id", "") or ""),
+                tool_name=str(event.get("tool_name", "") or ""),
+            )
+        elif event.get("tool_name") == "patrol_navigation":
+            delivery = NAV_RESULT_DELIVERY_RUNTIME_ONLY
+        else:
+            delivery = NAV_RESULT_DELIVERY_MODEL_EVENT
+        if self._coalescer is not None and delivery == NAV_RESULT_DELIVERY_MODEL_EVENT:
             self._coalescer.submit(
                 text=self._format_navigation_event(event),
                 metadata={
@@ -191,7 +206,10 @@ class FactoryRuntimeWireup:
                     "goal_id": event.get("goal_id", ""),
                 },
             )
-        if self._patrol_bridge is not None:
+        if (
+            self._patrol_bridge is not None
+            and delivery == NAV_RESULT_DELIVERY_RUNTIME_ONLY
+        ):
             self._patrol_bridge.on_nav_event(event)
 
     def maybe_start_startup_patrol(

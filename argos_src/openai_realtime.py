@@ -86,6 +86,8 @@ def realtime_response_payload(
     input_items: Iterable[dict[str, Any]] | None = None,
     conversation: str | None = None,
     metadata: dict[str, str] | None = None,
+    tools: Iterable[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "instructions": instructions,
@@ -101,6 +103,10 @@ def realtime_response_payload(
             for key, value in metadata.items()
             if str(key or "").strip() and value is not None
         }
+    if tools is not None:
+        payload["tools"] = [dict(tool) for tool in tools]
+    if tool_choice is not None:
+        payload["tool_choice"] = str(tool_choice)
     if max_output_tokens is not None:
         payload["max_output_tokens"] = max_output_tokens
     return payload

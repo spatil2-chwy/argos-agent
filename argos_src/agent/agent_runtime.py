@@ -1365,11 +1365,26 @@ class RealtimeRobotAgent:
     ) -> None:
         """Queue a text-only internal or coalesced turn for the response worker."""
         meta = dict(metadata or {})
+        standalone_face = bool(meta.get("internal", False)) and (
+            str(meta.get("internal_event") or "").strip() == "face"
+        )
+        if standalone_face and self.has_active_human_turn():
+            self._latency.emit(
+                event="internal_event_suppressed",
+                internal_event="face",
+                suppression_reason="human_turn_active",
+            )
+            return
+        if standalone_face:
+            meta.setdefault("inference_history_policy", "fresh")
+            meta.setdefault("tool_policy", "none")
         req_id = str(meta.get("req_id") or f"evt-{uuid4().hex[:12]}")
         if not meta.get("exchange_id"):
             meta["exchange_id"] = req_id
         if not meta.get("turn_kind"):
-            meta["turn_kind"] = "internal_text" if bool(meta.get("internal", False)) else "human_text"
+            meta["turn_kind"] = (
+                "internal_text" if bool(meta.get("internal", False)) else "human_text"
+            )
         context = self._capture_turn_context()
         resolution = None
         if bool(meta.get("internal", False)):
@@ -1434,6 +1449,23 @@ class RealtimeRobotAgent:
         )
         self._set_turn_phase(turn, TURN_PHASE_QUEUED, trigger="enqueue_text_turn")
         self._turn_queue.put(turn)
+
+    @staticmethod
+    def _is_standalone_face_turn(turn: QueuedTurn) -> bool:
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        return bool(turn.source_is_internal) and (
+            str(metadata.get("internal_event") or "").strip() == "face"
+        )
+
+    def has_active_human_turn(self) -> bool:
+        """Return whether a non-internal exchange currently owns the runtime."""
+        with self._turn_lock:
+            turn = self._active_turn
+        return bool(
+            turn is not None
+            and not turn.source_is_internal
+            and not self._is_turn_terminal(turn)
+        )
 
     def update_face_presence_snapshot(self, snapshot: dict[str, Any]) -> None:
         """Update local mic admission from a face-presence snapshot."""
@@ -1791,6 +1823,7 @@ class RealtimeRobotAgent:
 
     def _build_response_request(self, turn: QueuedTurn) -> dict[str, Any]:
         instruction_snapshot = self._build_response_instruction_snapshot(turn)
+        tools, tool_choice = self._response_tool_policy(turn)
         return realtime_response_payload(
             instructions=instruction_snapshot["instructions"],
             output_modalities=["audio"],
@@ -1801,7 +1834,23 @@ class RealtimeRobotAgent:
                 "req_id": turn.req_id,
                 "inference_scope_id": str(getattr(turn, "inference_scope_id", "") or ""),
             },
+            tools=tools,
+            tool_choice=tool_choice,
         )
+
+    def _response_tool_policy(
+        self,
+        turn: QueuedTurn,
+    ) -> tuple[list[dict[str, Any]] | None, str | None]:
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        if str(metadata.get("tool_policy") or "").strip() == "none":
+            return [], "none"
+        return None, None
+
+    def _is_tool_allowed_for_turn(self, turn: QueuedTurn, tool_name: str) -> bool:
+        del tool_name
+        metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+        return str(metadata.get("tool_policy") or "").strip() != "none"
 
     def _model_history_snapshot_text(self, history_item_ids: list[str]) -> str:
         if not history_item_ids:
@@ -1914,6 +1963,9 @@ class RealtimeRobotAgent:
                 scope_id=scope_id,
                 exclude_req_id=turn.req_id,
             )
+            metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+            if str(metadata.get("inference_history_policy") or "").strip() == "fresh":
+                history_item_ids = []
             history_item_ids = [
                 item_id
                 for item_id in history_item_ids
@@ -2018,6 +2070,7 @@ class RealtimeRobotAgent:
             return
         instruction_snapshot = self._build_response_instruction_snapshot(turn)
         response_input_items = self._response_input_items_for_turn(turn)
+        tools, tool_choice = self._response_tool_policy(turn)
         turn.response_requested_at = time.time()
         turn.pending_response_requests += 1
         self._set_turn_phase(
@@ -2040,6 +2093,8 @@ class RealtimeRobotAgent:
                 "req_id": turn.req_id,
                 "inference_scope_id": str(getattr(turn, "inference_scope_id", "") or ""),
             },
+            tools=tools,
+            tool_choice=tool_choice,
         )
         self._latency.emit(
             event="response_create",
@@ -2216,6 +2271,7 @@ class RealtimeRobotAgent:
 
     def _build_turn_instructions(self, turn: QueuedTurn) -> str:
         blocks: list[str] = []
+        standalone_face = self._is_standalone_face_turn(turn)
         context = turn.context_snapshot
         persons = list(context.persons or [])
         face_snapshot = dict(context.face_snapshot or {}) if context.face_snapshot else None
@@ -2252,8 +2308,10 @@ class RealtimeRobotAgent:
         blocks.append(
             format_robot_state_block(
                 posture=self._robot_posture,
-                last_tool_name=self._last_tool_name,
-                last_tool_summary=self._last_tool_summary,
+                last_tool_name=(None if standalone_face else self._last_tool_name),
+                last_tool_summary=(
+                    None if standalone_face else self._last_tool_summary
+                ),
                 stand_tool_name=self._stand_tool_name,
                 supports_navigation=self._supports_navigation,
             )
@@ -2425,6 +2483,10 @@ class RealtimeRobotAgent:
         turn.interrupted = turn.interrupted or truncate_playback
         turn.finalized = True
         turn.finalized_reason = reason
+        for response_output in turn.response_outputs.values():
+            if not response_output.released:
+                response_output.audio.clear()
+                response_output.discarded = True
         if phase == TURN_PHASE_CANCELED:
             self._ensure_terminal_error_metadata(turn, reason)
         self._latency.emit(

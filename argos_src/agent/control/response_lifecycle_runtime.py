@@ -82,21 +82,28 @@ class ResponseLifecycleRuntime:
         if turn.no_audio_retry_count >= NO_AUDIO_RESPONSE_RETRY_LIMIT:
             return False
         turn.no_audio_retry_count += 1
-        response_id = turn.response_id
+        response_id = str(response.get("id", "") or turn.response_id).strip()
+        response_state = turn.response_outputs.get(response_id)
         host.logger.warning(
             "Realtime response completed without audio; retrying req_id=%s response_id=%s retry=%s output_types=%s transcript=%r",
             turn.req_id,
             response_id,
             turn.no_audio_retry_count,
             self.response_output_types(response),
-            turn.assistant_transcript.strip(),
+            str(getattr(response_state, "transcript", "") or "").strip(),
         )
         self.cleanup_silent_response_items(turn, response)
         self.forget_response_id(response_id)
+        if response_state is not None:
+            turn.response_outputs.pop(response_id, None)
         turn.response_id = ""
-        turn.assistant_item_id = ""
-        turn.assistant_item_ids.clear()
-        turn.assistant_transcript = ""
+        if response_state is not None:
+            for item_id in response_state.assistant_item_ids:
+                turn.assistant_item_ids.discard(item_id)
+            if turn.assistant_item_id in response_state.assistant_item_ids:
+                turn.assistant_item_id = ""
+        if not turn.audible_transcript_parts:
+            turn.assistant_transcript = ""
         turn.response_done_at = 0.0
         host._set_turn_phase(
             turn,

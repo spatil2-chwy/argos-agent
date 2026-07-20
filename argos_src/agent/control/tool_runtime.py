@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 
 from argos_src.agent.realtime_turns import (
@@ -77,45 +78,75 @@ class ToolRuntime:
         host = self._host
         turn = host._turns_by_req_id.get(pending.turn_req_id)
         tool = host._tool_registry.get(pending.tool_name)
-        if turn is None or tool is None or host._is_turn_terminal(turn):
+        if turn is None or host._is_turn_terminal(turn):
             return
 
-        try:
-            arguments = json.loads(pending.arguments_json or "{}")
-            if not isinstance(arguments, dict):
-                raise ValueError("Realtime tool arguments must decode to an object.")
-        except Exception as exc:
+        tool_allowed = True
+        if tool is None:
             arguments = {}
-            result: object = json.dumps({"success": False, "error": str(exc)})
-        else:
-            set_request_context(
-                req_id=turn.req_id,
-                owner_id=turn.owner_id,
-                owner_source=turn.owner_source,
-                speech_end_perf_s=turn.speech_end_perf_s,
-                speech_end_unix_s=turn.speech_end_unix_s,
-                transcript_perf_s=turn.transcript_perf_s,
+            result: object = json.dumps(
+                {
+                    "success": False,
+                    "status": "error",
+                    "error": f"Unknown tool: {pending.tool_name}",
+                }
             )
+        else:
             try:
-                result = self.invoke_tool(tool, arguments)
+                arguments = json.loads(pending.arguments_json or "{}")
+                if not isinstance(arguments, dict):
+                    raise ValueError("Realtime tool arguments must decode to an object.")
             except Exception as exc:
-                host.logger.exception(
-                    "Tool execution failed req_id=%s tool=%s",
-                    turn.req_id,
-                    pending.tool_name,
-                )
+                arguments = {}
                 result = json.dumps({"success": False, "error": str(exc)})
-            finally:
-                clear_request_context()
+            else:
+                set_request_context(
+                    req_id=turn.req_id,
+                    owner_id=turn.owner_id,
+                    owner_source=turn.owner_source,
+                    speech_end_perf_s=turn.speech_end_perf_s,
+                    speech_end_unix_s=turn.speech_end_unix_s,
+                    transcript_perf_s=turn.transcript_perf_s,
+                )
+                try:
+                    allowed_fn = getattr(host, "_is_tool_allowed_for_turn", None)
+                    tool_allowed = not callable(allowed_fn) or bool(
+                        allowed_fn(turn, pending.tool_name)
+                    )
+                    if not tool_allowed:
+                        result = json.dumps(
+                            {
+                                "success": False,
+                                "status": "blocked",
+                                "error": "Tool use is not allowed for this internal event turn.",
+                            }
+                        )
+                    else:
+                        result = self.invoke_tool(
+                            tool,
+                            arguments,
+                            call_id=pending.call_id,
+                        )
+                except Exception as exc:
+                    host.logger.exception(
+                        "Tool execution failed req_id=%s tool=%s",
+                        turn.req_id,
+                        pending.tool_name,
+                    )
+                    result = json.dumps({"success": False, "error": str(exc)})
+                finally:
+                    clear_request_context()
 
         content, artifact = self.split_tool_result(result)
-        self.maybe_handle_side_effects(pending.tool_name, content)
+        if tool_allowed:
+            self.maybe_handle_side_effects(pending.tool_name, content)
         posture, summary = summarize_tool_payload(pending.tool_name, content)
-        host._last_tool_name = pending.tool_name
-        if posture:
-            host._robot_posture = posture
-        if summary:
-            host._last_tool_summary = summary
+        if tool_allowed:
+            host._last_tool_name = pending.tool_name
+            if posture:
+                host._robot_posture = posture
+            if summary:
+                host._last_tool_summary = summary
 
         host._tool_latency.emit(
             event="tool_result",
@@ -161,10 +192,38 @@ class ToolRuntime:
         turn.pending_tool_calls = max(0, turn.pending_tool_calls - 1)
         turn.pending_call_ids.discard(pending.call_id)
         turn.pending_tool_names_by_call_id.pop(pending.call_id, None)
+        response_state = turn.response_outputs.get(pending.source_response_id)
+        if response_state is not None:
+            response_state.completed_call_ids.add(pending.call_id)
+            response_state.last_progress_at = time.time()
         if pending.function_item_id:
             turn.function_call_item_ids.add(pending.function_item_id)
         if host._is_turn_terminal(turn):
             return
+        self.maybe_request_followup(turn, pending.source_response_id)
+
+    def maybe_request_followup(
+        self,
+        turn: QueuedTurn,
+        source_response_id: str,
+    ) -> bool:
+        """Request one follow-up after response.done and all of its tools settle."""
+        host = self._host
+        if host._is_turn_terminal(turn) or turn.pending_tool_calls > 0:
+            return False
+        response_state = turn.response_outputs.get(str(source_response_id or ""))
+        if response_state is not None:
+            if not response_state.response_done:
+                return False
+            if not response_state.expected_call_ids.issubset(
+                response_state.completed_call_ids
+            ):
+                return False
+            if response_state.followup_requested:
+                return False
+            response_state.followup_requested = True
+        elif source_response_id:
+            return False
         if turn.pending_tool_calls == 0:
             set_phase = getattr(host, "_set_turn_phase", None)
             if callable(set_phase):
@@ -174,10 +233,30 @@ class ToolRuntime:
                     trigger="tool_results_complete",
                 )
             host._send_response_create(turn)
+            return True
+        return False
 
     @staticmethod
-    def invoke_tool(tool: Any, arguments: dict[str, Any]) -> object:
+    def invoke_tool(
+        tool: Any,
+        arguments: dict[str, Any],
+        *,
+        call_id: str = "",
+    ) -> object:
         if hasattr(tool, "invoke"):
+            if (
+                str(getattr(tool, "response_format", "") or "")
+                == "content_and_artifact"
+                and str(call_id or "").strip()
+            ):
+                return tool.invoke(
+                    {
+                        "type": "tool_call",
+                        "id": str(call_id),
+                        "name": str(getattr(tool, "name", "") or ""),
+                        "args": dict(arguments),
+                    }
+                )
             return tool.invoke(arguments)
         run_fn = getattr(tool, "_run", None)
         if callable(run_fn):
@@ -189,6 +268,9 @@ class ToolRuntime:
 
     @staticmethod
     def split_tool_result(result: object) -> tuple[object, Optional[dict[str, Any]]]:
+        artifact = getattr(result, "artifact", None)
+        if isinstance(artifact, dict) and hasattr(result, "content"):
+            return getattr(result, "content"), artifact
         if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
             return result[0], result[1]
         return result, None

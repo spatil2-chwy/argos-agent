@@ -629,6 +629,7 @@ def create_agent(
             engagement=engagement,
             nav_state=nav_state,
             presence_callback=None,
+            human_turn_active=getattr(agent, "has_active_human_turn", lambda: False),
             recognized_greet_enabled=scenario_profile.face_recognition.proactive_greeting.recognized_enabled,
             unknown_greet_enabled=scenario_profile.face_recognition.proactive_greeting.unknown_enabled,
             require_attention=scenario_profile.face_recognition.proactive_greeting.require_attention,

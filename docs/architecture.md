@@ -207,7 +207,9 @@ Flow:
 1. model emits function call
 2. Python executes tool locally
 3. runtime inserts `function_call_output`
-4. runtime sends a follow-up `response.create` when all tool calls for that turn are done
+4. runtime waits for `response.done` and all expected outputs for that response
+5. runtime sends one follow-up `response.create`
+6. only the final response without tool calls is released to audio playback
 
 ## Engagement Model
 

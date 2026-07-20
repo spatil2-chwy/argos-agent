@@ -1,7 +1,13 @@
 from types import SimpleNamespace
 
 from argos_src.agent.factory_wiring import FactoryRuntimeWireup
-from argos_src.nav_support.locations import LocationStore, NavigationState
+from argos_src.nav_support.locations import (
+    FOCUSED_NAVIGATION_POLICY,
+    INTERRUPTIBLE_NAVIGATION_POLICY,
+    LocationStore,
+    NavigationState,
+)
+from argos_src.tools.unitree_go2.navigation.toolset import process_navigation_event
 from argos_src.provider_api.fake import FakeProviderClient
 
 
@@ -117,3 +123,67 @@ def test_patrol_navigation_events_do_not_reach_model_coalescer():
 
     assert coalescer.submitted == []
     assert bridge_events == [event]
+
+
+def test_blocking_navigation_result_is_not_redelivered_as_model_or_patrol_event(tmp_path):
+    nav_state = NavigationState(LocationStore(tmp_path / "locations.json"))
+    goal = nav_state.begin_goal(
+        goal_id="nav-blocking",
+        tool_name="navigate_to_location_blocking",
+        target_label="dock_door_3",
+        policy=FOCUSED_NAVIGATION_POLICY,
+    )
+    coalescer = _FakeCoalescer()
+    bridge_events = []
+    wiring = FactoryRuntimeWireup(
+        robot_client=SimpleNamespace(),
+        nav_state=nav_state,
+        battery_cache=None,
+        format_navigation_event=lambda event: f"NAV_EVENT: {event['target_label']}",
+    )
+    wiring.bind_coalescer(coalescer)
+    wiring.bind_patrol_bridge(SimpleNamespace(on_nav_event=bridge_events.append))
+    event = {
+        "event_type": "goal_result",
+        "goal_id": goal["goal_id"],
+        "outcome": "succeeded",
+    }
+
+    process_navigation_event(state=nav_state, event=event, on_nav_event=wiring.submit_nav_event)
+    wiring.submit_nav_event(event)
+
+    assert coalescer.submitted == []
+    assert bridge_events == []
+
+
+def test_nonblocking_navigation_result_reaches_only_model_coalescer(tmp_path):
+    nav_state = NavigationState(LocationStore(tmp_path / "locations.json"))
+    goal = nav_state.begin_goal(
+        goal_id="nav-async",
+        tool_name="navigate_to_location",
+        target_label="lobby",
+        policy=INTERRUPTIBLE_NAVIGATION_POLICY,
+    )
+    coalescer = _FakeCoalescer()
+    bridge_events = []
+    wiring = FactoryRuntimeWireup(
+        robot_client=SimpleNamespace(),
+        nav_state=nav_state,
+        battery_cache=None,
+        format_navigation_event=lambda event: f"NAV_EVENT: {event['target_label']}",
+    )
+    wiring.bind_coalescer(coalescer)
+    wiring.bind_patrol_bridge(SimpleNamespace(on_nav_event=bridge_events.append))
+
+    process_navigation_event(
+        state=nav_state,
+        event={
+            "event_type": "goal_result",
+            "goal_id": goal["goal_id"],
+            "outcome": "succeeded",
+        },
+        on_nav_event=wiring.submit_nav_event,
+    )
+
+    assert len(coalescer.submitted) == 1
+    assert bridge_events == []

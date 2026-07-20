@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
+
 from argos_src.agent.control.tool_runtime import ToolRuntime
-from argos_src.agent.realtime_turns import PendingToolCall, QueuedTurn
+from argos_src.agent.realtime_turns import PendingToolCall, QueuedTurn, ResponseOutputState
+from argos_src.tools.unitree_go2.vision.capture_scene import get_capture_scene_tool
 
 
 class _Latency:
@@ -129,6 +132,119 @@ def test_tool_runtime_appends_tool_artifact_message() -> None:
     item = host.registered_items[0][2]["input_item"]
     assert item["role"] == "user"
     assert item["content"][1]["image_url"] == "data:image/png;base64,abc123"
+
+
+def test_content_and_artifact_tool_is_invoked_with_tool_call_shape() -> None:
+    seen = []
+
+    class _Result:
+        content = {"success": True}
+        artifact = {"images": ["abc123"]}
+
+    class _ArtifactTool:
+        name = "capture_scene"
+        response_format = "content_and_artifact"
+
+        def invoke(self, value):
+            seen.append(value)
+            return _Result()
+
+    result = ToolRuntime.invoke_tool(
+        _ArtifactTool(),
+        {"camera": "front"},
+        call_id="call-capture",
+    )
+
+    assert seen == [
+        {
+            "type": "tool_call",
+            "id": "call-capture",
+            "name": "capture_scene",
+            "args": {"camera": "front"},
+        }
+    ]
+    assert ToolRuntime.split_tool_result(result) == (
+        {"success": True},
+        {"images": ["abc123"]},
+    )
+
+
+def test_real_capture_scene_langchain_tool_preserves_image_artifact() -> None:
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    face_service = SimpleNamespace(
+        get_cached_latest_frame=lambda **_kwargs: (frame, "head_realsense", 1.0)
+    )
+    tool = get_capture_scene_tool(face_service)
+
+    result = ToolRuntime.invoke_tool(
+        tool,
+        {"camera_resource": "head_realsense"},
+        call_id="call-real-capture",
+    )
+    content, artifact = ToolRuntime.split_tool_result(result)
+
+    assert '"success": true' in content
+    assert artifact is not None
+    assert len(artifact["images"]) == 1
+    assert artifact["images"][0]
+
+
+def test_tool_followup_waits_for_response_done_even_when_tool_finishes_first() -> None:
+    host = _Host()
+    runtime = ToolRuntime(host)
+    turn = _turn()
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-1"}
+    turn.response_outputs["resp-1"] = ResponseOutputState(
+        response_id="resp-1",
+        expected_call_ids={"call-1"},
+    )
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.execute(
+        PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-1",
+            tool_name="fake_tool",
+            arguments_json="{}",
+            source_response_id="resp-1",
+        )
+    )
+    assert host.followups == []
+
+    turn.response_outputs["resp-1"].response_done = True
+    assert runtime.maybe_request_followup(turn, "resp-1") is True
+    assert runtime.maybe_request_followup(turn, "resp-1") is False
+    assert host.followups == [turn.req_id]
+
+
+def test_unknown_tool_returns_error_and_does_not_deadlock_chain() -> None:
+    host = _Host()
+    runtime = ToolRuntime(host)
+    turn = _turn()
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-unknown"}
+    state = ResponseOutputState(
+        response_id="resp-unknown",
+        expected_call_ids={"call-unknown"},
+        response_done=True,
+    )
+    turn.response_outputs[state.response_id] = state
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.execute(
+        PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-unknown",
+            tool_name="missing_tool",
+            arguments_json="{}",
+            source_response_id=state.response_id,
+        )
+    )
+
+    assert turn.pending_tool_calls == 0
+    assert host.followups == [turn.req_id]
+    assert "Unknown tool: missing_tool" in host.registered_items[-1][2]["input_item"]["output"]
 
 
 def test_tool_runtime_builds_schema_without_title() -> None:

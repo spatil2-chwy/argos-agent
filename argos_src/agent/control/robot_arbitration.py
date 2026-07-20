@@ -75,6 +75,7 @@ def decide_proactive_face_attention(
     engagement_state: Any,
     nav_state: Any,
     recording_active: bool,
+    human_turn_active: bool = False,
 ) -> RobotArbitrationDecision:
     """Decide whether vision may emit a proactive face interaction."""
     state_name = str(getattr(engagement_state, "value", engagement_state) or "")
@@ -90,6 +91,12 @@ def decide_proactive_face_attention(
             allowed=False,
             state=RobotArbitrationState.FACE_ATTENTION_SUPPRESSED,
             reason="recording_active",
+        )
+    if human_turn_active:
+        return RobotArbitrationDecision(
+            allowed=False,
+            state=RobotArbitrationState.FACE_ATTENTION_SUPPRESSED,
+            reason="human_turn_active",
         )
     if nav_state is not None and not nav_state.allows_proactive_face_attention():
         return RobotArbitrationDecision(

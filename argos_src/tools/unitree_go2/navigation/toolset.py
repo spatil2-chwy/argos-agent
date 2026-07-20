@@ -232,8 +232,13 @@ def process_navigation_event(
     event: dict[str, Any],
     on_nav_event: Optional[NavEventSink],
 ) -> None:
-    event_type = str(event.get("event_type", "") or "")
-    goal_id = str(event.get("goal_id", "") or "")
+    routed_event = dict(event)
+    event_type = str(routed_event.get("event_type", "") or "")
+    goal_id = str(routed_event.get("goal_id", "") or "")
+    active_goal = state.get_active_goal()
+    if active_goal and str(active_goal.get("goal_id", "") or "") == goal_id:
+        routed_event.setdefault("tool_name", active_goal.get("tool_name", ""))
+        routed_event.setdefault("target_label", active_goal.get("target_label", ""))
     if event_type == "waypoint_reached":
         index = int(event.get("waypoint_index", 0) or 0)
         zero_based = max(0, index - 1)
@@ -243,7 +248,7 @@ def process_navigation_event(
         state.clear_goal_if_active(goal_id)
     if on_nav_event is not None:
         try:
-            on_nav_event(dict(event))
+            on_nav_event(routed_event)
         except Exception:
             return
 

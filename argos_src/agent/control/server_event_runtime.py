@@ -24,6 +24,7 @@ from argos_src.agent.realtime_turns import (
     TURN_PHASE_WAITING_TOOLS,
     PendingToolCall,
     QueuedTurn,
+    ResponseOutputState,
 )
 from argos_src.observability.observability import perf_now
 from argos_src.observability.pricing import estimate_transcription_cost
@@ -43,6 +44,98 @@ class ServerEventRuntime:
             object.__setattr__(self, name, value)
             return
         setattr(self._host, name, value)
+
+    @staticmethod
+    def _response_output_state(
+        turn: QueuedTurn,
+        response_id: str,
+    ) -> ResponseOutputState:
+        rendered = str(response_id or turn.response_id or "").strip()
+        state = turn.response_outputs.get(rendered)
+        if state is None:
+            state = ResponseOutputState(response_id=rendered)
+            turn.response_outputs[rendered] = state
+        return state
+
+    def _release_response_audio(
+        self,
+        turn: QueuedTurn,
+        state: ResponseOutputState,
+    ) -> bool:
+        """Release one classified audible response into the shared playback path."""
+        if state.released or state.discarded or not state.audio:
+            return False
+        response_id = state.response_id or turn.response_id
+        audio_bytes = bytes(state.audio)
+        state.audio.clear()
+        state.released = True
+        self._playback_buffer.append(audio_bytes)
+
+        if state.transcript:
+            turn.audible_transcript_parts.append(state.transcript)
+            turn.assistant_transcript = "".join(turn.audible_transcript_parts)
+        if state.assistant_item_id:
+            turn.assistant_item_id = state.assistant_item_id
+
+        if turn.audio_started:
+            with self._turn_lock:
+                self._playback_req_id = turn.req_id
+                self._playback_stream_id = response_id
+                self._playback_item_id = turn.assistant_item_id
+            turn.last_playback_progress_at = time.time()
+            self.engagement.on_playback_event(
+                "playback_started",
+                turn.req_id,
+                stream_id=response_id,
+            )
+            self._playback_controller().transition(
+                PlaybackState.PLAYING,
+                trigger="terminal_response_released",
+                req_id=turn.req_id,
+                stream_id=response_id,
+            )
+            return True
+
+        self._playback_controller().transition(
+            PlaybackState.BUFFERING,
+            trigger="terminal_response_released",
+            req_id=turn.req_id,
+            stream_id=response_id,
+        )
+        turn.audio_started = True
+        turn.audio_started_at = time.time()
+        turn.last_playback_progress_at = turn.audio_started_at
+        self._set_turn_phase(
+            turn,
+            TURN_PHASE_PLAYING,
+            trigger="terminal_response_released",
+        )
+        if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
+            self._latency.timing(
+                "terminal_audio_release_latency_s",
+                perf_now() - turn.speech_end_perf_s,
+                req_id=turn.req_id,
+                **self._exchange_log_fields(turn),
+            )
+        self.engagement.on_agent_output_started(turn.req_id, stream_id=response_id)
+        self._set_display_mode_async("speaking")
+        with self._turn_lock:
+            self._playback_req_id = turn.req_id
+            self._playback_stream_id = response_id
+            self._playback_item_id = turn.assistant_item_id
+            self._played_output_frames = 0
+        self.engagement.on_playback_event(
+            "playback_started",
+            turn.req_id,
+            stream_id=response_id,
+        )
+        self._playback_controller().transition(
+            PlaybackState.PLAYING,
+            trigger="terminal_response_released",
+            req_id=turn.req_id,
+            stream_id=response_id,
+        )
+        return True
 
     def handle_conversation_item_created(self, event: dict[str, Any]) -> None:
         item = server_event_item(event)
@@ -187,6 +280,7 @@ class ServerEventRuntime:
                 self.recover_pending_response_after_expired_stale(response_id)
             return
         self.logger.info("Realtime response created req_id=%s response_id=%s", turn.req_id, response_id)
+        self._response_output_state(turn, response_id)
         self._set_turn_phase(
             turn,
             TURN_PHASE_WAITING_FIRST_AUDIO,
@@ -317,78 +411,28 @@ class ServerEventRuntime:
             return
         if response_id:
             self._bind_response_id(turn, response_id)
+        state = self._response_output_state(turn, response_id)
+        if state.response_done or state.discarded:
+            return
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id
+            state.assistant_item_id = item_id
             turn.assistant_item_ids.add(item_id)
+            state.assistant_item_ids.add(item_id)
         audio_bytes = base64.b64decode(str(event.get("delta", "") or ""))
         if not audio_bytes:
             return
-        if not turn.audio_started:
-            self._playback_controller().transition(
-                PlaybackState.BUFFERING,
-                trigger="output_audio.delta",
-                req_id=turn.req_id,
-                stream_id=response_id,
-            )
-        self._playback_buffer.append(audio_bytes)
-        if turn.audio_started:
-            if response_id and response_id != self._playback_stream_id:
-                with self._turn_lock:
-                    self._playback_req_id = turn.req_id
-                    self._playback_stream_id = response_id
-                    self._playback_item_id = turn.assistant_item_id
-                    self._played_output_frames = 0
-                turn.last_playback_progress_at = time.time()
-                self.engagement.on_playback_event(
-                    "playback_started",
-                    turn.req_id,
-                    stream_id=response_id,
-                )
-                self._playback_controller().transition(
-                    PlaybackState.PLAYING,
-                    trigger="output_audio.delta",
+        if not turn.first_audio_delta_observed:
+            turn.first_audio_delta_observed = True
+            if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
+                self._latency.timing(
+                    "first_audio_latency_s",
+                    perf_now() - turn.speech_end_perf_s,
                     req_id=turn.req_id,
-                    stream_id=response_id,
+                    **self._exchange_log_fields(turn),
                 )
-            return
-        turn.audio_started = True
-        turn.audio_started_at = time.time()
-        turn.last_playback_progress_at = turn.audio_started_at
-        self._set_turn_phase(
-            turn,
-            TURN_PHASE_PLAYING,
-            trigger="output_audio.delta",
-        )
-        if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
-            first_audio_perf = perf_now()
-            self._latency.timing(
-                "first_audio_latency_s",
-                first_audio_perf - turn.speech_end_perf_s,
-                req_id=turn.req_id,
-                **self._exchange_log_fields(turn),
-            )
-        self.engagement.on_agent_output_started(
-            turn.req_id,
-            stream_id=turn.response_id,
-        )
-        self._set_display_mode_async("speaking")
-        with self._turn_lock:
-            self._playback_req_id = turn.req_id
-            self._playback_stream_id = turn.response_id
-            self._playback_item_id = turn.assistant_item_id
-            self._played_output_frames = 0
-        self.engagement.on_playback_event(
-            "playback_started",
-            turn.req_id,
-            stream_id=turn.response_id,
-        )
-        self._playback_controller().transition(
-            PlaybackState.PLAYING,
-            trigger="output_audio.delta",
-            req_id=turn.req_id,
-            stream_id=turn.response_id,
-        )
+        state.audio.extend(audio_bytes)
+        state.last_progress_at = time.time()
 
     def handle_output_transcript_delta(self, event: dict[str, Any]) -> None:
         self._handle_output_text_like_delta(event)
@@ -407,9 +451,13 @@ class ServerEventRuntime:
             return
         if self._is_turn_terminal(turn) and turn.phase != TURN_PHASE_FINALIZED:
             return
+        state = self._response_output_state(turn, response_id)
+        if state.response_done or state.discarded:
+            return
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id or turn.assistant_item_id
+            state.assistant_item_id = item_id or state.assistant_item_id
+            state.assistant_item_ids.add(item_id)
             turn.assistant_item_ids.add(item_id)
             self._history_index().update_item(
                 item_id,
@@ -418,22 +466,17 @@ class ServerEventRuntime:
                 status="in_progress",
                 permitted_for_inference=False,
             )
-        turn.assistant_transcript += delta
-        if turn.assistant_item_id:
+        state.transcript += delta
+        state.last_progress_at = time.time()
+        if state.assistant_item_id:
             update_snapshot = getattr(self, "_update_history_item_snapshot", None)
             if callable(update_snapshot):
                 update_snapshot(
-                    turn.assistant_item_id,
-                    text=turn.assistant_transcript,
+                    state.assistant_item_id,
+                    text=state.transcript,
                     item_type="message",
                     role="assistant",
                 )
-        self._show_display_subtitle_async(
-            self._display_subtitle_window(turn.assistant_transcript),
-            duration_ms=5000,
-        )
-        if turn.phase == TURN_PHASE_FINALIZED:
-            self._maybe_note_preference_turn(turn)
 
     def arm_playback_completion(self, turn: QueuedTurn) -> None:
         if turn.playback_completion_armed:
@@ -464,25 +507,25 @@ class ServerEventRuntime:
             return
         if response_id:
             self._bind_response_id(turn, response_id)
+        state = self._response_output_state(turn, response_id)
+        item_type = str(item.get("type", "") or "").strip()
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
-            turn.assistant_item_id = item_id or turn.assistant_item_id
-            turn.assistant_item_ids.add(item_id)
-            self._history_index().update_item(
-                item_id,
-                item_type="message",
-                role="assistant",
-                status="in_progress",
-                permitted_for_inference=False,
-            )
-        item_type = str(item.get("type", "") or "").strip()
-        role = str(item.get("role", "") or "").strip()
-        status = str(item.get("status", "") or "").strip()
-        if item_type != "message" or role != "assistant":
-            return
-        if status != "completed" or not turn.audio_started:
-            return
-        self.arm_playback_completion(turn)
+            if item_type == "function_call":
+                state.function_call_item_ids.add(item_id)
+                turn.function_call_item_ids.add(item_id)
+            else:
+                state.assistant_item_id = item_id or state.assistant_item_id
+                state.assistant_item_ids.add(item_id)
+                turn.assistant_item_ids.add(item_id)
+                self._history_index().update_item(
+                    item_id,
+                    item_type="message",
+                    role="assistant",
+                    status="in_progress",
+                    permitted_for_inference=False,
+                )
+        state.last_progress_at = time.time()
 
     def handle_function_call_delta(self, event: dict[str, Any]) -> None:
         item_id = str(event.get("item_id", "") or "")
@@ -500,8 +543,13 @@ class ServerEventRuntime:
         response_id = bucket.get("response_id", "")
         turn = self._resolve_turn_for_output(response_id=response_id, item_id=item_id)
         if turn is not None:
+            state = self._response_output_state(turn, response_id)
+            if state.response_done or state.discarded:
+                return
             self._bind_item_id_to_turn(turn, item_id)
             turn.function_call_item_ids.add(item_id)
+            state.function_call_item_ids.add(item_id)
+            state.last_progress_at = time.time()
             self._history_index().update_item(
                 item_id,
                 item_type="function_call",
@@ -531,11 +579,17 @@ class ServerEventRuntime:
         if not call_id or not tool_name:
             self.logger.warning("Ignoring incomplete function call payload")
             return
+        state = self._response_output_state(turn, response_id)
+        state.expected_call_ids.add(call_id)
+        state.last_progress_at = time.time()
+        if call_id in turn.pending_call_ids or call_id in state.completed_call_ids:
+            return
         self._cancel_owner_turn_for_tool(turn, tool_name)
         self._call_id_to_req_id[call_id] = turn.req_id
         if item_id:
             self._bind_item_id_to_turn(turn, item_id)
             turn.function_call_item_ids.add(item_id)
+            state.function_call_item_ids.add(item_id)
             self._history_index().update_item(
                 item_id,
                 item_type="function_call",
@@ -588,6 +642,7 @@ class ServerEventRuntime:
                 tool_name=tool_name,
                 arguments_json=arguments_json or "{}",
                 function_item_id=item_id,
+                source_response_id=state.response_id,
             )
         )
 
@@ -617,52 +672,16 @@ class ServerEventRuntime:
             response_id=response_id or None,
             **self._exchange_log_fields(turn),
         )
+        state = self._response_output_state(turn, response_id)
+        state.response_done = True
+        state.status = status
+        state.last_progress_at = time.time()
         final_transcript = self._transcript_from_response(response)
         if final_transcript and (
-            not turn.assistant_transcript
-            or len(final_transcript) >= len(turn.assistant_transcript.strip())
+            not state.transcript
+            or len(final_transcript) >= len(state.transcript.strip())
         ):
-            turn.assistant_transcript = final_transcript
-        quarantined = False
-        quarantine_fn = getattr(self, "_quarantine_anonymous_history_if_needed", None)
-        if callable(quarantine_fn):
-            quarantined = bool(quarantine_fn(turn))
-        if turn.assistant_item_id and turn.assistant_transcript.strip():
-            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
-            if callable(update_snapshot):
-                update_snapshot(
-                    turn.assistant_item_id,
-                    text=turn.assistant_transcript,
-                    item_type="message",
-                    role="assistant",
-                    status=status,
-                )
-            self._history_index().update_item(
-                turn.assistant_item_id,
-                item_type="message",
-                role="assistant",
-                status="done" if status == "completed" else status,
-                permitted_for_inference=status == "completed" and not quarantined,
-                input_item={
-                    "id": turn.assistant_item_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": turn.assistant_transcript.strip(),
-                        }
-                    ],
-                }
-                if status == "completed" and not quarantined
-                else None,
-            )
-        if turn.audio_started and turn.assistant_transcript.strip():
-            self._show_display_subtitle_async(
-                self._display_subtitle_window(turn.assistant_transcript),
-                duration_ms=5000,
-            )
+            state.transcript = final_transcript
         output_items = response.get("output", []) or []
         for output_item in output_items:
             item_id = str(output_item.get("id", "") or "").strip()
@@ -671,6 +690,7 @@ class ServerEventRuntime:
                 self._bind_item_id_to_turn(turn, item_id)
                 if item_type == "function_call":
                     turn.function_call_item_ids.add(item_id)
+                    state.function_call_item_ids.add(item_id)
                     self._history_index().update_item(
                         item_id,
                         item_type="function_call",
@@ -687,50 +707,128 @@ class ServerEventRuntime:
                     )
                 elif item_type == "message":
                     turn.assistant_item_ids.add(item_id)
-                    if not turn.assistant_item_id:
-                        turn.assistant_item_id = item_id
-                    if status == "completed" and turn.assistant_transcript.strip():
-                        self._history_index().update_item(
-                            item_id,
-                            item_type="message",
-                            role="assistant",
-                            status="done",
-                            permitted_for_inference=not quarantined,
-                            input_item={
-                                "id": item_id,
-                                "type": "message",
-                                "role": "assistant",
-                                "status": "completed",
-                                "content": [
-                                    {
-                                        "type": "output_text",
-                                        "text": turn.assistant_transcript.strip(),
-                                    }
-                                ],
-                            }
-                            if not quarantined
-                            else None,
-                        )
-        has_function_call = any(
-            str(item.get("type", "") or "") == "function_call" for item in output_items
-        )
-        if has_function_call or turn.pending_tool_calls > 0:
+                    state.assistant_item_id = item_id or state.assistant_item_id
+                    state.assistant_item_ids.add(item_id)
+                if item_type == "function_call":
+                    call_id = str(output_item.get("call_id", "") or "").strip()
+                    if call_id:
+                        state.expected_call_ids.add(call_id)
+
+        for output_item in output_items:
+            if str(output_item.get("type", "") or "").strip() != "function_call":
+                continue
+            call_id = str(output_item.get("call_id", "") or "").strip()
+            if (
+                not call_id
+                or call_id in turn.pending_call_ids
+                or call_id in state.completed_call_ids
+            ):
+                continue
+            self.handle_function_call_done(
+                {
+                    "response_id": response_id,
+                    "item_id": str(output_item.get("id", "") or ""),
+                    "call_id": call_id,
+                    "name": str(output_item.get("name", "") or ""),
+                    "arguments": str(output_item.get("arguments", "") or "{}"),
+                }
+            )
+
+        has_function_call = bool(state.expected_call_ids or state.function_call_item_ids)
+        message_item_ids = set(state.assistant_item_ids)
+        if state.assistant_item_id:
+            message_item_ids.add(state.assistant_item_id)
+        if has_function_call:
+            state.discarded = True
+            suppressed_audio_bytes = len(state.audio)
+            state.audio.clear()
+            for item_id in message_item_ids:
+                update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+                if callable(update_snapshot):
+                    update_snapshot(
+                        item_id,
+                        text=state.transcript,
+                        item_type="message",
+                        role="assistant",
+                        status=status,
+                    )
+                self._history_index().update_item(
+                    item_id,
+                    item_type="message",
+                    role="assistant",
+                    status="done" if status == "completed" else status,
+                    permitted_for_inference=False,
+                    input_item=None,
+                )
+            self._latency.emit(
+                event="intermediate_response_suppressed",
+                req_id=turn.req_id,
+                response_id=response_id or None,
+                suppressed_audio_bytes=suppressed_audio_bytes,
+                suppressed_transcript_chars=len(state.transcript),
+                tool_call_count=len(state.expected_call_ids),
+                **self._exchange_log_fields(turn),
+            )
             self._set_turn_phase(
                 turn,
                 TURN_PHASE_WAITING_TOOLS,
                 trigger="response.done_waiting_tools",
             )
+            self._tool_runtime().maybe_request_followup(turn, response_id)
             return
 
         incomplete_details = response.get("incomplete_details")
-        has_audio_reply = turn.audio_started
+        has_audio_reply = bool(state.audio)
+        if has_audio_reply:
+            self._release_response_audio(turn, state)
+
+        quarantined = False
+        quarantine_fn = getattr(self, "_quarantine_anonymous_history_if_needed", None)
+        if callable(quarantine_fn):
+            quarantined = bool(quarantine_fn(turn))
+        for item_id in message_item_ids:
+            update_snapshot = getattr(self, "_update_history_item_snapshot", None)
+            if callable(update_snapshot):
+                update_snapshot(
+                    item_id,
+                    text=state.transcript,
+                    item_type="message",
+                    role="assistant",
+                    status=status,
+                )
+            self._history_index().update_item(
+                item_id,
+                item_type="message",
+                role="assistant",
+                status="done" if status == "completed" else status,
+                permitted_for_inference=status == "completed" and not quarantined,
+                input_item={
+                    "id": item_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": state.transcript.strip(),
+                        }
+                    ],
+                }
+                if status == "completed" and not quarantined and state.transcript.strip()
+                else None,
+            )
+        if has_audio_reply and turn.assistant_transcript.strip():
+            self._show_display_subtitle_async(
+                self._display_subtitle_window(turn.assistant_transcript),
+                duration_ms=5000,
+            )
         if status == "incomplete" and has_audio_reply:
             self.logger.warning(
                 "Realtime response finished incomplete after audio started req_id=%s response_id=%s incomplete_details=%s transcript=%r",
                 turn.req_id,
                 response_id,
                 incomplete_details,
-                turn.assistant_transcript.strip(),
+                state.transcript.strip(),
             )
             if self._should_continue_incomplete_audio_reply(turn):
                 self._continue_incomplete_audio_reply(turn)
@@ -743,7 +841,7 @@ class ServerEventRuntime:
                 status,
                 incomplete_details,
                 self._response_output_types(response),
-                turn.assistant_transcript.strip(),
+                state.transcript.strip(),
             )
             self._cleanup_silent_response_items(turn, response)
             self._terminate_turn(
@@ -765,7 +863,7 @@ class ServerEventRuntime:
                 status,
                 incomplete_details,
                 self._response_output_types(response),
-                turn.assistant_transcript.strip(),
+                state.transcript.strip(),
             )
             self._cleanup_silent_response_items(turn, response)
             self._terminate_turn(

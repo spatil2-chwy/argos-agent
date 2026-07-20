@@ -599,6 +599,9 @@ class AgentStateRuntime:
                     )
                 )
             ]
+            metadata = turn.metadata if isinstance(turn.metadata, dict) else {}
+            if str(metadata.get("inference_history_policy") or "").strip() == "fresh":
+                selected_item_ids = []
             total_items = len(self._history_index().snapshot())
         setattr(turn, "selected_inference_history_item_ids", list(selected_item_ids))
         setattr(turn, "inference_owner_key", new_owner_key)

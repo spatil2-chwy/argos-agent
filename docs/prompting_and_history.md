@@ -290,6 +290,11 @@ That means useful tool data really is part of the model-visible history:
 - the tool output item
 - optional visual artifacts
 
+Tools declared with LangChain's `content_and_artifact` response format are
+invoked with a structured tool-call envelope so the returned artifact is not
+collapsed to text. For `capture_scene`, this is what preserves the encoded image
+and adds the `input_image` item to the next model request.
+
 ## Tool Barrier: Why One Human Turn Can Produce Multiple `response.create` Calls
 
 A single human turn can contain:
@@ -299,22 +304,44 @@ A single human turn can contain:
 3. local `function_call_output` items
 4. a follow-up `response.create` after all tool calls finish
 
-The runtime waits until `turn.pending_tool_calls == 0` before sending the follow-up response request.
+The runtime waits for both sides of the tool barrier before sending the follow-up
+response request:
 
-This assumes the model called a registered tool from the installed schemas.
-Unknown tool names are contract bugs: they can leave the turn waiting until the
-runtime watchdog cancels it.
+- `response.done` has classified the source response as tool-bearing;
+- every expected call id from that response has a function-call output; and
+- the turn has no remaining pending tool executions.
+
+The barrier is response-local and fires once, so it handles sequential tool
+chains, multiple calls in one response, and the race where a fast local tool
+finishes before `response.done` arrives.
+
+This normally assumes the model called a registered tool from the installed
+schemas. If an unknown tool name still arrives, the runtime returns an error
+output and advances the barrier instead of leaving the turn deadlocked.
 
 So one logical turn may look like:
 
 ```text
 human/audio input
   -> response.create
-  -> function_call
+  -> function_call                  # any assistant preamble is not played
   -> function_call_output
   -> response.create
   -> final spoken answer
 ```
+
+Only the terminal response is audible. Audio and transcript deltas from a
+tool-bearing response are retained per response until `response.done`, then the
+audio is discarded. Its assistant text remains available as a diagnostic
+snapshot but is not selected for inference, because feeding an unheard preamble
+back to the model would create conversation state that the human never heard.
+The function-call and function-call-output items remain selected, so no tool
+reasoning or result is lost.
+
+Standalone proactive face turns use a fresh-history policy and `tool_choice=none`.
+This prevents a face event from inheriting a previous human mission or invoking
+robot tools, while ordinary human turns and their tool chains retain the normal
+tool schemas and owner-scoped history.
 
 ## What History Items Mean
 

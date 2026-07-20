@@ -14,7 +14,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
-from argos_src.nav_support.locations import NavigationState
+from argos_src.nav_support.locations import NavigationState, PATROL_NAVIGATION_POLICY
 
 from .control.robot_arbitration import decide_proactive_face_attention
 from .control.types import EngagementMode
@@ -49,6 +49,7 @@ class FaceEventBridge:
         engagement,
         nav_state: NavigationState,
         presence_callback=None,
+        human_turn_active=None,
         recognized_greet_enabled: bool = True,
         unknown_greet_enabled: bool = True,
         require_attention: bool = False,
@@ -61,6 +62,7 @@ class FaceEventBridge:
         self._engagement = engagement
         self._nav_state = nav_state
         self._presence_callback = presence_callback
+        self._human_turn_active = human_turn_active
         self._recognized_greet_enabled = recognized_greet_enabled
         self._unknown_greet_enabled = unknown_greet_enabled
         self._require_attention = bool(require_attention)
@@ -129,6 +131,15 @@ class FaceEventBridge:
         )
         self._engagement.on_face_or_wake()
 
+    def _human_turn_is_active(self) -> bool:
+        callback = getattr(self, "_human_turn_active", None)
+        if not callable(callback):
+            return False
+        try:
+            return bool(callback())
+        except Exception:
+            return True
+
     @staticmethod
     def _resolve_unknown_greet_stability_frames(
         face_service: FaceRecognitionService,
@@ -183,6 +194,7 @@ class FaceEventBridge:
             engagement_state=self._engagement.state,
             nav_state=self._nav_state,
             recording_active=recording_active,
+            human_turn_active=self._human_turn_is_active(),
         )
         self._last_face_arbitration_decision = face_attention_decision
         allow_face_attention = face_attention_decision.allowed
@@ -328,6 +340,7 @@ class PatrolLoopBridge:
                 location_name=rendered_target,
                 battery=self._battery_cache,
                 tool_name="patrol_navigation",
+                policy=PATROL_NAVIGATION_POLICY,
             )
         except Exception:
             return False

@@ -122,7 +122,12 @@ The user speaks through the microphone. The runtime buffers raw PCM into the Rea
 text input -> audio output
 ```
 
-Face events, battery events, and user-facing navigation events are turned into short text payloads and inserted into the same conversation as system-role messages before `response.create`. Patrol dispatch and routine patrol navigation results are owned by the runtime; patrol navigation does not require a model tool call or model turn between hops.
+Face events, battery events, and user-facing asynchronous navigation events are turned into short text payloads and inserted into the same conversation as system-role messages before `response.create`. Navigation completions have one delivery owner: blocking tool results return through the active tool chain, asynchronous human navigation results become model events, and patrol results stay runtime-only. Patrol dispatch and routine patrol navigation therefore do not require a model tool call or model turn between hops.
+
+Standalone proactive face turns are also isolated from human missions. They are
+discarded while a human turn is active; when admitted, they use fresh inference
+history and disable model tool calls. A face greeting can therefore speak, but it
+cannot inherit and resume a prior person's robot task.
 
 ## What Is an "Item"?
 
@@ -268,20 +273,30 @@ The binding rules are:
 
 This is the key bookkeeping that keeps transcripts, playback, tool calls, and history ownership aligned even with overlap and interruption.
 
-### Step 9: First audio delta flips the turn into playback
+### Step 9: Response audio is classified before playback
 
-On the first `response.output_audio.delta`:
+Audio and transcript deltas are buffered under their `response_id`. They do not
+immediately enter the shared playback buffer because the runtime does not yet
+know whether that response will contain a function call.
 
-- the turn gets `audio_started=True`
-- phase becomes `playing`
-- `first_audio_latency_s` is logged
-- engagement gets `on_agent_output_started(...)`
-- engagement also gets `on_playback_event("playback_started", ...)`
-- the optional interaction display moves to the `excited` face
+At `response.done`:
 
-Assistant transcript deltas stream as response subtitles. Recording uses a fixed
-status subtitle, while the post-recording thinking phase uses a centered message
-instead of a face.
+- if any output item is a function call, that response's buffered audio is
+  discarded and its assistant preamble remains diagnostic-only;
+- function calls and function-call outputs remain model-visible history;
+- after all expected calls from that response have completed, exactly one
+  follow-up `response.create` is sent;
+- a response with no function calls is terminal, so its buffered audio is
+  released to playback, its transcript becomes the audible assistant transcript,
+  and the subtitle is shown.
+
+This makes chained and parallel tool use coherent while ensuring the person only
+hears the terminal answer. `first_audio_latency_s` still measures the first model
+audio delta; `terminal_audio_release_latency_s` measures when classified terminal
+audio becomes eligible for playback.
+
+For the rationale, tradeoffs, and the currently unimplemented `allow_preamble`
+idea, see `future_considerations.md`.
 
 ### Step 10: Completion waits for both response and playback
 
@@ -331,6 +346,7 @@ The coalescer is intentionally opinionated:
 - internal-only flushes are deferred while recording is active, so they can be drained into the audio turn
 - repeated face events for the same person collapse to the newest one
 - nav waypoint chatter is dropped if a final goal result is already present
+- blocking navigation results are not also submitted as standalone `NAV_EVENT` turns
 - runtime-owned patrol resume is suppressed while the robot is interacting
 - patrol is suppressed whenever engagement is not `IDLE`
 

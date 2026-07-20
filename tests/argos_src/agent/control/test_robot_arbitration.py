@@ -69,3 +69,15 @@ def test_proactive_face_attention_policy_allows_idle_interruptible_scene() -> No
 
     assert decision.allowed is True
     assert decision.state == "face_attention_allowed"
+
+
+def test_proactive_face_attention_policy_blocks_active_human_turn() -> None:
+    decision = decide_proactive_face_attention(
+        engagement_state="idle",
+        nav_state=_NavState(),
+        recording_active=False,
+        human_turn_active=True,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "human_turn_active"

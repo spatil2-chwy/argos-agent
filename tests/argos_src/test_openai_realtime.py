@@ -76,3 +76,16 @@ def test_realtime_text_payloads_use_output_modalities() -> None:
         "output_modalities": ["text"],
         "max_output_tokens": 64,
     }
+
+
+def test_realtime_response_can_disable_tools_for_proactive_turn() -> None:
+    response = realtime_response_payload(
+        instructions="greet briefly",
+        output_modalities=["audio"],
+        max_output_tokens=32,
+        tools=[],
+        tool_choice="none",
+    )
+
+    assert response["tools"] == []
+    assert response["tool_choice"] == "none"

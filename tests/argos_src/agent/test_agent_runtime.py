@@ -1287,7 +1287,7 @@ def test_input_transcription_logs_usage_cost():
     assert usage_event["session_total_cost_usd"] == 0.00025
 
 
-def test_output_audio_and_transcript_resolve_by_response_and_item_id():
+def test_output_audio_and_transcript_are_buffered_by_response_and_item_id():
     agent = _make_agent()
     turn = _make_turn("rt-output")
     agent._turns_by_req_id[turn.req_id] = turn
@@ -1310,11 +1310,102 @@ def test_output_audio_and_transcript_resolve_by_response_and_item_id():
         }
     )
 
+    state = turn.response_outputs["resp-1"]
+    assert turn.audio_started is False
+    assert bytes(state.audio) == b"\x01\x02"
+    assert state.assistant_item_id == "asst-1"
+    assert state.transcript == "hi"
+    assert turn.assistant_transcript == ""
+    assert agent.engagement.output_started == []
+
+
+def test_tool_bearing_response_is_silent_and_terminal_followup_is_audible():
+    agent = _make_agent()
+    turn = _make_turn("rt-terminal-only")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, "resp-tool")
+
+    for handler, delta in (
+        (agent._handle_output_audio_delta, "AQI="),
+        (agent._handle_output_transcript_delta, "I'm checking. "),
+    ):
+        handler(
+            {
+                "response_id": "resp-tool",
+                "item_id": "asst-tool",
+                "delta": delta,
+            }
+        )
+    agent._handle_response_done(
+        {
+            "response": {
+                "id": "resp-tool",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-tool",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "I'm checking."}],
+                    },
+                    {
+                        "id": "call-item",
+                        "type": "function_call",
+                        "name": "fake_tool",
+                        "call_id": "call-1",
+                        "arguments": "{}",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert turn.audio_started is False
+    assert turn.assistant_transcript == ""
+    assert agent._playback_buffer.buffered_frames() == 0
+    assert agent._history_items["asst-tool"].permitted_for_inference is False
+    assert agent._history_items["call-item"].permitted_for_inference is True
+
+    agent._bind_response_id(turn, "resp-terminal")
+    agent._handle_output_audio_delta(
+        {
+            "response_id": "resp-terminal",
+            "item_id": "asst-terminal",
+            "delta": "AQI=",
+        }
+    )
+    agent._handle_output_transcript_delta(
+        {
+            "response_id": "resp-terminal",
+            "item_id": "asst-terminal",
+            "delta": "Crates block the doorway.",
+        }
+    )
+    agent._handle_response_done(
+        {
+            "response": {
+                "id": "resp-terminal",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-terminal",
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "Crates block the doorway."}
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+
     assert turn.audio_started is True
-    assert turn.phase == realtime_mod.TURN_PHASE_PLAYING
-    assert turn.assistant_item_id == "asst-1"
-    assert turn.assistant_transcript == "hi"
-    assert agent.engagement.output_started == [(turn.req_id, "resp-1")]
+    assert turn.assistant_transcript == "Crates block the doorway."
+    assert agent._playback_buffer.buffered_frames() == 1
+    assert agent._history_items["asst-terminal"].permitted_for_inference is True
+    assert any(
+        event.get("event") == "intermediate_response_suppressed"
+        for event in agent._latency.events
+    )
 
 
 def test_response_done_flushes_complete_audio_transcript_to_display():
@@ -1323,10 +1414,16 @@ def test_response_done_flushes_complete_audio_transcript_to_display():
     agent._display_queue = queue.Queue()
     turn = _make_turn("rt-final-display")
     turn.response_id = "resp-final-display"
-    turn.audio_started = True
-    turn.assistant_transcript = "partial"
     agent._turns_by_req_id[turn.req_id] = turn
     agent._bind_response_id(turn, turn.response_id)
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": turn.response_id,
+            "item_id": "asst-final-display",
+            "delta": "AQI=",
+        }
+    )
 
     agent._handle_response_done(
         {
@@ -1351,6 +1448,7 @@ def test_response_done_flushes_complete_audio_transcript_to_display():
     )
 
     assert turn.assistant_transcript == "partial transcript completed"
+    assert agent._display_queue.get_nowait() == ("mode", "speaking")
     assert agent._display_queue.get_nowait() == (
         "subtitle",
         {"text": "partial transcript completed", "duration_ms": 5000},
@@ -1512,6 +1610,27 @@ def test_function_call_cancels_queued_owner_turn():
     assert owner_turn.cancellations == [
         {"req_id": "rt-owner-cancel", "reason": "tool:move_robot"}
     ]
+
+
+def test_duplicate_function_call_done_is_enqueued_once():
+    agent = _make_agent()
+    turn = _make_turn("rt-tool-dedup")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_response_id(turn, "resp-dedup")
+    event = {
+        "type": "response.function_call_arguments.done",
+        "response_id": "resp-dedup",
+        "item_id": "func-dedup",
+        "call_id": "call-dedup",
+        "name": "fake_tool",
+        "arguments": "{}",
+    }
+
+    agent._handle_function_call_done(event)
+    agent._handle_function_call_done(event)
+
+    assert turn.pending_tool_calls == 1
+    assert agent._tool_queue.qsize() == 1
 
 
 def test_first_audio_latency_is_not_logged_for_text_turns():
@@ -1703,10 +1822,16 @@ def test_incomplete_response_with_audio_finishes_playback_instead_of_canceling()
     agent = _make_agent()
     turn = _make_turn("rt-incomplete-audio")
     turn.response_id = "resp-incomplete"
-    turn.audio_started = True
-    turn.audio_started_at = time.time()
     agent._turns_by_req_id[turn.req_id] = turn
     agent._bind_response_id(turn, turn.response_id)
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": turn.response_id,
+            "item_id": "asst-incomplete",
+            "delta": "AQI=",
+        }
+    )
 
     agent._handle_response_done(
         {
@@ -1728,6 +1853,7 @@ def test_incomplete_response_with_audio_finishes_playback_instead_of_canceling()
 
     assert turn.phase != realtime_mod.TURN_PHASE_CANCELED
     assert turn.response_finished.is_set()
+    agent._playback_buffer.pop_frames(1)
     assert turn.playback_finished.wait(timeout=0.2)
     assert agent.engagement.done == [(turn.req_id, True)]
 
@@ -1736,10 +1862,16 @@ def test_truncated_incomplete_audio_reply_requests_one_continuation():
     agent = _make_agent()
     turn = _make_turn("rt-incomplete-continue")
     turn.response_id = "resp-incomplete-continue"
-    turn.audio_started = True
-    turn.audio_started_at = time.time()
     agent._turns_by_req_id[turn.req_id] = turn
     agent._bind_response_id(turn, turn.response_id)
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": turn.response_id,
+            "item_id": "asst-incomplete-continue",
+            "delta": "AQI=",
+        }
+    )
     followups = []
     agent._send_response_create = lambda queued_turn: followups.append(queued_turn.req_id)
 
@@ -1766,14 +1898,20 @@ def test_truncated_incomplete_audio_reply_requests_one_continuation():
     assert followups == [turn.req_id]
 
 
-def test_completed_output_item_arms_playback_completion_before_response_done():
+def test_completed_output_item_waits_for_response_done_before_playback():
     agent = _make_agent()
     turn = _make_turn("rt-item-done")
     turn.response_id = "resp-item-done"
-    turn.audio_started = True
-    turn.audio_started_at = time.time()
     agent._turns_by_req_id[turn.req_id] = turn
     agent._bind_response_id(turn, turn.response_id)
+    agent._handle_output_audio_delta(
+        {
+            "type": "response.output_audio.delta",
+            "response_id": turn.response_id,
+            "item_id": "asst-item-done",
+            "delta": "AQI=",
+        }
+    )
 
     agent._handle_output_item_done(
         {
@@ -1788,9 +1926,8 @@ def test_completed_output_item_arms_playback_completion_before_response_done():
         }
     )
 
-    assert turn.playback_completion_armed is True
-    assert agent.engagement.done == [(turn.req_id, True)]
-    assert turn.playback_finished.wait(timeout=0.1) is False
+    assert turn.playback_completion_armed is False
+    assert agent.engagement.done == []
     assert not any(event[0] == "playback_completed" for event in agent.engagement.playback_events)
 
     agent._handle_response_done(
@@ -1812,6 +1949,7 @@ def test_completed_output_item_arms_playback_completion_before_response_done():
 
     assert agent.engagement.done == [(turn.req_id, True)]
     assert turn.response_finished.is_set()
+    agent._playback_buffer.pop_frames(1)
     assert turn.playback_finished.wait(timeout=0.2)
     assert agent.engagement.playback_events[-1][0] == "playback_completed"
 
@@ -2989,6 +3127,28 @@ def test_internal_recognized_face_event_resolves_owner_context():
     assert turn.owner_id == "person-9"
     assert turn.owner_source == "face"
     assert turn.context_snapshot.owner_id == "person-9"
+    assert turn.metadata["inference_history_policy"] == "fresh"
+    assert turn.metadata["tool_policy"] == "none"
+    request = agent._build_response_request(turn)
+    assert request["tools"] == []
+    assert request["tool_choice"] == "none"
+
+
+def test_face_event_is_dropped_while_human_turn_is_active():
+    agent = _make_agent()
+    agent._active_turn = _make_turn("rt-human-active")
+
+    agent.enqueue_internal_event(
+        "FACE_EVENT: recognized person 'Alex' appeared in front of you.",
+        metadata={"internal": True, "internal_event": "face"},
+    )
+
+    assert agent._turn_queue.empty()
+    assert any(
+        event.get("event") == "internal_event_suppressed"
+        and event.get("suppression_reason") == "human_turn_active"
+        for event in agent._latency.events
+    )
 
 
 def test_external_text_turn_resolves_single_visible_owner_for_live_chat_memory():

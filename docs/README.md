@@ -20,6 +20,7 @@ Start with these in order:
 - `prompting_and_history.md`: static prompt, dynamic turn instructions, Realtime history items, tool outputs, and owner-scoped history.
 - `observability.md`: latency log format, realtime markers, cost/usage events, CLI helpers, and FastAPI/Vite dashboard.
 - `attention_gate.md`: head-pose attention signal and passive microphone admission.
+- `future_considerations.md`: non-normative design notes for possible follow-up work, including terminal-only tool speech and a potential preamble policy.
 
 ## Identity And Memory
 

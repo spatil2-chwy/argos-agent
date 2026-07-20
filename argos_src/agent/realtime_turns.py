@@ -84,9 +84,11 @@ class QueuedTurn:
     user_item_id: str = ""
     user_transcript: str = ""
     assistant_transcript: str = ""
+    audible_transcript_parts: list[str] = field(default_factory=list)
     preference_noted: bool = False
     preference_unattributed_flushed: bool = False
     audio_started: bool = False
+    first_audio_delta_observed: bool = False
     interrupted: bool = False
     pending_tool_calls: int = 0
     finalized: bool = False
@@ -106,6 +108,7 @@ class QueuedTurn:
     function_call_item_ids: set[str] = field(default_factory=set)
     pending_call_ids: set[str] = field(default_factory=set)
     pending_tool_names_by_call_id: dict[str, str] = field(default_factory=dict)
+    response_outputs: dict[str, "ResponseOutputState"] = field(default_factory=dict)
     inference_owner_key: str = ""
     inference_scope_id: str = ""
     selected_inference_history_item_ids: list[str] = field(default_factory=list)
@@ -127,6 +130,27 @@ class PendingToolCall:
     tool_name: str
     arguments_json: str
     function_item_id: str = ""
+    source_response_id: str = ""
+
+
+@dataclass
+class ResponseOutputState:
+    """Response-local output buffered until tool-vs-terminal intent is known."""
+
+    response_id: str
+    assistant_item_id: str = ""
+    assistant_item_ids: set[str] = field(default_factory=set)
+    function_call_item_ids: set[str] = field(default_factory=set)
+    expected_call_ids: set[str] = field(default_factory=set)
+    completed_call_ids: set[str] = field(default_factory=set)
+    audio: bytearray = field(default_factory=bytearray)
+    transcript: str = ""
+    status: str = ""
+    response_done: bool = False
+    followup_requested: bool = False
+    discarded: bool = False
+    released: bool = False
+    last_progress_at: float = field(default_factory=time.time)
 
 
 @dataclass
