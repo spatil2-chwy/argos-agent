@@ -3451,14 +3451,18 @@ def test_people_context_includes_directory_profile_lines():
     assert "[PERSON MEMORY]\nPreferences:\n- preferred name: sash" in rendered
 
 
-def test_people_context_treats_string_directory_profile_as_one_line():
+def test_people_context_normalizes_observed_stringified_directory_profile():
     persons = [
         SimpleNamespace(
             person_id="person-1",
             name="Alice",
             bbox_area=20.0,
             interaction_count=2,
-            directory_profile_lines="title: AI Technologist II (Analyst)",
+            directory_profile_lines=(
+                "['Title: Robotics Software Engineer I Co-op', "
+                "'Manager: Brian Waite', 'Tenure: ...', "
+                "'Function: Administration']"
+            ),
             context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: sash",
             preferred_language="",
         ),
@@ -3480,8 +3484,11 @@ def test_people_context_treats_string_directory_profile_as_one_line():
         speaker_visible=True,
     )
 
-    assert "Directory: title: AI Technologist II (Analyst)" in rendered
-    assert "Directory: t; i; t; l; e" not in rendered
+    assert (
+        "Directory: Title: Robotics Software Engineer I Co-op; "
+        "Manager: Brian Waite; Tenure: ...; Function: Administration"
+    ) in rendered
+    assert "Directory: [; '; T; i; t; l; e" not in rendered
 
 
 def test_people_context_includes_directory_only_for_visible_non_owner_people():

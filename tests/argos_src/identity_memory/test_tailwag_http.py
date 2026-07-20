@@ -173,6 +173,50 @@ def test_tailwag_optional_profiles_preserve_http_null_results():
     ]
 
 
+@pytest.mark.parametrize(
+    "directory_profile_lines",
+    [
+        ["Title: Robotics Software Engineer I Co-op", "Manager: Brian Waite"],
+        "['Title: Robotics Software Engineer I Co-op', 'Manager: Brian Waite']",
+    ],
+)
+def test_tailwag_person_profile_normalizes_directory_response_shapes(
+    directory_profile_lines,
+):
+    class _ProfileProvider(_StrictProviderClient):
+        def request(self, *, resource_id, operation, args=None, timeout_ms=None):
+            if operation == "memory.people_profile":
+                self.calls.append(
+                    (operation, {"resource_id": resource_id, **dict(args or {})})
+                )
+                return {
+                    "person_id": "person-1",
+                    "display_name": "Alex",
+                    "directory_profile_lines": directory_profile_lines,
+                }
+            return super().request(
+                resource_id=resource_id,
+                operation=operation,
+                args=args,
+                timeout_ms=timeout_ms,
+            )
+
+    provider = _ProfileProvider()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    profile = client.person_profile("person-1")
+
+    assert profile is not None
+    assert profile.directory_profile_lines == (
+        "Title: Robotics Software Engineer I Co-op",
+        "Manager: Brian Waite",
+    )
+    assert [name for name, _payload in provider.calls] == ["memory.people_profile"]
+
+
 def test_tailwag_person_context_uses_markdown_provider_contract():
     provider = _StrictProviderClient()
     client = TailwagHttpIdentityMemoryClient(

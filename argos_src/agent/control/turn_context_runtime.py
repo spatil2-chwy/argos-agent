@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from argos_src.agent.realtime_turns import FrozenTurnContext
 from argos_src.face_recognition.models import PersonContext
+from argos_src.identity_memory.normalization import normalize_directory_profile_lines
 
 
 class TurnContextRuntime:
@@ -69,7 +70,9 @@ class TurnContextRuntime:
             if profile is None:
                 return None
             metadata = dict(getattr(profile, "metadata", {}) or {})
-            directory_lines = tuple(getattr(profile, "directory_profile_lines", ()) or ())
+            directory_lines = normalize_directory_profile_lines(
+                getattr(profile, "directory_profile_lines", ())
+            )
             person = PersonContext(
                 person_id=rendered,
                 name=str(getattr(profile, "display_name", "") or metadata.get("name") or rendered),
