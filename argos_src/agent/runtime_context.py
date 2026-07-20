@@ -12,6 +12,25 @@ from argos_src.nav_support.locations import LocationStore
 MAX_TOOL_SUMMARY_LEN = 240
 
 
+def _recognition_basis(
+    *,
+    owner_source: str,
+    audio_speaker_id: Optional[str],
+    owner_id: str,
+) -> str:
+    """Describe the trusted evidence used by the local owner resolver."""
+    normalized_source = str(owner_source or "").strip().lower()
+    if normalized_source == "audio_face_agree":
+        return "trusted face and audio match"
+    if normalized_source in {"audio", "speaker", "voice"}:
+        return "trusted voice match"
+    if normalized_source == "face":
+        return "trusted face match"
+    if str(audio_speaker_id or "").strip() == owner_id:
+        return "trusted voice match"
+    return "trusted identity match"
+
+
 def format_people_context(
     persons: list,
     *,
@@ -36,7 +55,7 @@ def format_people_context(
         ),
         None,
     )
-    lines = ["[PERSON SPEAKING TO YOU]"]
+    lines = ["[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]"]
     owner_name = (
         str(getattr(owner_person, "name", "") or "").strip()
         if owner_person is not None
@@ -62,6 +81,14 @@ def format_people_context(
         lines.append(f"- {owner_name} ({count_str})")
     else:
         lines.append(f"- {owner_name} ({count_str}; not visible)")
+    lines.append(
+        "- Recognition basis: "
+        + _recognition_basis(
+            owner_source=owner_source,
+            audio_speaker_id=audio_speaker_id,
+            owner_id=resolved_owner_id,
+        )
+    )
 
     directory_items = (
         getattr(owner_person, "directory_profile_lines", ())
@@ -148,8 +175,8 @@ def format_saved_locations(store: LocationStore) -> str:
     names = store.names()
     if not names:
         return (
-            "[SAVED LOCATIONS] (none yet - use get_current_location "
-            "with save=True to save a spot)"
+            "[SAVED LOCATIONS] (none yet - use save_current_location "
+            "to save a named spot)"
         )
     return "[SAVED LOCATIONS] " + ", ".join(names)
 

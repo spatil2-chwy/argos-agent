@@ -145,7 +145,7 @@ Used for:
 
 - face events
 - navigation events
-- patrol resume events
+- runtime-owned patrol resume/navigation dispatch
 - battery events
 
 ### External human speech

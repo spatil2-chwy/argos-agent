@@ -1,46 +1,135 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="355" viewBox="0 0 1100 355">
-  <rect width="1100" height="355" rx="22" fill="#fbfaf7"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="540" viewBox="0 0 1100 540" role="img" aria-labelledby="title desc">
+  <title id="title">Argos-agent spoken turn flow</title>
+  <desc id="desc">Holistic turn-flow diagram showing local harness inputs feeding admission, capture, owner and context, realtime model response, and robot output.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
     </marker>
+    <marker id="smallArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="7" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.09"/>
+    </filter>
     <style>
-      .title{font:700 19px Arial,sans-serif;fill:#111827}
-      .body{font:400 14px Arial,sans-serif;fill:#374151}
-      .step{stroke:#cbd5e1;stroke-width:2}
-      .line{stroke:#475569;stroke-width:3;fill:none;marker-end:url(#arrow)}
+      .bg{fill:#f8fafc}
+      .panel{fill:#ffffff;stroke:#d8dee8;stroke-width:1.5}
+      .step{fill:#ffffff;stroke-width:1.7;filter:url(#shadow)}
+      .input{fill:#f8fafc;stroke:#cbd5e1;stroke-width:1.2}
+      .num{font:700 12px Arial,sans-serif;fill:#ffffff}
+      .stepTitle{font:700 15px Arial,sans-serif;fill:#111827}
+      .body{font:400 12.5px Arial,sans-serif;fill:#475569}
+      .pill{font:700 11px Arial,sans-serif;fill:#334155}
+      .note{font:700 14px Arial,sans-serif;fill:#334155}
+      .caption{font:400 13px Arial,sans-serif;fill:#64748b}
+      .line{stroke:#64748b;stroke-width:2.8;fill:none;marker-end:url(#arrow)}
+      .feed{stroke:#94a3b8;stroke-width:1.8;fill:none;marker-end:url(#smallArrow)}
     </style>
   </defs>
-  <rect x="40" y="95" width="165" height="135" rx="18" fill="#dbeafe" class="step"/>
-  <text x="122" y="135" text-anchor="middle" class="title">1. Listen?</text>
-  <text x="122" y="166" text-anchor="middle" class="body">wake word, speech,</text>
-  <text x="122" y="188" text-anchor="middle" class="body">attention, robot state</text>
 
-  <rect x="255" y="95" width="165" height="135" rx="18" fill="#ccfbf1" class="step"/>
-  <text x="337" y="135" text-anchor="middle" class="title">2. Capture</text>
-  <text x="337" y="166" text-anchor="middle" class="body">one spoken turn,</text>
-  <text x="337" y="188" text-anchor="middle" class="body">then close it cleanly</text>
+  <rect width="1100" height="540" rx="10" class="bg"/>
+  <rect x="28" y="28" width="1044" height="484" rx="10" class="panel"/>
 
-  <rect x="470" y="95" width="165" height="135" rx="18" fill="#fee2e2" class="step"/>
-  <text x="552" y="135" text-anchor="middle" class="title">3. Who?</text>
-  <text x="552" y="166" text-anchor="middle" class="body">combine face and</text>
-  <text x="552" y="188" text-anchor="middle" class="body">voice evidence</text>
+  <text x="56" y="68" class="note">A spoken turn is shaped by local signals before the realtime model answers.</text>
+  <text x="56" y="92" class="caption">Inputs flow into each stage: sensing, admission, ownership, prompt context, tool policy, playback, display, and memory handoff.</text>
 
-  <rect x="685" y="95" width="165" height="135" rx="18" fill="#fef3c7" class="step"/>
-  <text x="767" y="135" text-anchor="middle" class="title">4. Context</text>
-  <text x="767" y="166" text-anchor="middle" class="body">person, robot,</text>
-  <text x="767" y="188" text-anchor="middle" class="body">memory if enabled</text>
+  <g id="admission-inputs">
+    <rect x="48" y="126" width="172" height="28" rx="7" class="input"/>
+    <text x="134" y="145" text-anchor="middle" class="pill">VAD + wake window</text>
+    <rect x="48" y="164" width="172" height="28" rx="7" class="input"/>
+    <text x="134" y="183" text-anchor="middle" class="pill">Face recognition</text>
+    <rect x="48" y="202" width="172" height="28" rx="7" class="input"/>
+    <text x="134" y="221" text-anchor="middle" class="pill">Attention gate</text>
+  </g>
 
-  <rect x="900" y="95" width="165" height="135" rx="18" fill="#dcfce7" class="step"/>
-  <text x="982" y="135" text-anchor="middle" class="title">5. Respond</text>
-  <text x="982" y="166" text-anchor="middle" class="body">speak, display,</text>
-  <text x="982" y="188" text-anchor="middle" class="body">gesture, use tools</text>
+  <g id="capture-inputs">
+    <rect x="267" y="126" width="172" height="28" rx="7" class="input"/>
+    <text x="353" y="145" text-anchor="middle" class="pill">Mic buffer</text>
+    <rect x="267" y="164" width="172" height="28" rx="7" class="input"/>
+    <text x="353" y="183" text-anchor="middle" class="pill">Pre-roll audio</text>
+    <rect x="267" y="202" width="172" height="28" rx="7" class="input"/>
+    <text x="353" y="221" text-anchor="middle" class="pill">Speech-end commit</text>
+  </g>
 
-  <path d="M205 162 L255 162" class="line"/>
-  <path d="M420 162 L470 162" class="line"/>
-  <path d="M635 162 L685 162" class="line"/>
-  <path d="M850 162 L900 162" class="line"/>
+  <g id="owner-inputs">
+    <rect x="486" y="126" width="172" height="28" rx="7" class="input"/>
+    <text x="572" y="145" text-anchor="middle" class="pill">Face snapshot</text>
+    <rect x="486" y="164" width="172" height="28" rx="7" class="input"/>
+    <text x="572" y="183" text-anchor="middle" class="pill">Speaker match</text>
+    <rect x="486" y="202" width="172" height="28" rx="7" class="input"/>
+    <text x="572" y="221" text-anchor="middle" class="pill">Memory lookup</text>
+  </g>
 
-  <rect x="250" y="270" width="600" height="45" rx="16" fill="#e5e7eb" stroke="#cbd5e1"/>
-  <text x="550" y="298" text-anchor="middle" class="body">The model responds only after Argos has shaped the turn, owner, context, and allowed actions.</text>
+  <g id="model-inputs">
+    <rect x="705" y="126" width="172" height="28" rx="7" class="input"/>
+    <text x="791" y="145" text-anchor="middle" class="pill">Owner history</text>
+    <rect x="705" y="164" width="172" height="28" rx="7" class="input"/>
+    <text x="791" y="183" text-anchor="middle" class="pill">Battery + posture</text>
+    <rect x="705" y="202" width="172" height="28" rx="7" class="input"/>
+    <text x="791" y="221" text-anchor="middle" class="pill">Tools + locations</text>
+  </g>
+
+  <g id="output-inputs">
+    <rect x="924" y="126" width="128" height="28" rx="7" class="input"/>
+    <text x="988" y="145" text-anchor="middle" class="pill">Playback</text>
+    <rect x="924" y="164" width="128" height="28" rx="7" class="input"/>
+    <text x="988" y="183" text-anchor="middle" class="pill">Display</text>
+    <rect x="924" y="202" width="128" height="28" rx="7" class="input"/>
+    <text x="988" y="221" text-anchor="middle" class="pill">Tools / memory</text>
+  </g>
+
+  <path d="M134 230 L134 252" class="feed"/>
+  <path d="M353 230 L353 252" class="feed"/>
+  <path d="M572 230 L572 252" class="feed"/>
+  <path d="M791 230 L791 252" class="feed"/>
+  <path d="M988 230 L988 252" class="feed"/>
+
+  <rect x="48" y="252" width="172" height="118" rx="10" class="step" stroke="#60a5fa"/>
+  <circle cx="76" cy="281" r="15" fill="#2563eb"/>
+  <text x="76" y="285" text-anchor="middle" class="num">1</text>
+  <text x="101" y="285" class="stepTitle">Admission</text>
+  <text x="134" y="318" text-anchor="middle" class="body">open listening only</text>
+  <text x="134" y="338" text-anchor="middle" class="body">when speech, attention,</text>
+  <text x="134" y="358" text-anchor="middle" class="body">and state allow it</text>
+
+  <rect x="267" y="252" width="172" height="118" rx="10" class="step" stroke="#2dd4bf"/>
+  <circle cx="295" cy="281" r="15" fill="#0f766e"/>
+  <text x="295" y="285" text-anchor="middle" class="num">2</text>
+  <text x="320" y="285" class="stepTitle">Capture</text>
+  <text x="353" y="318" text-anchor="middle" class="body">buffer one spoken turn,</text>
+  <text x="353" y="338" text-anchor="middle" class="body">then commit audio to</text>
+  <text x="353" y="358" text-anchor="middle" class="body">the realtime session</text>
+
+  <rect x="486" y="252" width="172" height="118" rx="10" class="step" stroke="#f59e0b"/>
+  <circle cx="514" cy="281" r="15" fill="#b45309"/>
+  <text x="514" y="285" text-anchor="middle" class="num">3</text>
+  <text x="539" y="285" class="stepTitle">Owner + context</text>
+  <text x="572" y="318" text-anchor="middle" class="body">resolve owner, select</text>
+  <text x="572" y="338" text-anchor="middle" class="body">history, and build</text>
+  <text x="572" y="358" text-anchor="middle" class="body">prompt context</text>
+
+  <rect x="705" y="252" width="172" height="118" rx="10" class="step" stroke="#818cf8"/>
+  <circle cx="733" cy="281" r="15" fill="#4f46e5"/>
+  <text x="733" y="285" text-anchor="middle" class="num">4</text>
+  <text x="758" y="285" class="stepTitle">Realtime model</text>
+  <text x="791" y="318" text-anchor="middle" class="body">generate speech and</text>
+  <text x="791" y="338" text-anchor="middle" class="body">request registered</text>
+  <text x="791" y="358" text-anchor="middle" class="body">tools when needed</text>
+
+  <rect x="924" y="252" width="128" height="118" rx="10" class="step" stroke="#34d399"/>
+  <circle cx="952" cy="281" r="15" fill="#15803d"/>
+  <text x="952" y="285" text-anchor="middle" class="num">5</text>
+  <text x="977" y="285" class="stepTitle">Robot</text>
+  <text x="988" y="318" text-anchor="middle" class="body">speak, show,</text>
+  <text x="988" y="338" text-anchor="middle" class="body">act, log, and</text>
+  <text x="988" y="358" text-anchor="middle" class="body">record memory</text>
+
+  <path d="M220 311 L267 311" class="line"/>
+  <path d="M439 311 L486 311" class="line"/>
+  <path d="M658 311 L705 311" class="line"/>
+  <path d="M877 311 L924 311" class="line"/>
+
+  <rect x="112" y="416" width="876" height="64" rx="9" fill="#eef2f7" stroke="#cbd5e1"/>
+  <text x="550" y="443" text-anchor="middle" class="caption">The harness decides when the turn exists, whose context is eligible, which robot state and tools are visible,</text>
+  <text x="550" y="463" text-anchor="middle" class="caption">and how model output becomes playback, display state, tool execution, and owner-scoped memory.</text>
 </svg>

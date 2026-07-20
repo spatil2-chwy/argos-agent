@@ -157,6 +157,7 @@ class NavigationState:
         self._goal_lock = threading.Lock()
         self._goal_counter = 0
         self._interrupted_mission: Optional[dict[str, Any]] = None
+        self._return_points: dict[str, LocationCoords] = {}
         self._active_goal_changed_callback: Optional[Callable[[], None]] = None
         self._patrol: dict[str, Any] = {
             "enabled": False,
@@ -259,6 +260,21 @@ class NavigationState:
             if isinstance(reported, set):
                 out["reported_waypoint_indices"] = set(reported)
             return out
+
+    def set_return_point(self, label: str, coords: LocationCoords) -> None:
+        rendered = str(label or "").strip() or "assignment_start"
+        with self._goal_lock:
+            self._return_points[rendered] = {
+                "x": float(coords["x"]),
+                "y": float(coords["y"]),
+                "theta": float(coords["theta"]),
+            }
+
+    def get_return_point(self, label: str) -> Optional[LocationCoords]:
+        rendered = str(label or "").strip() or "assignment_start"
+        with self._goal_lock:
+            coords = self._return_points.get(rendered)
+            return dict(coords) if coords is not None else None
 
     def get_active_policy(self) -> Optional[NavigationPolicy]:
         with self._goal_lock:

@@ -665,7 +665,10 @@ def test_unknown_turn_instructions_forbid_identity_inference():
     assert "[IDENTITY STATUS]" in instructions
     assert "Current speaker is not safely identified" in instructions
     assert "prior session history" in instructions
-    assert "Only use a person's name when a current [PERSON SPEAKING TO YOU] block is present" in instructions
+    assert (
+        "Only use a person's name when a current "
+        "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED] block is present"
+    ) in instructions
 
 
 def test_anonymous_assistant_name_leak_is_quarantined_from_inference():
@@ -3370,8 +3373,9 @@ def test_people_context_reports_audio_face_mismatch():
         speaker_visible=True,
     )
 
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Bob (met once before)" in rendered
+    assert "- Recognition basis: trusted voice match" in rendered
     assert "Speaker resolution:" not in rendered
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
@@ -3416,8 +3420,9 @@ def test_people_context_includes_directory_profile_lines():
         "Directory: title: AI Technologist II (Analyst); manager: Dan Burns; "
         "tenure: 0 year(s), 3 month(s), 5 day(s)"
     ) in rendered
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Alice (met 2 times)" in rendered
+    assert "- Recognition basis: trusted face and audio match" in rendered
     assert "[PERSON MEMORY]\nPreferences:\n- preferred name: sash" in rendered
 
 
@@ -3496,13 +3501,14 @@ def test_people_context_includes_directory_only_for_visible_non_owner_people():
     assert "- Alice" in rendered
     assert "Directory: title: Robotics Engineer" not in rendered
     assert "Pets:\n- Luna is her dog." not in rendered
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Bob (met once before)" in rendered
+    assert "- Recognition basis: trusted voice match" in rendered
     assert "Directory: title: Product Manager" in rendered
     assert "[PERSON MEMORY]\nPreferences:\n- preferred name: Bobby" in rendered
 
 
-def test_people_context_omits_audio_face_agreement_logistics():
+def test_people_context_reports_audio_face_agreement_basis():
     persons = [
         SimpleNamespace(
             person_id="person-1",
@@ -3531,13 +3537,14 @@ def test_people_context_omits_audio_face_agreement_logistics():
         speaker_visible=True,
     )
 
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Alice (met 2 times)" in rendered
+    assert "- Recognition basis: trusted face and audio match" in rendered
     assert "Speaker resolution:" not in rendered
     assert "primary visible person" not in rendered
 
 
-def test_people_context_omits_offscreen_audio_speaker_logistics():
+def test_people_context_reports_offscreen_audio_speaker_basis():
     persons = [
         SimpleNamespace(
             person_id="person-1",
@@ -3574,8 +3581,9 @@ def test_people_context_omits_offscreen_audio_speaker_logistics():
         speaker_visible=False,
     )
 
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Bob (met once before)" in rendered
+    assert "- Recognition basis: trusted voice match" in rendered
     assert "Speaker resolution:" not in rendered
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
@@ -3622,9 +3630,22 @@ def test_people_context_falls_back_to_owner_id_when_owner_person_missing():
         speaker_visible=False,
     )
 
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- person-7 (first time; not visible)" in rendered
+    assert "- Recognition basis: trusted voice match" in rendered
     assert "Speaker resolution:" not in rendered
+
+
+def test_people_context_reports_face_recognition_basis():
+    rendered = format_people_context(
+        [],
+        owner_id="person-7",
+        owner_source="face",
+        speaker_visible=True,
+    )
+
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
+    assert "- Recognition basis: trusted face match" in rendered
 
 
 def test_people_context_emits_preferred_language_directive():
@@ -3759,8 +3780,9 @@ def test_build_turn_instructions_uses_people_context_without_extra_speaker_block
 
     rendered = agent._build_turn_instructions(turn)
 
-    assert "[PERSON SPEAKING TO YOU]" in rendered
+    assert "[PERSON SPEAKING TO YOU \u2014 IDENTITY RESOLVED]" in rendered
     assert "- Bob (met once before; not visible)" in rendered
+    assert "- Recognition basis: trusted voice match" in rendered
     assert "[OTHER PEOPLE IN VIEW]" in rendered
     assert "- Alice" in rendered
     assert "Current speaker is not safely identified." not in rendered

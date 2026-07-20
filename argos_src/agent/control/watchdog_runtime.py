@@ -13,9 +13,12 @@ from argos_src.agent.realtime_turns import (
     TURN_PHASE_WAITING_FIRST_AUDIO,
     TURN_PHASE_WAITING_TOOLS,
 )
+from argos_src.nav_support.timeouts import NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC
 
 LONG_RUNNING_TOOL_TIMEOUTS_SEC = {
     "enroll_visible_person": 45.0,
+    "navigate_to_location_blocking": NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC,
+    "navigate_to_return_point_blocking": NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC,
 }
 
 

@@ -303,13 +303,35 @@ class PatrolLoopBridge:
     def __init__(
         self,
         *,
-        coalescer,
+        robot_client=None,
         nav_state: NavigationState,
+        battery_cache=None,
         next_hop_delay_sec: float = PATROL_NEXT_HOP_DELAY_SEC,
     ):
-        self._coalescer = coalescer
+        self._robot_client = robot_client
         self._nav_state = nav_state
+        self._battery_cache = battery_cache
         self._next_hop_delay_sec = float(next_hop_delay_sec)
+
+    def _start_patrol_navigation(self, target: str) -> bool:
+        rendered_target = str(target or "").strip()
+        if not rendered_target or self._robot_client is None:
+            return False
+        try:
+            from argos_src.tools.unitree_go2.navigation.toolset import (
+                start_navigation_to_saved_location,
+            )
+
+            result = start_navigation_to_saved_location(
+                robot_client=self._robot_client,
+                state=self._nav_state,
+                location_name=rendered_target,
+                battery=self._battery_cache,
+                tool_name="patrol_navigation",
+            )
+        except Exception:
+            return False
+        return bool(result.get("success", False))
 
     def on_nav_event(self, event: dict) -> None:
         if event.get("event_type") != "goal_result":
@@ -340,19 +362,7 @@ class PatrolLoopBridge:
                 return
             if str(patrol_state.get("awaiting_target", "")).strip() != next_target:
                 return
-            self._coalescer.submit(
-                text=(
-                    "PATROL_EVENT: patrol loop is active. "
-                    "Continue patrol by calling "
-                    f"navigate_to_location(location_name='{next_target}')."
-                ),
-                metadata={
-                    "internal": True,
-                    "internal_event": "patrol_continue",
-                    "source": "navigation",
-                    "target_label": next_target,
-                },
-            )
+            self._start_patrol_navigation(next_target)
 
         threading.Thread(
             target=_emit_next_patrol_hop_after_delay,

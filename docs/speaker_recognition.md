@@ -132,6 +132,11 @@ Possible outcomes:
 - `unknown`
   Audio is weak and there is no strict single-face owner candidate.
 
+Resolved outcomes are projected into the authoritative
+`[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]` prompt block. The block labels
+`audio` as a trusted voice match, `face` as a trusted face match, and
+`audio_face_agree` as a trusted face and audio match.
+
 This is why a later turn can move between:
 
 - strong audio ownership

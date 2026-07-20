@@ -20,11 +20,13 @@ from argos_src.nav_support.locations import (
     NavigationPolicy,
     NavigationState,
 )
+from argos_src.nav_support.timeouts import NAV_BLOCKING_RESULT_TIMEOUT_SEC
 from argos_src.tools.base import BaseTool
-from argos_src.tools.common.tool_response import tool_response_json
+from argos_src.tools.common.tool_response import build_tool_response, tool_response_json
 
 MAX_RELATIVE_TF_AGE_SEC = 3.0
-NAV_BLOCKING_RESULT_TIMEOUT_SEC = 600.0
+LOCALIZE_NEAR_DISTANCE_M = 3.0
+LOCALIZE_APPROXIMATE_DISTANCE_M = 4.0
 MAP_FRAME = "map"
 ROBOT_FRAME = "base_link"
 NavEventSink = Callable[[dict[str, Any]], None]
@@ -149,6 +151,81 @@ def _begin_provider_goal(
     )
 
 
+def start_navigation_to_saved_location(
+    *,
+    robot_client: Any,
+    state: NavigationState,
+    location_name: str,
+    battery: Optional[BatteryStateCache] = None,
+    tool_name: str = "navigate_to_location",
+    policy: NavigationPolicy = INTERRUPTIBLE_NAVIGATION_POLICY,
+) -> dict[str, Any]:
+    blocked = _battery_blocks_nav(battery)
+    if blocked and location_name != CHARGE_DOCK_LOCATION_NAME:
+        return build_tool_response(
+            success=False,
+            status="blocked",
+            message=blocked,
+            location_name=location_name,
+        )
+    coords = state.location_store.get(location_name)
+    if coords is None:
+        known = ", ".join(state.location_store.names()) or "none saved yet"
+        return build_tool_response(
+            success=False,
+            status="error",
+            message=f"Location '{location_name}' not found. Known locations: {known}.",
+            location_name=location_name,
+        )
+
+    goal_id = state.new_goal_id()
+    try:
+        result = robot_client.navigate_to_pose(
+            goal_id=goal_id,
+            x=coords["x"],
+            y=coords["y"],
+            theta=coords["theta"],
+            target_label=location_name,
+            tool_name=tool_name,
+            blocking=False,
+            policy=_policy_payload(policy),
+        )
+    except Exception as exc:
+        return build_tool_response(
+            success=False,
+            status="error",
+            message=str(exc),
+            location_name=location_name,
+        )
+    if not _accepted(result):
+        return build_tool_response(
+            success=False,
+            status="error",
+            message=_result_error(result, "Navigation provider rejected the goal."),
+            location_name=location_name,
+        )
+    _begin_provider_goal(
+        robot_client=robot_client,
+        state=state,
+        goal_id=goal_id,
+        tool_name=tool_name,
+        target_label=location_name,
+        policy=policy,
+    )
+    return build_tool_response(
+        success=True,
+        status="started",
+        message=(
+            f"Navigation started to {location_name}. Do not assume arrival yet. "
+            "Wait for a NAV_EVENT goal_result with outcome=succeeded before saying you reached it."
+        ),
+        eventual=True,
+        result_source="deferred_event",
+        location_name=location_name,
+        goal_id=goal_id,
+    )
+
+
 def process_navigation_event(
     *,
     state: NavigationState,
@@ -248,9 +325,32 @@ class FollowWaypointsInput(BaseModel):
     )
 
 
-class GetCurrentLocationInput(BaseModel):
-    name: Optional[str] = Field(default=None)
-    save: bool = Field(default=False)
+class LocalizeCurrentLocationInput(BaseModel):
+    data: Optional[str] = Field(default=None)
+
+
+class MarkReturnPointInput(BaseModel):
+    label: str = Field(
+        default="assignment_start",
+        description=(
+            "Temporary return-point label for the current task. Use assignment_start "
+            "unless the user gave a more specific return name."
+        ),
+    )
+
+
+class NavigateToReturnPointInput(BaseModel):
+    label: str = Field(
+        default="assignment_start",
+        description="Temporary return-point label previously created with mark_return_point.",
+    )
+
+
+class SaveCurrentLocationInput(BaseModel):
+    name: str = Field(
+        ...,
+        description="Name to persist for the robot's current location.",
+    )
 
 
 class CancelNavigationInput(BaseModel):
@@ -268,8 +368,10 @@ class ChargingDockInput(BaseModel):
 class NavigateToLocationTool(BaseTool):
     name: str = "navigate_to_location"
     description: str = (
-        "Navigate to a named location. Use when the user says 'go/navigate/move to X' "
-        "and X is in [SAVED LOCATIONS]."
+        "Start non-blocking navigation to a saved location and return immediately. "
+        "Use mainly for patrol/background movement when a later NAV_EVENT will report arrival. "
+        "For human requests that need arrival before speaking, inspecting, or using another tool, "
+        "use navigate_to_location_blocking instead."
     )
     args_schema: Type[BaseModel] = NavigateToLocationInput
     robot_client: Any = Field(exclude=True)
@@ -281,70 +383,15 @@ class NavigateToLocationTool(BaseTool):
         arbitrary_types_allowed = True
 
     def _run(self, location_name: str) -> str:
-        blocked = _battery_blocks_nav(self.battery)
-        if blocked and location_name != CHARGE_DOCK_LOCATION_NAME:
-            return _nav_tool_json(
-                success=False,
-                status="blocked",
-                message=blocked,
-                location_name=location_name,
-            )
-        coords = self.state.location_store.get(location_name)
-        if coords is None:
-            known = ", ".join(self.state.location_store.names()) or "none saved yet"
-            return _nav_tool_json(
-                success=False,
-                status="error",
-                message=f"Location '{location_name}' not found. Known locations: {known}.",
-                location_name=location_name,
-            )
-
-        goal_id = self.state.new_goal_id()
-        try:
-            result = self.robot_client.navigate_to_pose(
-                goal_id=goal_id,
-                x=coords["x"],
-                y=coords["y"],
-                theta=coords["theta"],
-                target_label=location_name,
-                tool_name=self.name,
-                blocking=False,
-                policy=_policy_payload(INTERRUPTIBLE_NAVIGATION_POLICY),
-            )
-        except Exception as exc:
-            return _nav_tool_json(
-                success=False,
-                status="error",
-                message=str(exc),
-                location_name=location_name,
-            )
-        if not _accepted(result):
-            return _nav_tool_json(
-                success=False,
-                status="error",
-                message=_result_error(result, "Navigation provider rejected the goal."),
-                location_name=location_name,
-            )
-        _begin_provider_goal(
+        payload = start_navigation_to_saved_location(
             robot_client=self.robot_client,
             state=self.state,
-            goal_id=goal_id,
+            location_name=location_name,
+            battery=self.battery,
             tool_name=self.name,
-            target_label=location_name,
             policy=INTERRUPTIBLE_NAVIGATION_POLICY,
         )
-        return _nav_tool_json(
-            success=True,
-            status="started",
-            message=(
-                f"Navigation started to {location_name}. Do not assume arrival yet. "
-                "Wait for a NAV_EVENT goal_result with outcome=succeeded before saying you reached it."
-            ),
-            eventual=True,
-            result_source="deferred_event",
-            location_name=location_name,
-            goal_id=goal_id,
-        )
+        return tool_response_json(**payload)
 
 
 class NavigateRelativeTool(BaseTool):
@@ -638,23 +685,198 @@ class StopPatrolTool(BaseTool):
         return _nav_tool_json(success=True, status="completed", message="Patrol stopped.")
 
 
-class GetCurrentLocationTool(BaseTool):
-    name: str = "get_current_location"
-    description: str = "Get the robot's current pose and optionally save it."
-    args_schema: Type[BaseModel] = GetCurrentLocationInput
+class LocalizeCurrentLocationTool(BaseTool):
+    name: str = "localize_current_location"
+    description: str = (
+        "Answer where the robot currently is by comparing its current pose to saved locations. "
+        "Use for questions like 'where are you?', 'what location are you at?', or "
+        "'are you near X?'. This is read-only: it does not save a location or mark a return point."
+    )
+    args_schema: Type[BaseModel] = LocalizeCurrentLocationInput
     robot_client: Any = Field(exclude=True)
     state: NavigationState = Field(exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
 
-    def _run(self, name: Optional[str] = None, save: bool = False) -> str:
-        if save and not str(name or "").strip():
+    def _run(self, data: Optional[str] = None) -> str:
+        del data
+        try:
+            x, y, yaw, _stamp_s = _transform_pose(
+                self.robot_client.get_transform(MAP_FRAME, ROBOT_FRAME)
+            )
+        except Exception as exc:
             return _nav_tool_json(
                 success=False,
                 status="error",
-                message="A location name is required when save=true.",
-                save=save,
+                message=f"Could not localize current location: {exc}.",
+            )
+
+        pose = {"x": x, "y": y, "theta": yaw}
+        saved_locations = self.state.location_store.get_all()
+        if not saved_locations:
+            return _nav_tool_json(
+                success=True,
+                status="completed",
+                message="Current pose is known, but no saved locations exist yet.",
+                result_source="immediate",
+                confidence="unknown",
+                nearest_location="",
+                distance_m=None,
+                pose=pose,
+                saved_location_count=0,
+            )
+
+        nearest_name = ""
+        nearest_distance = float("inf")
+        for name, coords in saved_locations.items():
+            distance = math.hypot(float(coords["x"]) - x, float(coords["y"]) - y)
+            if distance < nearest_distance:
+                nearest_name = str(name)
+                nearest_distance = distance
+
+        rounded_distance = round(nearest_distance, 3)
+        if nearest_distance <= LOCALIZE_NEAR_DISTANCE_M:
+            confidence = "near"
+            message = f"I am near {nearest_name}."
+        elif nearest_distance <= LOCALIZE_APPROXIMATE_DISTANCE_M:
+            confidence = "approximate"
+            message = f"I am closest to {nearest_name}, about {nearest_distance:.1f} meters away."
+        else:
+            confidence = "unknown"
+            message = (
+                f"I am not confidently at a saved location. "
+                f"The closest saved location is {nearest_name}, about {nearest_distance:.1f} meters away."
+            )
+
+        return _nav_tool_json(
+            success=True,
+            status="completed",
+            message=message,
+            result_source="immediate",
+            confidence=confidence,
+            nearest_location=nearest_name,
+            distance_m=rounded_distance,
+            pose=pose,
+            saved_location_count=len(saved_locations),
+        )
+
+
+class MarkReturnPointTool(BaseTool):
+    name: str = "mark_return_point"
+    description: str = (
+        "Remember the robot's current pose as a temporary return point for the active task. "
+        "Use this before leaving the user for inspection/report-back missions. "
+        "This does not create a persistent saved location."
+    )
+    args_schema: Type[BaseModel] = MarkReturnPointInput
+    robot_client: Any = Field(exclude=True)
+    state: NavigationState = Field(exclude=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def _run(self, label: str = "assignment_start") -> str:
+        rendered_label = str(label or "").strip() or "assignment_start"
+        try:
+            x, y, yaw, _stamp_s = _transform_pose(
+                self.robot_client.get_transform(MAP_FRAME, ROBOT_FRAME)
+            )
+        except Exception as exc:
+            return _nav_tool_json(
+                success=False,
+                status="error",
+                message=f"Could not mark return point: {exc}.",
+                label=rendered_label,
+            )
+        self.state.set_return_point(rendered_label, {"x": x, "y": y, "theta": yaw})
+        return _nav_tool_json(
+            success=True,
+            status="completed",
+            message=f"Marked temporary return point '{rendered_label}'.",
+            result_source="immediate",
+            label=rendered_label,
+            data={"x": x, "y": y, "theta": yaw},
+        )
+
+
+class NavigateToReturnPointBlockingTool(BaseTool):
+    name: str = "navigate_to_return_point_blocking"
+    description: str = (
+        "Navigate back to a temporary return point created with mark_return_point and wait "
+        "for arrival. Use this before the final spoken report for inspection/report-back missions."
+    )
+    args_schema: Type[BaseModel] = NavigateToReturnPointInput
+    robot_client: Any = Field(exclude=True)
+    state: NavigationState = Field(exclude=True)
+    battery: Optional[BatteryStateCache] = Field(default=None, exclude=True)
+    timeout_sec: float = Field(default=NAV_BLOCKING_RESULT_TIMEOUT_SEC, exclude=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def _run(self, label: str = "assignment_start") -> str:
+        rendered_label = str(label or "").strip() or "assignment_start"
+        coords = self.state.get_return_point(rendered_label)
+        if coords is None:
+            return _nav_tool_json(
+                success=False,
+                status="error",
+                message=(
+                    f"Return point '{rendered_label}' is not marked. "
+                    "Call mark_return_point before leaving if the task requires returning."
+                ),
+                label=rendered_label,
+            )
+        ok, detail = navigate_to_pose_blocking(
+            robot_client=self.robot_client,
+            state=self.state,
+            x=coords["x"],
+            y=coords["y"],
+            theta=coords["theta"],
+            timeout_sec=self.timeout_sec,
+            battery=self.battery,
+            tool_name=self.name,
+            target_label=f"return_point:{rendered_label}",
+            policy=FOCUSED_NAVIGATION_POLICY,
+        )
+        if not ok:
+            return _nav_tool_json(
+                success=False,
+                status="error",
+                message=f"Return navigation failed: {detail}",
+                label=rendered_label,
+            )
+        return _nav_tool_json(
+            success=True,
+            status="completed",
+            message=f"Returned to '{rendered_label}'.",
+            label=rendered_label,
+        )
+
+
+class SaveCurrentLocationTool(BaseTool):
+    name: str = "save_current_location"
+    description: str = (
+        "Persist the robot's current pose as a named saved location. Use when the user asks "
+        "to save, remember, mark, or name this spot for future navigation. "
+        "For temporary task return points, use mark_return_point instead."
+    )
+    args_schema: Type[BaseModel] = SaveCurrentLocationInput
+    robot_client: Any = Field(exclude=True)
+    state: NavigationState = Field(exclude=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def _run(self, name: str) -> str:
+        rendered_name = str(name or "").strip()
+        if not rendered_name:
+            return _nav_tool_json(
+                success=False,
+                status="error",
+                message="A saved-location name is required.",
+                name=name,
             )
         try:
             x, y, yaw, _stamp_s = _transform_pose(
@@ -664,29 +886,26 @@ class GetCurrentLocationTool(BaseTool):
             return _nav_tool_json(
                 success=False,
                 status="error",
-                message=f"Could not get current pose: {exc}.",
-                name=name,
-                save=save,
+                message=f"Could not save current location: {exc}.",
+                name=rendered_name,
             )
-        msg = f"Current pose: x={x:.2f}, y={y:.2f}, theta={yaw:.2f} (map frame)."
-        if save:
-            saved_name = str(name).strip()
-            self.state.location_store.set(saved_name, {"x": x, "y": y, "theta": yaw})
-            msg += f" Saved as '{saved_name}'."
+        self.state.location_store.set(rendered_name, {"x": x, "y": y, "theta": yaw})
         return _nav_tool_json(
             success=True,
             status="completed",
-            message=msg,
+            message=f"Saved current location as '{rendered_name}'.",
             result_source="immediate",
             data={"x": x, "y": y, "theta": yaw},
-            name=name,
-            save=save,
+            name=rendered_name,
         )
 
 
 class NavigateToLocationBlockingTool(BaseTool):
     name: str = "navigate_to_location_blocking"
-    description: str = "Navigate to a named location and wait for final result."
+    description: str = (
+        "Navigate to a saved location and wait for final arrival before continuing. "
+        "Use this for normal human-requested navigation and before capture_scene when inspecting a place."
+    )
     args_schema: Type[BaseModel] = NavigateToLocationInput
     robot_client: Any = Field(exclude=True)
     state: NavigationState = Field(exclude=True)
@@ -774,7 +993,7 @@ class ChargingDockTool(BaseTool):
                 message=(
                     f"Location '{CHARGE_DOCK_LOCATION_NAME}' is not saved. "
                     "Save the approach pose near the charging station with "
-                    "get_current_location(name='charge_dock', save=True), then retry."
+                    "save_current_location(name='charge_dock'), then retry."
                 ),
                 robot_state_after="unknown",
             )
@@ -840,6 +1059,14 @@ def get_navigation_tools(
             state=state,
             battery=battery_cache,
         ),
+        LocalizeCurrentLocationTool(robot_client=robot_client, state=state),
+        MarkReturnPointTool(robot_client=robot_client, state=state),
+        NavigateToReturnPointBlockingTool(
+            robot_client=robot_client,
+            state=state,
+            battery=battery_cache,
+        ),
+        SaveCurrentLocationTool(robot_client=robot_client, state=state),
         NavigateRelativeTool(
             robot_client=robot_client,
             state=state,
@@ -854,7 +1081,6 @@ def get_navigation_tools(
         ),
         CancelNavigationTool(robot_client=robot_client, state=state),
         StopPatrolTool(robot_client=robot_client, state=state),
-        GetCurrentLocationTool(robot_client=robot_client, state=state),
         ChargingDockTool(
             robot_client=robot_client,
             nav_state=state,
@@ -870,13 +1096,19 @@ __all__ = [
     "ChargingDockTool",
     "FollowWaypointsInput",
     "FollowWaypointsTool",
-    "GetCurrentLocationInput",
-    "GetCurrentLocationTool",
+    "LocalizeCurrentLocationInput",
+    "LocalizeCurrentLocationTool",
+    "MarkReturnPointInput",
+    "MarkReturnPointTool",
     "NavigateRelativeInput",
     "NavigateRelativeTool",
+    "NavigateToReturnPointBlockingTool",
+    "NavigateToReturnPointInput",
     "NavigateToLocationInput",
     "NavigateToLocationBlockingTool",
     "NavigateToLocationTool",
+    "SaveCurrentLocationInput",
+    "SaveCurrentLocationTool",
     "StopPatrolInput",
     "StopPatrolTool",
     "get_navigation_tools",

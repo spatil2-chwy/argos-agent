@@ -14,7 +14,6 @@ def dedup_events(events: list[CoalescedEvent]) -> list[CoalescedEvent]:
     - Multiple FACE_EVENTs for the same person keep only the latest one.
     - Multiple NAV_EVENT goal results keep only the latest goal result.
     - NAV waypoint chatter is dropped when any goal result is present.
-    - PATROL_EVENT is suppressed when a face event or human input shares a batch.
     """
     has_human = any(not metadata.get("internal") for _, metadata in events)
     has_face = any(metadata.get("internal_event") == "face" for _, metadata in events)
@@ -38,9 +37,6 @@ def dedup_events(events: list[CoalescedEvent]) -> list[CoalescedEvent]:
     result: list[CoalescedEvent] = []
     for index, (text, metadata) in enumerate(events):
         event_kind = str(metadata.get("internal_event", "") or "")
-
-        if event_kind == "patrol_continue" and (has_face or has_human):
-            continue
 
         if event_kind == "face":
             key = str(metadata.get("person_name", "") or "") or "__unknown__"

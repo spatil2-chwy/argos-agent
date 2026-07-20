@@ -83,7 +83,7 @@ Every `response.create` carries fresh instructions from `_build_turn_instruction
 
 The runtime currently builds these blocks:
 
-- `[PERSON SPEAKING TO YOU]`, only when `owner_id` is resolved
+- `[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]`, only when `owner_id` is resolved
 - `[IDENTITY STATUS]`, only when `owner_id` is not resolved
 - `[OTHER PEOPLE IN VIEW]`, only alongside a resolved owner and only as names/counts
 - `[CURRENT TIME]`
@@ -94,12 +94,22 @@ The runtime currently builds these blocks:
 - battery prompt block
 - `[SAVED LOCATIONS]`
 
-`[PERSON SPEAKING TO YOU]` may include Tailwag's prompt-ready
-`context_markdown` for the resolved turn owner. Argos keeps verified
-identity/work lines under `Directory`, then pastes the Tailwag memory block
-directly. The current Tailwag block is headed `[PERSON MEMORY]` and may include
-subsections such as `Preferences`, `Pets`, `Facts`, `Potential Follow-Ups`, and
-`Recent Episodes`.
+`[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]` is authoritative for the current
+speaker and includes a `Recognition basis` line derived from `owner_source`:
+
+- `audio` → `trusted voice match`
+- `face` → `trusted face match`
+- `audio_face_agree` → `trusted face and audio match`
+
+The block may also include Tailwag's prompt-ready `context_markdown` for the
+resolved turn owner. Argos keeps verified identity/work lines under `Directory`,
+then pastes the Tailwag memory block directly. The current Tailwag block is
+headed `[PERSON MEMORY]` and may include subsections such as `Preferences`,
+`Pets`, `Facts`, `Potential Follow-Ups`, and `Recent Episodes`.
+
+When the speaker directly asks whether they are recognized, the model is told to
+answer yes whenever this resolved block is present. An off-camera trusted voice
+match remains resolved and does not require face input.
 
 If `owner_id` is not resolved, no person-specific prompt context is emitted,
 even if a recognized person is visible. This avoids addressing a visible
@@ -107,7 +117,7 @@ bystander as the speaker when someone else talks off-camera or speaker
 recognition is inconclusive. Unknown-owner turns also carry `[IDENTITY STATUS]`
 to make the local resolver authoritative: the model must not use a person's name
 or infer identity from voice similarity, face runner-up matches, or session
-memory unless `[PERSON SPEAKING TO YOU]` is present.
+memory unless `[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]` is present.
 
 Those lines come from the Tailwag identity-memory client. Tailwag writes
 future-facing summaries so the realtime model can use them without seeing the

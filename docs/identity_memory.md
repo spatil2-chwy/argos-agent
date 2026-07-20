@@ -65,8 +65,9 @@ Argos calls Tailwag's `memory.person_context` operation for the resolved turn
 owner. The HTTP transport posts that operation to
 `/argos/providers/memory/resources/memory/request/person_context`. Tailwag
 returns `context_markdown`, and Argos pastes that prompt-ready markdown into the
-`[PERSON SPEAKING TO YOU]` block after any Argos-owned `Directory` lines. Argos
-does not parse or rebuild the Tailwag memory section locally.
+`[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]` block after the Argos-owned
+identity, recognition-basis, and `Directory` lines. Argos does not parse or
+rebuild the Tailwag memory section locally.
 
 ## Runtime Memory Search
 

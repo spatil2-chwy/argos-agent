@@ -422,9 +422,10 @@ for Tailwag realtime episode participants and person-context lookup.
 
 Turn prompt person context is also tied to `owner_id`. When `owner_id` is not
 resolved, the runtime does not include visible recognized people as
-person-specific prompt context. When `owner_id` is resolved, the prompt may show
-that person under `[PERSON SPEAKING TO YOU]` and list other visible people only
-as lightweight names under `[OTHER PEOPLE IN VIEW]`.
+person-specific prompt context. When `owner_id` is resolved, the prompt shows
+that person under `[PERSON SPEAKING TO YOU — IDENTITY RESOLVED]`, includes a
+trusted recognition basis derived from `owner_source`, and lists other visible
+people only as lightweight names under `[OTHER PEOPLE IN VIEW]`.
 
 The canonical face-derived name in turn state is `primary_face_person_id`.
 

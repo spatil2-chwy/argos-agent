@@ -11,13 +11,19 @@ __all__ = [
     "ChargingDockTool",
     "FollowWaypointsInput",
     "FollowWaypointsTool",
-    "GetCurrentLocationInput",
-    "GetCurrentLocationTool",
+    "LocalizeCurrentLocationInput",
+    "LocalizeCurrentLocationTool",
+    "MarkReturnPointInput",
+    "MarkReturnPointTool",
     "NavigateRelativeInput",
     "NavigateRelativeTool",
+    "NavigateToReturnPointBlockingTool",
+    "NavigateToReturnPointInput",
     "NavigateToLocationInput",
     "NavigateToLocationBlockingTool",
     "NavigateToLocationTool",
+    "SaveCurrentLocationInput",
+    "SaveCurrentLocationTool",
     "StopPatrolInput",
     "StopPatrolTool",
     "get_navigation_tools",
@@ -50,13 +56,21 @@ _LAZY_EXPORTS = {
         "argos_src.tools.unitree_go2.navigation.follow_waypoints",
         "FollowWaypointsTool",
     ),
-    "GetCurrentLocationInput": (
-        "argos_src.tools.unitree_go2.navigation.get_current_location",
-        "GetCurrentLocationInput",
+    "LocalizeCurrentLocationInput": (
+        "argos_src.tools.unitree_go2.navigation.localize_current_location",
+        "LocalizeCurrentLocationInput",
     ),
-    "GetCurrentLocationTool": (
-        "argos_src.tools.unitree_go2.navigation.get_current_location",
-        "GetCurrentLocationTool",
+    "LocalizeCurrentLocationTool": (
+        "argos_src.tools.unitree_go2.navigation.localize_current_location",
+        "LocalizeCurrentLocationTool",
+    ),
+    "MarkReturnPointInput": (
+        "argos_src.tools.unitree_go2.navigation.mark_return_point",
+        "MarkReturnPointInput",
+    ),
+    "MarkReturnPointTool": (
+        "argos_src.tools.unitree_go2.navigation.mark_return_point",
+        "MarkReturnPointTool",
     ),
     "NavigateRelativeInput": (
         "argos_src.tools.unitree_go2.navigation.navigate_relative",
@@ -77,6 +91,22 @@ _LAZY_EXPORTS = {
     "NavigateToLocationBlockingTool": (
         "argos_src.tools.unitree_go2.navigation.navigate_to_location_blocking",
         "NavigateToLocationBlockingTool",
+    ),
+    "NavigateToReturnPointInput": (
+        "argos_src.tools.unitree_go2.navigation.navigate_to_return_point_blocking",
+        "NavigateToReturnPointInput",
+    ),
+    "NavigateToReturnPointBlockingTool": (
+        "argos_src.tools.unitree_go2.navigation.navigate_to_return_point_blocking",
+        "NavigateToReturnPointBlockingTool",
+    ),
+    "SaveCurrentLocationInput": (
+        "argos_src.tools.unitree_go2.navigation.save_current_location",
+        "SaveCurrentLocationInput",
+    ),
+    "SaveCurrentLocationTool": (
+        "argos_src.tools.unitree_go2.navigation.save_current_location",
+        "SaveCurrentLocationTool",
     ),
     "StopPatrolInput": (
         "argos_src.tools.unitree_go2.navigation.stop_patrol",

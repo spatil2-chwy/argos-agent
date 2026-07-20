@@ -1,0 +1,4 @@
+"""Shared navigation timeout budgets."""
+
+NAV_BLOCKING_RESULT_TIMEOUT_SEC = 300.0
+NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC = 315.0

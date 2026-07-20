@@ -25,6 +25,7 @@ tools:
     - posture.sit
     - embodiment.unitree_go2.hello
     - embodiment.unitree_go2.stretch
+    - embodiment.unitree_go2.content
     - embodiment.unitree_go2.bow_down
     - embodiment.unitree_go2.look_up
     - embodiment.unitree_go2.left_tilt
@@ -33,14 +34,14 @@ tools:
     - vision.capture_scene
     - identity.enroll_visible_person
     - identity.resolve_employee_identity
-    - navigation.navigate_to_location
     - navigation.navigate_to_location_blocking
-    - navigation.navigate_relative
+    - navigation.localize_current_location
+    - navigation.mark_return_point
+    - navigation.navigate_to_return_point_blocking
+    - navigation.save_current_location
     - navigation.follow_waypoints
     - navigation.cancel
     - navigation.stop_patrol
-    - navigation.get_current_location
-    - dock.charging
 
 identity_memory:
   enabled: true
@@ -117,7 +118,7 @@ speaker_recognition:
 
 realtime:
   prompt_file: navigation_prompt.md
-  model: gpt-realtime-1.5
+  model: gpt-realtime-2.1
   voice: cedar
   audio_output_speed: 1.0
   transcription_model: gpt-4o-mini-transcribe

@@ -122,7 +122,7 @@ The user speaks through the microphone. The runtime buffers raw PCM into the Rea
 text input -> audio output
 ```
 
-Face events, battery events, patrol events, and navigation events are turned into short text payloads and inserted into the same conversation as system-role messages before `response.create`.
+Face events, battery events, and user-facing navigation events are turned into short text payloads and inserted into the same conversation as system-role messages before `response.create`. Patrol dispatch and routine patrol navigation results are owned by the runtime; patrol navigation does not require a model tool call or model turn between hops.
 
 ## What Is an "Item"?
 
@@ -298,7 +298,6 @@ Internal events originate from bridges and watchdogs:
 
 - `FACE_EVENT`
 - `NAV_EVENT`
-- `PATROL_EVENT`
 - `BATTERY_EVENT`
 - `BATTERY_LOW_EVENT`
 
@@ -332,7 +331,7 @@ The coalescer is intentionally opinionated:
 - internal-only flushes are deferred while recording is active, so they can be drained into the audio turn
 - repeated face events for the same person collapse to the newest one
 - nav waypoint chatter is dropped if a final goal result is already present
-- patrol-resume events are suppressed if a face event or human input is in the same batch
+- runtime-owned patrol resume is suppressed while the robot is interacting
 - patrol is suppressed whenever engagement is not `IDLE`
 
 This keeps the model from seeing a noisy stream of low-value internal chatter.
@@ -417,7 +416,7 @@ The engagement machine also decides whether navigation should be interrupted or 
 
 - proactive face attention can publish a local `stop` voice command and cancel interruptible navigation
 - new human input from `IDLE` or `COOLDOWN` can also cancel interruptible navigation
-- patrol resumes only after the runtime returns to `IDLE`
+- patrol resumes through direct runtime navigation only after the runtime returns to `IDLE`
 - a resolved-owner audio turn can request a short owner-turn motion toward the speaker; tool calls cancel that request
 
 So "engagement state" is not just UX state. It is also a local arbitration layer between conversation and navigation.

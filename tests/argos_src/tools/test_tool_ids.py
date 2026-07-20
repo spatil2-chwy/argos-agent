@@ -24,6 +24,22 @@ def test_capability_style_tool_ids_resolve_for_go2():
         "memory.search_semantic",
         robot_family="unitree_go2",
     ) == "search_memory_semantic"
+    assert resolve_builtin_tool_name(
+        "navigation.localize_current_location",
+        robot_family="unitree_go2",
+    ) == "localize_current_location"
+    assert resolve_builtin_tool_name(
+        "navigation.mark_return_point",
+        robot_family="unitree_go2",
+    ) == "mark_return_point"
+    assert resolve_builtin_tool_name(
+        "navigation.navigate_to_return_point_blocking",
+        robot_family="unitree_go2",
+    ) == "navigate_to_return_point_blocking"
+    assert resolve_builtin_tool_name(
+        "navigation.save_current_location",
+        robot_family="unitree_go2",
+    ) == "save_current_location"
 
 
 def test_capability_style_posture_ids_resolve_for_spot():
@@ -43,6 +59,7 @@ def test_old_tool_ids_are_rejected():
             [
                 "unitree_go2.actions.go2_hello",
                 "unitree_go2.locomotion.move_robot",
+                "navigation.get_current_location",
             ],
             robot_family="unitree_go2",
         )
@@ -70,3 +87,19 @@ def test_required_capabilities_for_common_tool_ids():
         "memory.search_semantic",
         robot_family="unitree_go2",
     ) == ()
+    assert required_capability_ids_for_tool_id(
+        "navigation.localize_current_location",
+        robot_family="unitree_go2",
+    ) == ("navigation.goal", "transform.lookup")
+    assert required_capability_ids_for_tool_id(
+        "navigation.mark_return_point",
+        robot_family="unitree_go2",
+    ) == ("navigation.goal", "transform.lookup")
+    assert required_capability_ids_for_tool_id(
+        "navigation.navigate_to_return_point_blocking",
+        robot_family="unitree_go2",
+    ) == ("navigation.goal", "transform.lookup")
+    assert required_capability_ids_for_tool_id(
+        "navigation.save_current_location",
+        robot_family="unitree_go2",
+    ) == ("navigation.goal", "transform.lookup")

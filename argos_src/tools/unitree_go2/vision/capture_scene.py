@@ -26,7 +26,8 @@ def get_capture_scene_tool(
         """Capture a single current camera image and return it to the model for scene understanding.
 
         Use this when a user asks what is visible at a place (e.g. available snacks, items on a shelf,
-        signs, room status). If needed, navigate first, then call this tool.
+        signs, room status). This only captures from the robot's current position. If needed,
+        navigate first, then call this tool.
         """
         image, cached_resource, captured_at_unix = face_service.get_cached_latest_frame(
             camera_resource_id=camera_resource,
