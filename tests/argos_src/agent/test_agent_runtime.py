@@ -1319,9 +1319,9 @@ def test_output_audio_and_transcript_are_buffered_by_response_and_item_id():
     assert agent.engagement.output_started == []
 
 
-def test_tool_bearing_response_is_silent_and_terminal_followup_is_audible():
+def test_first_tool_preamble_and_terminal_followup_are_audible():
     agent = _make_agent()
-    turn = _make_turn("rt-terminal-only")
+    turn = _make_turn("rt-preamble-terminal")
     agent._turns_by_req_id[turn.req_id] = turn
     agent._bind_response_id(turn, "resp-tool")
 
@@ -1359,11 +1359,52 @@ def test_tool_bearing_response_is_silent_and_terminal_followup_is_audible():
         }
     )
 
-    assert turn.audio_started is False
-    assert turn.assistant_transcript == ""
-    assert agent._playback_buffer.buffered_frames() == 0
-    assert agent._history_items["asst-tool"].permitted_for_inference is False
+    assert turn.audio_started is True
+    assert turn.tool_preamble_decided is True
+    assert turn.tool_preamble_spoken is True
+    assert turn.assistant_transcript == "I'm checking."
+    assert agent._playback_buffer.buffered_frames() == 1
+    assert agent._history_items["asst-tool"].permitted_for_inference is True
     assert agent._history_items["call-item"].permitted_for_inference is True
+
+    agent._bind_response_id(turn, "resp-tool-2")
+    for handler, delta in (
+        (agent._handle_output_audio_delta, "AQI="),
+        (agent._handle_output_transcript_delta, "Now returning."),
+    ):
+        handler(
+            {
+                "response_id": "resp-tool-2",
+                "item_id": "asst-tool-2",
+                "delta": delta,
+            }
+        )
+    agent._handle_response_done(
+        {
+            "response": {
+                "id": "resp-tool-2",
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "asst-tool-2",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Now returning."}],
+                    },
+                    {
+                        "id": "call-item-2",
+                        "type": "function_call",
+                        "name": "fake_tool",
+                        "call_id": "call-2",
+                        "arguments": "{}",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert turn.assistant_transcript == "I'm checking."
+    assert agent._playback_buffer.buffered_frames() == 1
+    assert agent._history_items["asst-tool-2"].permitted_for_inference is False
 
     agent._bind_response_id(turn, "resp-terminal")
     agent._handle_output_audio_delta(
@@ -1399,13 +1440,69 @@ def test_tool_bearing_response_is_silent_and_terminal_followup_is_audible():
     )
 
     assert turn.audio_started is True
-    assert turn.assistant_transcript == "Crates block the doorway."
-    assert agent._playback_buffer.buffered_frames() == 1
+    assert turn.assistant_transcript == "I'm checking. Crates block the doorway."
+    assert agent._playback_buffer.buffered_frames() == 2
     assert agent._history_items["asst-terminal"].permitted_for_inference is True
     assert any(
         event.get("event") == "intermediate_response_suppressed"
         for event in agent._latency.events
     )
+    assert any(
+        event.get("event") == "tool_preamble_released"
+        for event in agent._latency.events
+    )
+
+
+def test_only_first_tool_response_can_supply_the_preamble():
+    agent = _make_agent()
+    turn = _make_turn("rt-first-preamble-only")
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    for response_id, item_suffix, with_audio in (
+        ("resp-silent-tool", "1", False),
+        ("resp-later-tool", "2", True),
+    ):
+        agent._bind_response_id(turn, response_id)
+        if with_audio:
+            agent._handle_output_audio_delta(
+                {
+                    "response_id": response_id,
+                    "item_id": f"asst-{item_suffix}",
+                    "delta": "AQI=",
+                }
+            )
+        agent._handle_response_done(
+            {
+                "response": {
+                    "id": response_id,
+                    "status": "completed",
+                    "output": [
+                        {
+                            "id": f"asst-{item_suffix}",
+                            "type": "message",
+                            "content": [
+                                {"type": "output_text", "text": "Working on it."}
+                            ],
+                        },
+                        {
+                            "id": f"call-item-{item_suffix}",
+                            "type": "function_call",
+                            "name": "fake_tool",
+                            "call_id": f"call-{item_suffix}",
+                            "arguments": "{}",
+                        },
+                    ],
+                }
+            }
+        )
+
+    assert turn.tool_preamble_decided is True
+    assert turn.tool_preamble_spoken is False
+    assert turn.audio_started is False
+    assert turn.assistant_transcript == ""
+    assert agent._playback_buffer.buffered_frames() == 0
+    assert agent._history_items["asst-1"].permitted_for_inference is False
+    assert agent._history_items["asst-2"].permitted_for_inference is False
 
 
 def test_response_done_flushes_complete_audio_transcript_to_display():

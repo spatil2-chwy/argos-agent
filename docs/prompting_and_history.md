@@ -324,19 +324,24 @@ So one logical turn may look like:
 ```text
 human/audio input
   -> response.create
-  -> function_call                  # any assistant preamble is not played
+  -> brief acknowledgement + function_call  # first preamble may play
   -> function_call_output
-  -> response.create
+  -> response.create                # later tool-bearing audio stays silent
   -> final spoken answer
 ```
 
-Only the terminal response is audible. Audio and transcript deltas from a
-tool-bearing response are retained per response until `response.done`, then the
-audio is discarded. Its assistant text remains available as a diagnostic
-snapshot but is not selected for inference, because feeding an unheard preamble
-back to the model would create conversation state that the human never heard.
-The function-call and function-call-output items remain selected, so no tool
-reasoning or result is lost.
+At most two response segments are audible: the first tool-bearing response's
+brief preamble and the terminal response. Audio and transcript deltas remain
+buffered per response until `response.done` classifies them. The first preamble
+is released and selected for inference because the human heard it. Audio from
+every later tool-bearing response is discarded, and its unheard assistant text
+stays diagnostic-only. Function-call and function-call-output items always
+remain selected, so no tool result is lost.
+
+The preamble opportunity belongs to the logical turn, not to each tool. If the
+first tool-bearing response contains no audio, Argos does not promote a later
+intermediate response into a preamble. This prevents a capture or return step
+from unexpectedly narrating itself midway through a chain.
 
 Standalone proactive face turns use a fresh-history policy and `tool_choice=none`.
 This prevents a face event from inheriting a previous human mission or invoking

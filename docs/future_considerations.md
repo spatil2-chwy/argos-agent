@@ -38,18 +38,19 @@ logical spoken turn:
 
 ```text
 human request
-  -> model response containing tool call(s)   # buffered, not spoken
+  -> first tool-bearing model response         # one brief preamble may play
   -> tool result(s) and optional image(s)      # retained for inference
   -> follow-up model response
-  -> more tool calls, if needed                # also buffered, not spoken
+  -> more tool calls, if needed                # intermediate audio suppressed
   -> terminal response with no tool calls      # released to playback
 ```
 
 Audio and transcript deltas are buffered by `response_id` until
 `response.done`. A response containing any function call is classified as
-tool-bearing. Its audio is suppressed, while its function calls, tool outputs,
-and artifacts remain available to the model. A response with no function calls
-is terminal and is released to the speaker.
+tool-bearing. The first tool-bearing response may contribute one short spoken
+preamble. Every later tool-bearing response is suppressed, while all function
+calls, tool outputs, and artifacts remain available to the model. A response
+with no function calls is terminal and is released to the speaker.
 
 The follow-up barrier is also response-local. It sends exactly one new
 `response.create` only after:
@@ -60,8 +61,14 @@ The follow-up barrier is also response-local. It sends exactly one new
 
 This works the same way for one tool, several parallel calls in one response,
 and sequential chains where a follow-up response calls another tool. A single
-tool does not lose its answer: the tool-bearing response stays silent, the tool
-runs, its result is returned, and the terminal follow-up is spoken.
+tool can therefore produce "Okay, heading back," run the tool, then finish with
+"I'm back." A chained inspection can acknowledge once, navigate, capture,
+return silently, and then speak only the final description.
+
+The preamble opportunity is consumed by the first tool-bearing response even if
+that response contains no audio. Argos does not treat a later capture or return
+response as the initial acknowledgement. It also does not manufacture a canned
+preamble when the model did not produce one.
 
 Related isolation rules prevent other turn sources from reopening the mission:
 
@@ -87,39 +94,35 @@ tool-call protocol. Argos still receives the response, executes each function,
 adds a `function_call_output` with the matching call ID, and requests the next
 response. Only the decision to play intermediate PCM is different.
 
-The unheard assistant preamble is kept for diagnostics but excluded from future
-inference history. Function calls and outputs remain selected. This avoids
-teaching the model that the person heard words that Argos intentionally did not
-play.
+The spoken first preamble is included in inference history. Unheard assistant
+text from later tool-bearing responses is kept for diagnostics but excluded from
+future inference history. Function calls and outputs remain selected. This
+keeps model history aligned with what the person actually heard.
 
-## Possible `allow_preamble` Policy
+## Adopted First-Preamble Policy
 
-`allow_preamble` is a design idea, not an implemented option or metadata field.
-It would mean that a short acknowledgement from a tool-bearing response, such as
-"I'll check that," may be played before or while the tool runs. The current
-behavior is effectively `terminal_only`: only the response that contains no tool
-call is audible.
+The adopted behavior is "first preamble plus terminal answer." `allow_preamble`
+is not a public configuration field; it is shorthand for the decision to admit
+the first model-generated acknowledgement in a logical tool turn.
 
-The default should remain terminal-only for robot missions. Navigation,
-capture-and-describe, return-to-point, and mixed physical workflows benefit from
-one concise final report, and intermediate speech can become stale or misleading
-if motion fails, is interrupted, or changes course.
+Navigation, capture-and-describe, return-to-point, and mixed physical workflows
+all use this rule. The first acknowledgement may state intent only. It must not
+claim arrival, successful capture, or mission completion before the relevant
+tool result exists. No periodic progress speech is generated, even for a long
+mission.
 
-A future preamble mode may be useful for genuinely slow, conversational,
-non-motion operations where silence feels broken. If introduced, it should be an
-explicit interaction-level speech policy rather than a rule based on tool count.
-Possible modes are:
+A future need may justify making speech policy configurable at the logical-turn
+level. Possible modes would be:
 
-- `terminal_only`: suppress every tool-bearing response and speak once at the
-  terminal response;
-- `allow_preamble`: permit one short, non-result acknowledgement, then speak the
+- `first_preamble`: the current behavior;
+- `terminal_only`: suppress every tool-bearing response and speak only the
   terminal answer; and
 - potentially `silent`: execute a background/internal operation without any
   spoken response, where the initiating event contract explicitly permits it.
 
-The strictest applicable policy should win in a mixed chain. For example, a
-chain containing navigation and a quick data lookup should remain
-terminal-only, even if the lookup alone might allow a preamble.
+Such a policy should still belong to the interaction, not be recomputed for each
+tool in a chain. Scattered per-tool exceptions would make mixed and dynamically
+chosen chains difficult to reason about.
 
 ### Why tool count is brittle
 
@@ -135,17 +138,17 @@ Policy should instead reflect user experience and side effects: whether the
 operation moves the robot, how long it may take, whether it is interruptible,
 and whether an intermediate statement could become false.
 
-### Requirements before implementing it
+### Current invariants and future guardrails
 
-If preambles become necessary, the implementation should preserve these
+The implementation and any future policy expansion should preserve these
 invariants:
 
 1. The policy is explicit and bound to the logical turn, not inferred from call
    count or scattered per-tool name checks.
 2. A preamble can only acknowledge intent; it cannot claim arrival, successful
    capture, or task completion before the corresponding result exists.
-3. At most one preamble is audible across a sequential tool chain unless a
-   separately specified progress-update policy exists.
+3. At most one preamble is audible across a sequential tool chain; long mission
+   duration alone does not create progress responses.
 4. A spoken preamble becomes permitted inference history; an unheard one remains
    diagnostic-only.
 5. Interruption and playback bookkeeping distinguish preamble audio from the
@@ -156,23 +159,25 @@ invariants:
    ID" or "the last response observed so far." Response IDs identify objects;
    they do not encode completion order or user-facing priority.
 8. Tests cover one tool, parallel tools, sequential tools, unknown tools,
-   failures, interruption, and a mixed chain whose strictest policy wins.
+   failures, interruption, and first-preamble playback completion.
 
-There are two plausible implementation approaches:
+Argos uses the first of these approaches:
 
 - release model-generated preamble audio once a function call makes the
   response tool-bearing, with strong prompt and playback guards; or
 - keep intermediate model audio suppressed and use a deterministic local cue or
   acknowledgement.
 
-The first preserves the model's natural voice but makes brevity and semantic
-safety partly probabilistic. The second is easier to constrain but introduces a
-separate audio/UX mechanism. Neither should be added until operator evidence
-shows that terminal-only silence during tools is a real usability problem.
+Model-generated speech preserves the natural voice but makes exact preamble
+wording partly probabilistic. The prompt therefore requests a tiny
+intent-only acknowledgement, while the runtime provides the stronger guarantee:
+only the first tool-bearing response and the terminal response can be audible.
+A deterministic local cue remains a future alternative if prompt-level brevity
+proves unreliable.
 
 ## What to measure
 
-Before changing the current policy, compare real mission traces using:
+Evaluate the current policy and any future variants using:
 
 - time from user speech end to tool start;
 - `first_audio_latency_s` for provider generation;
@@ -182,5 +187,5 @@ Before changing the current policy, compare real mission traces using:
 - interruption rate while tools are running; and
 - operator/user reports of confusing silence versus excessive narration.
 
-Those measurements can justify a policy change more reliably than the number of
+Those measurements can justify future tuning more reliably than the number of
 tools selected by the model.

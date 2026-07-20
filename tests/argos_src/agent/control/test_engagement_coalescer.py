@@ -75,6 +75,28 @@ def test_playback_events_drive_speaking_to_cooldown():
         machine.shutdown()
 
 
+def test_intermediate_playback_returns_speaking_turn_to_engaged():
+    machine, _ = _make_machine(
+        alert_timeout_sec=1.0,
+        cooldown_sec=1.0,
+        speaking_timeout_sec=5.0,
+    )
+    try:
+        machine.on_human_input("rt-1")
+        machine.on_agent_output_started("rt-1", stream_id="resp-preamble")
+
+        machine.on_playback_event(
+            "playback_segment_completed",
+            "rt-1",
+            stream_id="resp-preamble",
+        )
+
+        assert machine.state == EngagementMode.ENGAGED
+        assert machine.snapshot().req_id == "rt-1"
+    finally:
+        machine.shutdown()
+
+
 def test_matching_stream_id_completes_playback_without_req_id():
     machine, _ = _make_machine(
         alert_timeout_sec=1.0,

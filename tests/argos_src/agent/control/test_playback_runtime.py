@@ -23,6 +23,7 @@ class _Host:
         self._playback_state = "idle"
         self._input_suppressed_until_s = 0.0
         self._playback_req_id = ""
+        self._playback_stream_id = ""
         self._active_turn = None
         self.engagement = _Engagement()
         self.display_modes = []
@@ -37,6 +38,7 @@ class _Host:
 
     def _clear_playback_tracking_locked(self):
         self._playback_req_id = ""
+        self._playback_stream_id = ""
 
     def _is_turn_terminal(self, turn):
         return turn is None or bool(getattr(turn, "finalized", False))
@@ -72,6 +74,26 @@ def test_playback_runtime_marks_completed_when_response_done_and_buffer_empty() 
     assert [(t.axis, t.new_state, t.req_id) for t in host.transitions] == [
         ("playback", "completed", turn.req_id)
     ]
+
+
+def test_intermediate_playback_completion_reopens_the_active_turn() -> None:
+    host = _Host()
+    runtime = PlaybackRuntime(host)
+    turn = _turn()
+    host._playback_req_id = turn.req_id
+    host._playback_stream_id = "resp-preamble"
+    host._playback_state = "playing"
+
+    runtime.wait_for_intermediate_playback(turn, "resp-preamble")
+
+    assert turn.playback_finished.is_set() is False
+    assert host._playback_req_id == ""
+    assert host._playback_stream_id == ""
+    assert host.engagement.events == [
+        ("playback_segment_completed", turn.req_id, "resp-preamble")
+    ]
+    assert host.display_modes == ["thinking"]
+    assert host.transitions[-1].new_state == "idle"
 
 
 def test_playback_runtime_force_completes_stalled_playback() -> None:

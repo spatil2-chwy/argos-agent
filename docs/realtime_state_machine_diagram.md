@@ -135,6 +135,7 @@ stateDiagram-v2
     alert --> idle: alert_timeout / force flush + idle callback
     engaged --> speaking: agent_output_started or agent_done(has_reply)
     engaged --> cooldown: agent_done(no reply) or playback_fallback
+    speaking --> engaged: intermediate_playback_terminal
     speaking --> cooldown: playback_terminal or playback_fallback
     cooldown --> engaged: human_input / stop + cancel nav
     cooldown --> idle: cooldown_timeout / idle callback

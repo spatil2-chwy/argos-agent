@@ -43,6 +43,8 @@ Tool turn branch:
 ```text
 turn: waiting_first_output -> waiting_tools -> requesting_followup
 turn: requesting_followup -> response_requested
+first preamble: playback playing -> idle; engagement speaking -> engaged
+terminal answer: playback buffering -> playing -> awaiting_drain -> completed
 ```
 
 No-audio recovery branch:

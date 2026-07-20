@@ -61,6 +61,8 @@ class ServerEventRuntime:
         self,
         turn: QueuedTurn,
         state: ResponseOutputState,
+        *,
+        segment_kind: str = "terminal",
     ) -> bool:
         """Release one classified audible response into the shared playback path."""
         if state.released or state.discarded or not state.audio:
@@ -73,51 +75,42 @@ class ServerEventRuntime:
 
         if state.transcript:
             turn.audible_transcript_parts.append(state.transcript)
-            turn.assistant_transcript = "".join(turn.audible_transcript_parts)
+            turn.assistant_transcript = " ".join(
+                part.strip() for part in turn.audible_transcript_parts if part.strip()
+            )
         if state.assistant_item_id:
             turn.assistant_item_id = state.assistant_item_id
 
-        if turn.audio_started:
-            with self._turn_lock:
-                self._playback_req_id = turn.req_id
-                self._playback_stream_id = response_id
-                self._playback_item_id = turn.assistant_item_id
-            turn.last_playback_progress_at = time.time()
-            self.engagement.on_playback_event(
-                "playback_started",
-                turn.req_id,
-                stream_id=response_id,
-            )
-            self._playback_controller().transition(
-                PlaybackState.PLAYING,
-                trigger="terminal_response_released",
-                req_id=turn.req_id,
-                stream_id=response_id,
-            )
-            return True
-
+        release_trigger = f"{segment_kind}_response_released"
         self._playback_controller().transition(
             PlaybackState.BUFFERING,
-            trigger="terminal_response_released",
+            trigger=release_trigger,
             req_id=turn.req_id,
             stream_id=response_id,
         )
-        turn.audio_started = True
-        turn.audio_started_at = time.time()
-        turn.last_playback_progress_at = turn.audio_started_at
+        first_audible_segment = not turn.audio_started
+        now = time.time()
+        if first_audible_segment:
+            turn.audio_started = True
+            turn.audio_started_at = now
+            self.engagement.on_agent_output_started(turn.req_id, stream_id=response_id)
+        turn.last_playback_progress_at = now
         self._set_turn_phase(
             turn,
             TURN_PHASE_PLAYING,
-            trigger="terminal_response_released",
+            trigger=release_trigger,
         )
-        if turn.kind == "audio" and float(turn.speech_end_perf_s) > 0.0:
+        if (
+            segment_kind == "terminal"
+            and turn.kind == "audio"
+            and float(turn.speech_end_perf_s) > 0.0
+        ):
             self._latency.timing(
                 "terminal_audio_release_latency_s",
                 perf_now() - turn.speech_end_perf_s,
                 req_id=turn.req_id,
                 **self._exchange_log_fields(turn),
             )
-        self.engagement.on_agent_output_started(turn.req_id, stream_id=response_id)
         self._set_display_mode_async("speaking")
         with self._turn_lock:
             self._playback_req_id = turn.req_id
@@ -131,10 +124,16 @@ class ServerEventRuntime:
         )
         self._playback_controller().transition(
             PlaybackState.PLAYING,
-            trigger="terminal_response_released",
+            trigger=release_trigger,
             req_id=turn.req_id,
             stream_id=response_id,
         )
+        if segment_kind == "tool_preamble":
+            threading.Thread(
+                target=self._playback_controller().wait_for_intermediate_playback,
+                args=(turn, response_id),
+                daemon=True,
+            ).start()
         return True
 
     def handle_conversation_item_created(self, event: dict[str, Any]) -> None:
@@ -739,9 +738,33 @@ class ServerEventRuntime:
         if state.assistant_item_id:
             message_item_ids.add(state.assistant_item_id)
         if has_function_call:
-            state.discarded = True
-            suppressed_audio_bytes = len(state.audio)
-            state.audio.clear()
+            is_initial_tool_response = not turn.tool_preamble_decided
+            if is_initial_tool_response:
+                turn.tool_preamble_decided = True
+            release_preamble = (
+                is_initial_tool_response
+                and status == "completed"
+                and bool(state.audio)
+            )
+            audio_byte_count = len(state.audio)
+            if release_preamble:
+                turn.tool_preamble_spoken = self._release_response_audio(
+                    turn,
+                    state,
+                    segment_kind="tool_preamble",
+                )
+            else:
+                state.discarded = True
+                state.audio.clear()
+            quarantined = False
+            if release_preamble:
+                quarantine_fn = getattr(
+                    self,
+                    "_quarantine_anonymous_history_if_needed",
+                    None,
+                )
+                if callable(quarantine_fn):
+                    quarantined = bool(quarantine_fn(turn))
             for item_id in message_item_ids:
                 update_snapshot = getattr(self, "_update_history_item_snapshot", None)
                 if callable(update_snapshot):
@@ -757,18 +780,62 @@ class ServerEventRuntime:
                     item_type="message",
                     role="assistant",
                     status="done" if status == "completed" else status,
-                    permitted_for_inference=False,
-                    input_item=None,
+                    permitted_for_inference=(
+                        release_preamble and status == "completed" and not quarantined
+                    ),
+                    input_item=(
+                        {
+                            "id": item_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": state.transcript.strip(),
+                                }
+                            ],
+                        }
+                        if release_preamble
+                        and status == "completed"
+                        and not quarantined
+                        and state.transcript.strip()
+                        else None
+                    ),
                 )
-            self._latency.emit(
-                event="intermediate_response_suppressed",
-                req_id=turn.req_id,
-                response_id=response_id or None,
-                suppressed_audio_bytes=suppressed_audio_bytes,
-                suppressed_transcript_chars=len(state.transcript),
-                tool_call_count=len(state.expected_call_ids),
-                **self._exchange_log_fields(turn),
-            )
+            if release_preamble:
+                if state.transcript.strip():
+                    self._show_display_subtitle_async(
+                        self._display_subtitle_window(state.transcript),
+                        duration_ms=5000,
+                    )
+                self._latency.emit(
+                    event="tool_preamble_released",
+                    req_id=turn.req_id,
+                    response_id=response_id or None,
+                    audio_bytes=audio_byte_count,
+                    transcript_chars=len(state.transcript),
+                    tool_call_count=len(state.expected_call_ids),
+                    **self._exchange_log_fields(turn),
+                )
+            else:
+                suppression_reason = "tool_preamble_already_decided"
+                if is_initial_tool_response:
+                    suppression_reason = (
+                        "initial_tool_response_without_audio"
+                        if audio_byte_count == 0
+                        else "initial_tool_response_not_completed"
+                    )
+                self._latency.emit(
+                    event="intermediate_response_suppressed",
+                    req_id=turn.req_id,
+                    response_id=response_id or None,
+                    suppressed_audio_bytes=audio_byte_count,
+                    suppressed_transcript_chars=len(state.transcript),
+                    suppression_reason=suppression_reason,
+                    tool_call_count=len(state.expected_call_ids),
+                    **self._exchange_log_fields(turn),
+                )
             self._set_turn_phase(
                 turn,
                 TURN_PHASE_WAITING_TOOLS,
@@ -780,7 +847,7 @@ class ServerEventRuntime:
         incomplete_details = response.get("incomplete_details")
         has_audio_reply = bool(state.audio)
         if has_audio_reply:
-            self._release_response_audio(turn, state)
+            self._release_response_audio(turn, state, segment_kind="terminal")
 
         quarantined = False
         quarantine_fn = getattr(self, "_quarantine_anonymous_history_if_needed", None)

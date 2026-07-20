@@ -281,8 +281,10 @@ know whether that response will contain a function call.
 
 At `response.done`:
 
-- if any output item is a function call, that response's buffered audio is
-  discarded and its assistant preamble remains diagnostic-only;
+- the first response containing a function call may release one brief tool
+  preamble;
+- every later tool-bearing response has its buffered audio discarded and its
+  assistant text remains diagnostic-only;
 - function calls and function-call outputs remain model-visible history;
 - after all expected calls from that response have completed, exactly one
   follow-up `response.create` is sent;
@@ -290,13 +292,16 @@ At `response.done`:
   released to playback, its transcript becomes the audible assistant transcript,
   and the subtitle is shown.
 
-This makes chained and parallel tool use coherent while ensuring the person only
-hears the terminal answer. `first_audio_latency_s` still measures the first model
-audio delta; `terminal_audio_release_latency_s` measures when classified terminal
-audio becomes eligible for playback.
+This makes chained and parallel tool use coherent while limiting speech to one
+initial acknowledgement and one terminal answer. When the preamble drains,
+playback returns to `idle` and engagement returns to `engaged`; the active tool
+turn continues and can later enter `speaking` again for the terminal answer.
+`first_audio_latency_s` still measures the first model audio delta;
+`terminal_audio_release_latency_s` measures when classified terminal audio
+becomes eligible for playback.
 
-For the rationale, tradeoffs, and the currently unimplemented `allow_preamble`
-idea, see `future_considerations.md`.
+For the rationale and remaining policy considerations, see
+`future_considerations.md`.
 
 ### Step 10: Completion waits for both response and playback
 
@@ -381,6 +386,7 @@ ENGAGED
   -> COOLDOWN   (agent finished without spoken reply)
 
 SPEAKING
+  -> ENGAGED    (initial tool preamble drained; mission still active)
   -> COOLDOWN   (playback completed or stopped)
 
 COOLDOWN
@@ -400,6 +406,8 @@ COOLDOWN
   Arms the machine to wait for a terminal playback event.
 - `on_playback_event("playback_completed" | "playback_stopped", ...)`
   Moves `SPEAKING -> COOLDOWN`.
+- `on_playback_event("playback_segment_completed", ...)`
+  Moves `SPEAKING -> ENGAGED` after a non-terminal tool preamble drains.
 
 ### Timeouts
 

@@ -101,6 +101,64 @@ class PlaybackRuntime:
             display_mode("idle")
         turn.playback_finished.set()
 
+    def wait_for_intermediate_playback(self, turn: QueuedTurn, stream_id: str) -> None:
+        """Finish one audible segment without finalizing its active tool turn."""
+        host = self._host
+        rendered_stream_id = str(stream_id or "").strip()
+        while not host._stop_event.is_set() and not turn.interrupted:
+            if turn.response_finished.is_set() or turn.playback_completion_armed:
+                return
+            with host._turn_lock:
+                owns_playback = (
+                    host._playback_req_id == turn.req_id
+                    and str(host._playback_stream_id or "").strip()
+                    == rendered_stream_id
+                )
+            if not owns_playback:
+                return
+            if host._playback_buffer.buffered_frames() > 0:
+                time.sleep(0.02)
+                continue
+            break
+        if host._stop_event.is_set() or turn.interrupted:
+            return
+        if turn.response_finished.is_set() or turn.playback_completion_armed:
+            return
+        with host._turn_lock:
+            if (
+                host._playback_req_id != turn.req_id
+                or str(host._playback_stream_id or "").strip()
+                != rendered_stream_id
+            ):
+                return
+            host._clear_playback_tracking_locked()
+        host._input_suppressed_until_s = max(
+            float(getattr(host, "_input_suppressed_until_s", 0.0) or 0.0),
+            time.time() + 0.8,
+        )
+        host.engagement.on_playback_event(
+            "playback_segment_completed",
+            turn.req_id,
+            stream_id=rendered_stream_id,
+        )
+        latency = getattr(host, "_latency", None)
+        if latency is not None:
+            latency.emit(
+                event="playback_segment_completed",
+                req_id=turn.req_id,
+                stream_id=rendered_stream_id,
+                **_exchange_fields(host, turn),
+            )
+        self.transition(
+            PlaybackState.IDLE,
+            trigger="intermediate_playback_completed",
+            req_id=turn.req_id,
+            stream_id=rendered_stream_id,
+        )
+        display_mode = getattr(host, "_set_display_mode_async", None)
+        if callable(display_mode):
+            display_mode("thinking")
+
     def force_complete_stalled_playback(self, turn: QueuedTurn, *, reason: str) -> None:
         host = self._host
         if turn.playback_finished.is_set():

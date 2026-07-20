@@ -85,6 +85,8 @@ class QueuedTurn:
     user_transcript: str = ""
     assistant_transcript: str = ""
     audible_transcript_parts: list[str] = field(default_factory=list)
+    tool_preamble_decided: bool = False
+    tool_preamble_spoken: bool = False
     preference_noted: bool = False
     preference_unattributed_flushed: bool = False
     audio_started: bool = False

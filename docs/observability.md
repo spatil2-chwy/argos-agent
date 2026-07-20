@@ -48,6 +48,10 @@ Typical human turn flow:
 | `realtime` | `event=anonymous_history_quarantined` | an anonymous assistant item mentioned a known name and was excluded from future anonymous inference |
 | `realtime` | `event=response_create` | the model response was explicitly requested |
 | `realtime` | `metric=first_audio_latency_s` | speech end to first playback audio delta |
+| `realtime` | `event=tool_preamble_released` | the first tool-bearing response was admitted as the turn's one audible acknowledgement |
+| `realtime` | `event=intermediate_response_suppressed` | a later tool-bearing response was retained for diagnostics but not played |
+| `realtime` | `event=playback_segment_completed` | a non-terminal preamble drained and the active turn returned to working/engaged state |
+| `realtime` | `metric=terminal_audio_release_latency_s` | speech end to the classified terminal response becoming eligible for playback |
 | `realtime` | `event=tool_call_requested` | the model requested a tool call |
 | `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
 | `realtime` | `event=response_done` | the Realtime response stream reached `response.done` |

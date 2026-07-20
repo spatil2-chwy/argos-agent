@@ -297,6 +297,28 @@ class EngagementStateMachine:
                         req_id=req,
                     )
                 return
+            if event == "playback_segment_completed":
+                req_matches = not self._current_req_id or req == self._current_req_id
+                stream_matches = (
+                    not self._latest_playback_stream_id
+                    or not stream
+                    or stream == self._latest_playback_stream_id
+                )
+                if not req_matches or not stream_matches:
+                    logger.warning(
+                        "Ignoring intermediate playback completion due to ownership mismatch: req_id=%s stream_id=%s current_req_id=%s latest_stream_id=%s",
+                        req,
+                        stream,
+                        self._current_req_id,
+                        self._latest_playback_stream_id,
+                    )
+                    return
+                decision = reduce_engagement(
+                    self._state.value,
+                    EngagementTrigger.INTERMEDIATE_PLAYBACK_TERMINAL,
+                )
+                self._apply_decision_locked(decision, req_id=req)
+                return
             if event not in ("playback_completed", "playback_stopped"):
                 return
             if not self._awaiting_playback_terminal:

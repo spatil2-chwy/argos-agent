@@ -16,6 +16,7 @@ class EngagementTrigger(str, enum.Enum):
     ALERT_TIMEOUT = "alert_timeout"
     COOLDOWN_TIMEOUT = "cooldown_timeout"
     PLAYBACK_FALLBACK = "playback_fallback"
+    INTERMEDIATE_PLAYBACK_TERMINAL = "intermediate_playback_terminal"
     PLAYBACK_TERMINAL = "playback_terminal"
 
 
@@ -138,6 +139,15 @@ def reduce_engagement(
                 old_state=current,
                 new_state=EngagementMode.COOLDOWN.value,
                 reason="fallback",
+            )
+        return _unchanged(current, rendered_trigger)
+
+    if rendered_trigger == EngagementTrigger.INTERMEDIATE_PLAYBACK_TERMINAL.value:
+        if current == EngagementMode.SPEAKING.value:
+            return EngagementDecision(
+                old_state=current,
+                new_state=EngagementMode.ENGAGED.value,
+                reason="intermediate_playback_terminal",
             )
         return _unchanged(current, rendered_trigger)
 
