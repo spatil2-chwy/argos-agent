@@ -393,6 +393,7 @@ class RealtimeRobotAgent:
         )
         self._pending_audio_turn_req_ids: deque[str] = deque()
         self._pending_audio_item_ids: deque[str] = deque()
+        self._pending_input_transcription_events: dict[str, dict[str, Any]] = {}
         self._pending_local_created_items: deque[Any] = deque()
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
@@ -483,9 +484,9 @@ class RealtimeRobotAgent:
     def _register_pending_audio_turn(self, turn: QueuedTurn) -> None:
         self._state_controller()._register_pending_audio_turn(turn)
 
-    def _consume_pending_audio_turn_req_id(self, *, include_finalized: bool = False) -> str:
+    def _consume_pending_audio_turn_req_id(self, *, include_terminal: bool = False) -> str:
         return self._state_controller()._consume_pending_audio_turn_req_id(
-            include_finalized=include_finalized,
+            include_terminal=include_terminal,
         )
 
     def _capture_turn_context(
@@ -2340,6 +2341,9 @@ class RealtimeRobotAgent:
     def _handle_input_transcription_failed(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_input_transcription_failed(event)
 
+    def _replay_pending_input_transcription(self, item_id: str) -> None:
+        self._server_event_runtime_controller().replay_pending_input_transcription(item_id)
+
     def _handle_output_audio_delta(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_output_audio_delta(event)
 
@@ -2402,6 +2406,7 @@ class RealtimeRobotAgent:
             **self._exchange_log_fields(turn),
         )
         self._set_turn_phase(turn, TURN_PHASE_FINALIZED, trigger="turn_completed")
+        self._maybe_note_preference_turn(turn)
         turn.response_finished.set()
         turn.playback_finished.set()
         self._discard_pending_response_turn(turn.req_id)
@@ -2434,6 +2439,7 @@ class RealtimeRobotAgent:
             **self._exchange_log_fields(turn),
         )
         self._set_turn_phase(turn, phase, trigger=reason or phase)
+        self._maybe_note_preference_turn(turn)
         self.logger.warning(
             "Terminating turn req_id=%s phase=%s reason=%s response_id=%s audio_started=%s pending_tool_calls=%s pending_response_requests=%s",
             turn.req_id,

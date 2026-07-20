@@ -547,6 +547,7 @@ def _make_agent():
     agent._stale_response_deadlines_by_req_id = {}
     agent._pending_audio_turn_req_ids = deque()
     agent._pending_audio_item_ids = deque()
+    agent._pending_input_transcription_events = {}
     agent._pending_local_created_items = deque()
     agent._history_item_order = deque()
     agent._known_history_item_ids = set()
@@ -1213,6 +1214,35 @@ def test_input_audio_buffer_committed_can_arrive_before_turn_registration():
     assert turn.user_item_id == "early-user-item"
     assert agent._item_id_to_req_id["early-user-item"] == turn.req_id
     assert list(agent._pending_audio_turn_req_ids) == []
+
+
+def test_input_transcription_completed_before_turn_registration_is_replayed():
+    agent = _make_agent()
+
+    agent._handle_input_audio_buffer_committed(
+        {
+            "type": "input_audio_buffer.committed",
+            "item_id": "early-transcribed-user-item",
+        }
+    )
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "early-transcribed-user-item",
+            "transcript": "the game was canceled",
+        }
+    )
+
+    assert "early-transcribed-user-item" in agent._pending_input_transcription_events
+
+    turn = _make_turn("rt-audio-early-transcript")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_pending_audio_turn(turn)
+
+    assert turn.user_item_id == "early-transcribed-user-item"
+    assert turn.user_transcript == "the game was canceled"
+    assert agent._history_item_snapshots[turn.user_item_id]["text"] == "the game was canceled"
+    assert agent._pending_input_transcription_events == {}
 
 
 def test_input_transcription_failed_is_logged_for_bound_turn():
@@ -4053,6 +4083,64 @@ def test_late_input_transcription_can_bind_finalized_pending_audio_turn():
     assert agent._item_id_to_req_id["late-user-item-pref"] == turn.req_id
     assert len(seen) == 1
     assert seen[0].person_id == "person-1"
+
+
+def test_attributed_superseded_user_only_turn_is_persisted():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-superseded",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_SUPERSEDED
+    turn.finalized = True
+    turn.user_transcript = "the game was canceled"
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+    assert seen[0].turns[0].user_text == "the game was canceled"
+    assert seen[0].turns[0].assistant_text == ""
+
+
+def test_late_input_transcription_persists_superseded_user_only_turn():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-superseded-late-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_SUPERSEDED
+    turn.finalized = True
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_item_id_to_turn(turn, "superseded-user-item")
+    turn.user_item_id = "superseded-user-item"
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "superseded-user-item",
+            "transcript": "the game was canceled",
+        }
+    )
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].turns[0].user_text == "the game was canceled"
+    assert seen[0].turns[0].assistant_text == ""
 
 
 def test_preference_turn_without_owner_id_writes_nothing():

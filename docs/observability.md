@@ -52,6 +52,8 @@ Typical human turn flow:
 | `tool` | `event=tool_result` | a tool call finished and returned a result to the session |
 | `realtime` | `event=response_done` | the Realtime response stream reached `response.done` |
 | `realtime` | `event=transcription_usage` | input transcription token usage and estimated transcription cost for the turn |
+| `realtime` | `event=input_transcription_deferred` | a terminal provider transcription event arrived before its audio item could be bound to a turn |
+| `realtime` | `event=input_transcription_replayed` | a deferred transcription event was applied after its audio item was bound |
 | `realtime` | `event=response_usage` | final token/caching usage from `response.done`, including modality token counts and estimated response cost |
 | `realtime` | `event=playback_completed` | local speaker playback drained for the exchange |
 | `realtime` | `event=exchange_complete` | the exchange reached a clean terminal state |
@@ -193,12 +195,13 @@ not inherit the earlier unknown patch. The dashboard nests exchanges under
 displayed conversation segments and shows the explicit selected inference items
 in each response prompt panel.
 
-Memory extraction has a related but separate signal. Completed attributed turns
-are buffered into speaker-owned segments and flushed on speaker handoff,
-unattributed speech, idle timeout, or shutdown. `memory_segment_flushed` means
-Argos closed that local transcript segment and, when configured, scheduled
-Tailwag ingestion. It does not mean Tailwag has definitely written durable
-memory.
+Memory extraction has a related but separate signal. Attributed terminal turns
+with a user transcript are buffered into speaker-owned segments, including
+superseded or canceled turns without an assistant reply. Segments are flushed on
+speaker handoff, unattributed speech, idle timeout, or shutdown.
+`memory_segment_flushed` means Argos closed that local transcript segment and,
+when configured, scheduled Tailwag ingestion. It does not mean Tailwag has
+definitely written durable memory.
 
 ## State Transition Markers
 
@@ -245,11 +248,13 @@ Tool-related signals still matter:
 
 ## Memory Ingestion
 
-Tailwag memory ingestion runs asynchronously from completed attributed turns and
-should not block speech output. Argos logs scheduling and provider failures
-through the normal runtime logger. The Tailwag `record_episode(...,
-extract_memory=...)` result is treated as Tailwag-owned; Argos does not emit
-structured latency fields for Tailwag memory extraction outcomes.
+Tailwag memory ingestion runs asynchronously from attributed terminal turns and
+should not block speech output. The transcription binding repair is local and
+does not issue fallback transcription requests. Episode writes retain their
+existing single-attempt behavior; no bounded retry is added. Argos logs
+scheduling and provider failures through the normal runtime logger. The Tailwag
+`record_episode(..., extract_memory=...)` result is treated as Tailwag-owned;
+Argos does not emit structured latency fields for Tailwag memory extraction outcomes.
 
 ## Example
 

@@ -67,6 +67,8 @@ class ServerEventRuntime:
             record_snapshot = getattr(self, "_record_history_item_snapshot", None)
             if callable(record_snapshot):
                 record_snapshot(item_id, item)
+            if looks_like_audio:
+                self.replay_pending_input_transcription(item_id)
             return
 
         item_type = str(item.get("type", "") or "").strip()
@@ -76,7 +78,7 @@ class ServerEventRuntime:
 
         if item_type == "message" and role == "user":
             if self._conversation_item_looks_like_audio_input(item):
-                req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
+                req_id = self._consume_pending_audio_turn_req_id(include_terminal=True)
             else:
                 req_id = self._consume_pending_local_created_item("message", "user")
         elif item_type == "message" and role == "system":
@@ -119,6 +121,8 @@ class ServerEventRuntime:
                     turn.assistant_item_ids.add(item_id)
                 elif item_type == "function_call":
                     turn.function_call_item_ids.add(item_id)
+        if req_id and item_type == "message" and role == "user":
+            self.replay_pending_input_transcription(item_id)
 
     def handle_conversation_item_deleted(self, event: dict[str, Any]) -> None:
         item_id = str(event.get("item_id") or "").strip()
@@ -137,7 +141,7 @@ class ServerEventRuntime:
             return
         turn = self._resolve_turn_for_item(item_id)
         if turn is None:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
+            req_id = self._consume_pending_audio_turn_req_id(include_terminal=True)
             if req_id:
                 turn = self._turns_by_req_id.get(req_id)
         if turn is None:
@@ -155,12 +159,20 @@ class ServerEventRuntime:
             status="done",
             permitted_for_inference=True,
         )
-        self._set_transcription_state(
-            turn,
-            TranscriptionState.PENDING,
-            trigger="input_audio_buffer.committed",
-            item_id=item_id,
+        transcription_state = str(
+            (turn.metadata or {}).get("_transcription_state", TranscriptionState.NONE.value)
         )
+        if transcription_state not in {
+            TranscriptionState.COMPLETED.value,
+            TranscriptionState.FAILED.value,
+        }:
+            self._set_transcription_state(
+                turn,
+                TranscriptionState.PENDING,
+                trigger="input_audio_buffer.committed",
+                item_id=item_id,
+            )
+        self.replay_pending_input_transcription(item_id)
 
     def handle_response_created(self, event: dict[str, Any]) -> None:
         response = server_event_response(event)
@@ -208,17 +220,50 @@ class ServerEventRuntime:
         )
         self._send_response_create(turn)
 
+    def _defer_input_transcription(self, event: dict[str, Any], item_id: str) -> None:
+        if not item_id:
+            return
+        with self._turn_lock:
+            self._pending_input_transcription_events[item_id] = dict(event)
+        self._latency.emit(
+            event="input_transcription_deferred",
+            item_id=item_id,
+        )
+        self.logger.debug(
+            "Deferred input transcription until audio turn binding item_id=%s",
+            item_id,
+        )
+
+    def replay_pending_input_transcription(self, item_id: str) -> None:
+        rendered_item_id = str(item_id or "").strip()
+        if not rendered_item_id:
+            return
+        with self._turn_lock:
+            event = self._pending_input_transcription_events.pop(rendered_item_id, None)
+        if event is None:
+            return
+        self._latency.emit(
+            event="input_transcription_replayed",
+            item_id=rendered_item_id,
+        )
+        event_type = str(event.get("type") or "").strip()
+        if event_type.endswith(".completed"):
+            self.handle_input_transcription_completed(event)
+        elif event_type.endswith(".failed"):
+            self.handle_input_transcription_failed(event)
+
     def handle_input_transcription_completed(self, event: dict[str, Any]) -> None:
         transcript = str(event.get("transcript", "") or "").strip()
         item_id = str(event.get("item_id") or "").strip()
         turn = self._resolve_turn_for_item(item_id) if item_id else None
         if turn is None and item_id:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
+            req_id = self._consume_pending_audio_turn_req_id(include_terminal=True)
             if req_id:
                 turn = self._turns_by_req_id.get(req_id)
                 if turn is not None:
                     self._bind_item_id_to_turn(turn, item_id)
         if turn is None:
+            self._defer_input_transcription(event, item_id)
             return
         if item_id and not turn.user_item_id:
             turn.user_item_id = item_id
@@ -239,7 +284,7 @@ class ServerEventRuntime:
                     role="user",
                     status="transcribed",
                 )
-            if turn.phase == TURN_PHASE_FINALIZED:
+            if self._is_turn_terminal(turn):
                 self._maybe_note_preference_turn(turn)
 
         usage = event.get("usage", {}) or {}
@@ -275,13 +320,16 @@ class ServerEventRuntime:
         item_id = str(event.get("item_id") or "").strip()
         turn = self._resolve_turn_for_item(item_id) if item_id else None
         if turn is None and item_id:
-            req_id = self._consume_pending_audio_turn_req_id(include_finalized=True)
+            req_id = self._consume_pending_audio_turn_req_id(include_terminal=True)
             if req_id:
                 turn = self._turns_by_req_id.get(req_id)
                 if turn is not None:
                     self._bind_item_id_to_turn(turn, item_id)
                     if not turn.user_item_id:
                         turn.user_item_id = item_id
+        if turn is None:
+            self._defer_input_transcription(event, item_id)
+            return
         error = event.get("error", {}) or {}
         if not isinstance(error, dict):
             error = {}

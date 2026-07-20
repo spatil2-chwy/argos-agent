@@ -36,13 +36,12 @@ resources:
       - presence.face.publish
       - voice_command.publish
 
-  - id: realsense_002
+  - id: arducam_001
     kind: camera
-    hardware: realsense
+    hardware: arducam
     provider: cody-go2
     capabilities:
       - camera.rgb
-      - camera.rgbd
       - camera.intrinsics
 
   - id: screen_001

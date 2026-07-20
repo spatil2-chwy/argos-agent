@@ -200,6 +200,10 @@ When voice has been absent for `silence_grace_period`:
 OpenAI input transcription is attached to the committed audio item. It is used
 for observability, memory, and preference extraction, but it is not what opens,
 closes, or commits the local recording.
+Because owner resolution can finish after the provider emits a transcription,
+the runtime temporarily keeps unmatched terminal transcription events by audio
+item id and replays them as soon as the turn is registered. This is local event
+bookkeeping; it adds no transcription request or response-path wait.
 
 ### Step 5: Pending internal events may be folded into the same turn
 
@@ -263,6 +267,9 @@ The runtime learns the exact Realtime object ids incrementally:
 The binding rules are:
 
 - audio user items are matched using `_pending_audio_turn_req_ids`
+- terminal audio turns remain eligible for this binding so a superseded or
+  canceled answer cannot discard the human transcript
+- unmatched transcription completions or failures are replayed after binding
 - local explicit-input text items are generated with Argos-owned ids
 - assistant items and function calls are matched using `response_id`
 
@@ -450,6 +457,10 @@ That truncate step is important: it keeps the server-side conversation aligned w
 ### New human turn before the pending answer starts
 
 If the superseded turn has not produced audio yet, `_supersede_unanswered_turn()` cancels it and lets the new human turn win.
+
+The superseded model answer is excluded, but attributed human speech remains
+eligible for the speaker-owned memory segment once its input transcript is
+available. An assistant transcript is not required.
 
 ### Model completed without audio
 
