@@ -37,6 +37,7 @@ tools:
 identity_memory:
   enabled: true
   site_code: BOS3
+  place_room_id: __site__
 
 knowledge_bases:
   - kind: whoami_query

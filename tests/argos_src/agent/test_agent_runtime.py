@@ -3253,6 +3253,8 @@ def test_factory_wires_identity_memory_into_prompt_extraction_and_face(monkeypat
 
     assert len(created["identity_memory_clients"]) == 1
     client = created["identity_memory_clients"][0]
+    assert client.kwargs["robot_id"] == "puffle"
+    assert client.kwargs["robot_display_name"] == "Puffle"
     assert client.kwargs["site_code"] == ""
     assert client.kwargs["place_room_id"] == "lab"
     assert client.kwargs["retention_class"] == "priority"

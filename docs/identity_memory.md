@@ -39,14 +39,16 @@ The shipped profile section keeps only the normal operational knobs:
 identity_memory:
   enabled: true
   site_code: BOS3
+  place_room_id: __site__
 ```
 
 The remaining identity-memory profile keys are advanced switches with defaults:
 
 - `backend`: defaults to `tailwag_http`; set to `noop` only for disabled
   identity-memory test or fallback runs.
-- `place_room_id`: defaults to `realtime`; attached to Tailwag live episodes as
-  room metadata.
+- `place_room_id`: defaults to `realtime` for custom profiles. The shipped BOS3
+  profiles explicitly use `__site__`, Tailwag's canonical building-level Place,
+  so live episodes and employee home-base provenance reuse the same site node.
 - `retention_class`: defaults to `standard`; attached to Tailwag live episodes
   for Tailwag-owned retention policy.
 - `record_live_episodes`: defaults to `true`; controls whether resolved live
@@ -61,8 +63,9 @@ and `slack_memory`. Face and speaker recognition no longer accept local database
 paths for biometric storage.
 
 The selected manifest must include an HTTP `memory` provider and a `memory`
-resource with `memory.identity` and `memory.person_context`. Argos sends bearer auth from
-`TAILWAG_API_BEARER_TOKEN` when the provider declares:
+resource with `memory.identity`, `memory.person_context`, and `memory.episodes`.
+Argos sends bearer auth from `TAILWAG_API_BEARER_TOKEN` when the provider
+declares:
 
 ```yaml
 auth:
@@ -76,6 +79,35 @@ owner. The HTTP transport posts that operation to
 returns `context_markdown`, and Argos pastes that prompt-ready markdown into the
 `[PERSON SPEAKING TO YOU]` block after any Argos-owned `Directory` lines. Argos
 does not parse or rebuild the Tailwag memory section locally.
+
+## Live Episode Robot Attribution
+
+The runtime derives stable robot identity from the selected manifest, not from
+an identity-memory profile override. `TailwagHttpIdentityMemoryClient` requires
+that manifest's robot `id` and `display_name` when the runtime is assembled.
+Every live conversation episode includes exactly one host robot:
+
+```json
+{
+  "robots": [
+    {
+      "id": "cody",
+      "display_name": "Cody",
+      "role": "host",
+      "source": "argos"
+    }
+  ]
+}
+```
+
+Puffle, Cody, and Navigation therefore send their own manifest IDs even when
+display names collide or later change. Attribution rides on the existing
+`memory.episodes_record` provider request and the existing `memory.episodes`
+resource capability; it does not add a second realtime request, provider
+operation, or robot capability. Tailwag owns the durable Robot node, the
+episode-time display-name snapshot, and retrieval by stable robot ID. Argos does
+not use Robot provenance for person identity, biometric matching, or memory
+extraction targets.
 
 ## Runtime Memory Search
 

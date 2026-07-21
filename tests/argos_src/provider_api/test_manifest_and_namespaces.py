@@ -30,6 +30,9 @@ def test_runtime_manifests_select_aws_tailwag_with_bearer_auth(manifest_id):
     assert memory_provider.auth is not None
     assert memory_provider.auth.type == "bearer"
     assert memory_provider.auth.token_env == "TAILWAG_API_BEARER_TOKEN"
+    memory_resource = manifest.resource_by_id("memory")
+    assert memory_resource is not None
+    assert memory_resource.has_capability("memory.episodes")
 
 
 def test_puffle_manifest_loads_resources_and_capabilities():

@@ -88,11 +88,34 @@ def _segment() -> PreferenceSegment:
     )
 
 
+@pytest.mark.parametrize(
+    ("robot_id", "robot_display_name", "message"),
+    [
+        ("", "Cody", "robot_id"),
+        ("cody", "", "robot_display_name"),
+        ("   ", "Cody", "robot_id"),
+        ("cody", "   ", "robot_display_name"),
+    ],
+)
+def test_tailwag_requires_nonblank_robot_identity(
+    robot_id, robot_display_name, message
+):
+    with pytest.raises(ValueError, match=message):
+        TailwagHttpIdentityMemoryClient(
+            provider_client=_StrictProviderClient(),
+            resource_id="memory",
+            robot_id=robot_id,
+            robot_display_name=robot_display_name,
+        )
+
+
 def test_tailwag_search_calls_match_http_provider_contract():
     provider = _StrictProviderClient()
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
         site_code="BOS3",
     )
 
@@ -123,6 +146,8 @@ def test_tailwag_biometric_write_calls_match_http_provider_contract():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     face = client.enroll_face_reference(
@@ -163,6 +188,8 @@ def test_tailwag_optional_profiles_preserve_http_null_results():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     assert client.get_verified_profile(username="missing", official_name="Missing") is None
@@ -205,6 +232,8 @@ def test_tailwag_person_profile_normalizes_directory_response_shapes(
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     profile = client.person_profile("person-1")
@@ -222,6 +251,8 @@ def test_tailwag_person_context_uses_markdown_provider_contract():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     context = client.person_context("person-1", current_text="robot demo")
@@ -244,6 +275,8 @@ def test_tailwag_record_episode_defaults_to_no_memory_extraction():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     result = client.record_episode({"id": "episode-1", "turns": []})
@@ -266,6 +299,8 @@ def test_tailwag_record_episode_explicit_true_opts_in_to_memory_extraction():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     client.record_episode({"id": "episode-1", "turns": []}, extract_memory=True)
@@ -278,6 +313,8 @@ def test_tailwag_live_episode_ingestion_defaults_to_no_memory_extraction():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     client.extract_and_store_segment(_segment(), reason="turn_complete")
@@ -287,6 +324,15 @@ def test_tailwag_live_episode_ingestion_defaults_to_no_memory_extraction():
     assert provider.calls[0][1]["episode"]["participants"] == [
         {"id": "person-1", "role": "speaker", "source": "live_chat"}
     ]
+    assert provider.calls[0][1]["episode"]["robots"] == [
+        {
+            "id": "cody",
+            "display_name": "Cody",
+            "role": "host",
+            "source": "argos",
+        }
+    ]
+    assert len(provider.calls) == 1
 
 
 def test_tailwag_live_episode_ingestion_explicit_true_opts_in_to_memory_extraction():
@@ -294,6 +340,8 @@ def test_tailwag_live_episode_ingestion_explicit_true_opts_in_to_memory_extracti
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
         extract_live_turn_memory=True,
     )
 
@@ -301,3 +349,5 @@ def test_tailwag_live_episode_ingestion_explicit_true_opts_in_to_memory_extracti
 
     assert provider.calls[0][0] == "memory.episodes_record"
     assert provider.calls[0][1]["extract_memory"] is True
+    assert provider.calls[0][1]["episode"]["robots"][0]["id"] == "cody"
+    assert len(provider.calls) == 1

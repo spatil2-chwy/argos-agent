@@ -41,6 +41,8 @@ class TailwagHttpIdentityMemoryClient:
         *,
         provider_client: ProviderClient,
         resource_id: str,
+        robot_id: str,
+        robot_display_name: str,
         site_code: str = "",
         place_room_id: str = DEFAULT_PLACE_ROOM,
         retention_class: str = DEFAULT_RETENTION_CLASS,
@@ -50,6 +52,14 @@ class TailwagHttpIdentityMemoryClient:
         self._resource_id = str(resource_id or "").strip()
         if not self._resource_id:
             raise ValueError("Tailwag HTTP identity-memory client requires resource_id.")
+        self._robot_id = str(robot_id or "").strip()
+        if not self._robot_id:
+            raise ValueError("Tailwag HTTP identity-memory client requires robot_id.")
+        self._robot_display_name = str(robot_display_name or "").strip()
+        if not self._robot_display_name:
+            raise ValueError(
+                "Tailwag HTTP identity-memory client requires robot_display_name."
+            )
         self.site_code = str(site_code or "").strip()
         self.place_room_id = str(place_room_id or "").strip() or DEFAULT_PLACE_ROOM
         self.retention_class = str(retention_class or "").strip() or DEFAULT_RETENTION_CLASS
@@ -477,6 +487,14 @@ class TailwagHttpIdentityMemoryClient:
             "participants": [
                 {"id": participant_id, "role": "speaker", "source": "live_chat"}
                 for participant_id in participants
+            ],
+            "robots": [
+                {
+                    "id": self._robot_id,
+                    "display_name": self._robot_display_name,
+                    "role": "host",
+                    "source": "argos",
+                }
             ],
         }
 

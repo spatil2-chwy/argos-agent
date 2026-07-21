@@ -147,7 +147,7 @@ def test_static_interaction_profile_uses_manifest_shape():
     assert profile.identity_memory.backend == "tailwag_http"
     assert profile.identity_memory.site_code == "BOS3"
     assert profile.identity_memory.retention_class == "standard"
-    assert profile.identity_memory.place_room_id == "realtime"
+    assert profile.identity_memory.place_room_id == "__site__"
     assert profile.identity_memory.extract_live_turn_memory is False
     assert profile.resources.identity_memory == "memory"
 
@@ -169,9 +169,29 @@ def test_navigation_profile_extends_static_interaction_capabilities():
     assert "dock.charging" in profile.tools.enabled_tool_ids
 
     assert profile.identity_memory.site_code == "BOS3"
+    assert profile.identity_memory.place_room_id == "__site__"
     assert profile.face_recognition.enabled is True
     assert profile.speaker_recognition.enabled is True
     assert profile.realtime.admission.open_on_attention_presence is True
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "robot_id", "display_name"),
+    [
+        ("static_interaction", "puffle", "Puffle"),
+        ("cody_interaction", "cody", "Cody"),
+        ("navigation", "navigation", "Puffle Navigation"),
+    ],
+)
+def test_shipped_bos3_profiles_use_manifest_robot_and_canonical_site(
+    profile_name, robot_id, display_name
+):
+    profile = load_scenario_profile(profile_name)
+
+    assert profile.robot.id == robot_id
+    assert profile.robot.display_name == display_name
+    assert profile.identity_memory.site_code == "BOS3"
+    assert profile.identity_memory.place_room_id == "__site__"
 
 
 def test_display_can_be_disabled_even_when_manifest_has_display_resource():

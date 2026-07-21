@@ -135,6 +135,12 @@ Tailwag's Neo4j, OpenAI, Slack, Snowflake, embedding, and model
 configuration belong to the hosted service and are not configured in Argos.
 Argos still requires its own `OPENAI_API_KEY` for the Realtime session.
 
+The shipped BOS3 profiles explicitly set
+`identity_memory.place_room_id: __site__` so live episodes reuse Tailwag's
+canonical building-level Place. They also derive Robot ID and display name from
+the selected manifest and attach that identity to the existing episode-record
+request. No extra credential, endpoint, or provider operation is required.
+
 For Puffle's local browser screen, run the display control server separately at
 `http://localhost:4173`. The `puffle` manifest selects the HTTP-backed
 `screen_001` resource through provider `puffle-go2-display`.
