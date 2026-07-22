@@ -183,21 +183,22 @@ class AgentStateRuntime:
                     status="done",
                     permitted_for_inference=True,
                 )
+                replay = getattr(self, "_replay_pending_input_transcription", None)
+                if callable(replay):
+                    replay(item_id)
                 bound_audio_item = True
                 break
             if not bound_audio_item:
                 self._pending_audio_turn_req_ids.append(turn.req_id)
 
-    def _consume_pending_audio_turn_req_id(self, *, include_finalized: bool = False) -> str:
+    def _consume_pending_audio_turn_req_id(self, *, include_terminal: bool = False) -> str:
         with self._turn_lock:
             while self._pending_audio_turn_req_ids:
                 req_id = self._pending_audio_turn_req_ids.popleft()
                 turn = self._turns_by_req_id.get(req_id)
                 if turn is None:
                     continue
-                if self._is_turn_terminal(turn) and not (
-                    include_finalized and turn.phase == TURN_PHASE_FINALIZED
-                ):
+                if self._is_turn_terminal(turn) and not include_terminal:
                     continue
                 return req_id
         return ""

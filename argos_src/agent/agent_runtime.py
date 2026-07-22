@@ -349,6 +349,7 @@ class RealtimeRobotAgent:
 
         self._recording_lock = threading.RLock()
         self._recording_active = False
+        self._audio_turn_pending_registration = False
         self._recording_started_at = 0.0
         self._last_voice_at = 0.0
         self._current_primary_face_person_id: Optional[str] = None
@@ -393,6 +394,7 @@ class RealtimeRobotAgent:
         )
         self._pending_audio_turn_req_ids: deque[str] = deque()
         self._pending_audio_item_ids: deque[str] = deque()
+        self._pending_input_transcription_events: dict[str, dict[str, Any]] = {}
         self._pending_local_created_items: deque[Any] = deque()
         self._history_item_order: deque[str] = deque()
         self._known_history_item_ids: set[str] = set()
@@ -483,9 +485,9 @@ class RealtimeRobotAgent:
     def _register_pending_audio_turn(self, turn: QueuedTurn) -> None:
         self._state_controller()._register_pending_audio_turn(turn)
 
-    def _consume_pending_audio_turn_req_id(self, *, include_finalized: bool = False) -> str:
+    def _consume_pending_audio_turn_req_id(self, *, include_terminal: bool = False) -> str:
         return self._state_controller()._consume_pending_audio_turn_req_id(
-            include_finalized=include_finalized,
+            include_terminal=include_terminal,
         )
 
     def _capture_turn_context(
@@ -974,6 +976,7 @@ class RealtimeRobotAgent:
         speech_end_unix_s: float,
         face_evidence_fields: dict[str, Any] | None = None,
         raw_face_snapshot: Any = None,
+        req_id: str = "",
     ) -> None:
         self._audio_controller()._commit_audio_turn(
             primary_face_person_id,
@@ -984,6 +987,7 @@ class RealtimeRobotAgent:
             speech_end_perf_s,
             speech_end_unix_s,
             raw_face_snapshot,
+            req_id,
         )
 
     def _maybe_submit_adaptive_face_observation(
@@ -1720,9 +1724,12 @@ class RealtimeRobotAgent:
         return max(0.0, time.time() - self._last_external_input_s)
 
     def is_recording_active(self) -> bool:
-        """Return True while local speech capture is actively buffering audio."""
+        """Return True while audio is recording or awaiting turn registration."""
         with self._recording_lock:
-            return bool(self._recording_active)
+            return bool(
+                self._recording_active
+                or getattr(self, "_audio_turn_pending_registration", False)
+            )
 
     # ------------------------------------------------------------------
     # Setup
@@ -2340,6 +2347,9 @@ class RealtimeRobotAgent:
     def _handle_input_transcription_failed(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_input_transcription_failed(event)
 
+    def _replay_pending_input_transcription(self, item_id: str) -> None:
+        self._server_event_runtime_controller().replay_pending_input_transcription(item_id)
+
     def _handle_output_audio_delta(self, event: dict[str, Any]) -> None:
         self._server_event_runtime_controller().handle_output_audio_delta(event)
 
@@ -2402,6 +2412,7 @@ class RealtimeRobotAgent:
             **self._exchange_log_fields(turn),
         )
         self._set_turn_phase(turn, TURN_PHASE_FINALIZED, trigger="turn_completed")
+        self._maybe_note_preference_turn(turn)
         turn.response_finished.set()
         turn.playback_finished.set()
         self._discard_pending_response_turn(turn.req_id)
@@ -2434,6 +2445,7 @@ class RealtimeRobotAgent:
             **self._exchange_log_fields(turn),
         )
         self._set_turn_phase(turn, phase, trigger=reason or phase)
+        self._maybe_note_preference_turn(turn)
         self.logger.warning(
             "Terminating turn req_id=%s phase=%s reason=%s response_id=%s audio_started=%s pending_tool_calls=%s pending_response_requests=%s",
             turn.req_id,

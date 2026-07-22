@@ -9,7 +9,7 @@ from argos_src.agent.preference_types import PreferenceSegmentTurn
 
 
 class PreferenceRuntime:
-    """Buffer finalized turns and schedule preference extraction work."""
+    """Buffer attributed terminal turns and schedule preference extraction work."""
 
     def __init__(self, host: Any) -> None:
         self._host = host
@@ -29,16 +29,6 @@ class PreferenceRuntime:
                 host.logger.info(
                     "Preference extraction waiting req_id=%s "
                     "missing=input_transcript owner_id=%s user_item_id=%s phase=%s",
-                    turn.req_id,
-                    turn.owner_id,
-                    getattr(turn, "user_item_id", ""),
-                    getattr(turn, "phase", ""),
-                )
-                return
-            if not assistant_transcript:
-                host.logger.info(
-                    "Preference extraction waiting req_id=%s "
-                    "missing=assistant_transcript owner_id=%s user_item_id=%s phase=%s",
                     turn.req_id,
                     turn.owner_id,
                     getattr(turn, "user_item_id", ""),
@@ -235,16 +225,14 @@ class PreferenceRuntime:
         host = self._host
         if host._preference_segments is None:
             return
-        finalized_phase = "finalized"
         with host._turn_lock:
             turns = [
                 turn
                 for turn in host._turns_by_req_id.values()
-                if getattr(turn, "phase", "") == finalized_phase
+                if host._is_turn_terminal(turn)
                 and not getattr(turn, "preference_noted", False)
                 and not getattr(turn, "source_is_internal", False)
                 and str(getattr(turn, "user_transcript", "") or "").strip()
-                and str(getattr(turn, "assistant_transcript", "") or "").strip()
                 and str(getattr(turn, "owner_id", "") or "").strip()
             ]
         for turn in turns:

@@ -547,6 +547,7 @@ def _make_agent():
     agent._stale_response_deadlines_by_req_id = {}
     agent._pending_audio_turn_req_ids = deque()
     agent._pending_audio_item_ids = deque()
+    agent._pending_input_transcription_events = {}
     agent._pending_local_created_items = deque()
     agent._history_item_order = deque()
     agent._known_history_item_ids = set()
@@ -1157,6 +1158,135 @@ def test_recording_gesture_does_not_block_audio_finalize():
     assert any(evt.get("event") == "speech_end" for evt in agent._latency.events)
 
 
+def test_speech_end_claims_engagement_before_speaker_resolution_finishes():
+    import numpy as np
+
+    resolution_started = threading.Event()
+    release_resolution = threading.Event()
+
+    class _StatefulEngagement(_FakeEngagement):
+        def __init__(self):
+            super().__init__()
+            self.state = "alert"
+
+        def on_human_input(self, req_id):
+            super().on_human_input(req_id)
+            self.state = "engaged"
+
+    class _BlockingSpeakerService(_FakeSpeakerService):
+        def resolve_turn_owner(self, **kwargs):
+            resolution_started.set()
+            release_resolution.wait(timeout=2.0)
+            return super().resolve_turn_owner(**kwargs)
+
+    agent = _make_agent()
+    agent.engagement = _StatefulEngagement()
+    agent.speaker_service = _BlockingSpeakerService()
+    agent.gesture_runtime = None
+    agent._current_primary_face_person_id = "person-1"
+    agent._current_visible_face_person_ids = ("person-1",)
+    agent._current_turn_audio_chunks = [b"\x01\x02"]
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    req_id = ""
+
+    try:
+        agent._finalize_recording_locked(now_s=11.0)
+
+        assert resolution_started.wait(timeout=1.0)
+        assert agent.engagement.state == "engaged"
+        assert len(agent.engagement.human_inputs) == 1
+        req_id = agent.engagement.human_inputs[0]
+        assert req_id.startswith("rt-")
+        speech_end = next(
+            event for event in agent._latency.events if event.get("event") == "speech_end"
+        )
+        assert speech_end["req_id"] == req_id
+        assert req_id not in agent._turns_by_req_id
+        assert agent._audio_turn_pending_registration is True
+        assert agent.is_recording_active() is True
+
+        sent_count = len(agent._sent_events)
+        agent._capture_callback(
+            np.zeros((1600, 1), dtype=np.int16),
+            1600,
+            None,
+            None,
+        )
+        assert agent._recording_active is False
+        assert len(agent._sent_events) == sent_count
+    finally:
+        release_resolution.set()
+
+    deadline = time.time() + 1.0
+    while req_id not in agent._turns_by_req_id and time.time() < deadline:
+        time.sleep(0.01)
+    assert req_id in agent._turns_by_req_id
+    assert agent.engagement.human_inputs == [req_id]
+    assert agent._audio_turn_pending_registration is False
+
+
+def test_audio_commit_failure_releases_early_engagement_claim():
+    agent = _make_agent()
+    agent._send_event = lambda _event: (_ for _ in ()).throw(RuntimeError("commit failed"))
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-1",
+        visible_face_person_ids=("person-1",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+        req_id="rt-commit-failed",
+    )
+
+    assert agent._capture_state == "admission_closed"
+    assert agent._audio_turn_pending_registration is False
+    assert agent.engagement.human_inputs == ["rt-commit-failed"]
+    assert agent.engagement.done == [("rt-commit-failed", False)]
+
+
+def test_audio_commit_worker_start_failure_releases_pending_registration(monkeypatch):
+    agent = _make_agent()
+    agent.gesture_runtime = None
+
+    def fail_start(_thread):
+        raise RuntimeError("thread start failed")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+
+    agent._finalize_recording_locked(now_s=11.0)
+
+    assert agent._audio_turn_pending_registration is False
+    assert agent._capture_state == "admission_closed"
+    assert agent.engagement.human_inputs == []
+
+
+def test_owner_resolution_failure_releases_pending_registration_and_engagement():
+    agent = _make_agent()
+    agent._audio_turn_pending_registration = True
+    agent._face_owner_resolution = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("owner resolution failed")
+    )
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-1",
+        visible_face_person_ids=("person-1",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+        req_id="rt-owner-failed",
+    )
+
+    assert {event["type"] for event in agent._sent_events} == {
+        "input_audio_buffer.commit"
+    }
+    assert agent._audio_turn_pending_registration is False
+    assert agent.engagement.human_inputs == ["rt-owner-failed"]
+    assert agent.engagement.done == [("rt-owner-failed", False)]
+
+
 def test_audio_face_uses_only_strict_primary_face_id():
     agent = _make_agent()
     agent.speaker_service = _FakeSpeakerService(
@@ -1213,6 +1343,35 @@ def test_input_audio_buffer_committed_can_arrive_before_turn_registration():
     assert turn.user_item_id == "early-user-item"
     assert agent._item_id_to_req_id["early-user-item"] == turn.req_id
     assert list(agent._pending_audio_turn_req_ids) == []
+
+
+def test_input_transcription_completed_before_turn_registration_is_replayed():
+    agent = _make_agent()
+
+    agent._handle_input_audio_buffer_committed(
+        {
+            "type": "input_audio_buffer.committed",
+            "item_id": "early-transcribed-user-item",
+        }
+    )
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "early-transcribed-user-item",
+            "transcript": "the game was canceled",
+        }
+    )
+
+    assert "early-transcribed-user-item" in agent._pending_input_transcription_events
+
+    turn = _make_turn("rt-audio-early-transcript")
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._register_pending_audio_turn(turn)
+
+    assert turn.user_item_id == "early-transcribed-user-item"
+    assert turn.user_transcript == "the game was canceled"
+    assert agent._history_item_snapshots[turn.user_item_id]["text"] == "the game was canceled"
+    assert agent._pending_input_transcription_events == {}
 
 
 def test_input_transcription_failed_is_logged_for_bound_turn():
@@ -3421,14 +3580,18 @@ def test_people_context_includes_directory_profile_lines():
     assert "[PERSON MEMORY]\nPreferences:\n- preferred name: sash" in rendered
 
 
-def test_people_context_treats_string_directory_profile_as_one_line():
+def test_people_context_normalizes_observed_stringified_directory_profile():
     persons = [
         SimpleNamespace(
             person_id="person-1",
             name="Alice",
             bbox_area=20.0,
             interaction_count=2,
-            directory_profile_lines="title: AI Technologist II (Analyst)",
+            directory_profile_lines=(
+                "['Title: Robotics Software Engineer I Co-op', "
+                "'Manager: Brian Waite', 'Tenure: ...', "
+                "'Function: Administration']"
+            ),
             context_markdown="[PERSON MEMORY]\nPreferences:\n- preferred name: sash",
             preferred_language="",
         ),
@@ -3450,8 +3613,11 @@ def test_people_context_treats_string_directory_profile_as_one_line():
         speaker_visible=True,
     )
 
-    assert "Directory: title: AI Technologist II (Analyst)" in rendered
-    assert "Directory: t; i; t; l; e" not in rendered
+    assert (
+        "Directory: Title: Robotics Software Engineer I Co-op; "
+        "Manager: Brian Waite; Tenure: ...; Function: Administration"
+    ) in rendered
+    assert "Directory: [; '; T; i; t; l; e" not in rendered
 
 
 def test_people_context_includes_directory_only_for_visible_non_owner_people():
@@ -4053,6 +4219,64 @@ def test_late_input_transcription_can_bind_finalized_pending_audio_turn():
     assert agent._item_id_to_req_id["late-user-item-pref"] == turn.req_id
     assert len(seen) == 1
     assert seen[0].person_id == "person-1"
+
+
+def test_attributed_superseded_user_only_turn_is_persisted():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-superseded",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_SUPERSEDED
+    turn.finalized = True
+    turn.user_transcript = "the game was canceled"
+    agent._turns_by_req_id[turn.req_id] = turn
+
+    agent._maybe_note_preference_turn(turn)
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].person_id == "person-1"
+    assert seen[0].turns[0].user_text == "the game was canceled"
+    assert seen[0].turns[0].assistant_text == ""
+
+
+def test_late_input_transcription_persists_superseded_user_only_turn():
+    agent = _make_agent()
+    seen = []
+    agent.preference_extractor = SimpleNamespace(
+        extract_and_store_segment=lambda segment: seen.append(segment)
+    )
+    turn = _make_turn(
+        "rt-pref-superseded-late-transcript",
+        primary_face_person_id="person-1",
+        owner_id="person-1",
+        audio_speaker_id=None,
+    )
+    turn.phase = realtime_mod.TURN_PHASE_SUPERSEDED
+    turn.finalized = True
+    agent._turns_by_req_id[turn.req_id] = turn
+    agent._bind_item_id_to_turn(turn, "superseded-user-item")
+    turn.user_item_id = "superseded-user-item"
+
+    agent._handle_input_transcription_completed(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "superseded-user-item",
+            "transcript": "the game was canceled",
+        }
+    )
+    agent.flush_preference_segments(reason="shutdown")
+
+    assert len(seen) == 1
+    assert seen[0].turns[0].user_text == "the game was canceled"
+    assert seen[0].turns[0].assistant_text == ""
 
 
 def test_preference_turn_without_owner_id_writes_nothing():

@@ -17,7 +17,7 @@ providers:
     transport: http
     key_prefix: argos/providers/memory
     connect_endpoints:
-      - http://localhost:8000
+      - https://a9vhnyd929.execute-api.us-east-2.amazonaws.com
     auth:
       type: bearer
       token_env: TAILWAG_API_BEARER_TOKEN

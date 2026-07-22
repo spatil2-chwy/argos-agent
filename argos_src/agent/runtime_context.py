@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
+from argos_src.identity_memory.normalization import normalize_directory_profile_lines
 from argos_src.nav_support.locations import LocationStore
 
 MAX_TOOL_SUMMARY_LEN = 240
@@ -68,12 +69,7 @@ def format_people_context(
         if owner_person is not None
         else ()
     )
-    if isinstance(directory_items, str):
-        directory_profile_lines = (directory_items.strip(),) if directory_items.strip() else ()
-    else:
-        directory_profile_lines = tuple(
-            str(item).strip() for item in (directory_items or ()) if str(item).strip()
-        )
+    directory_profile_lines = normalize_directory_profile_lines(directory_items)
     if directory_profile_lines:
         lines.append(f"  Directory: {'; '.join(directory_profile_lines)}")
 

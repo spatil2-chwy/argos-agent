@@ -34,6 +34,7 @@ from argos_src.face_recognition.models import (
 from argos_src.face_recognition.pipeline import FaceEmbeddingPipeline, FacePipelineCudaUnavailable
 from argos_src.face_recognition.presence_cache import FacePresenceCache
 from argos_src.face_recognition.scene_analysis import FaceSceneCandidate, analyze_face_scene
+from argos_src.identity_memory.normalization import normalize_directory_profile_lines
 from argos_src.media.image_encoding import preprocess_image
 from argos_src.observability.observability import LatencyLogger, perf_now
 from argos_src.provider_api.errors import is_provider_error
@@ -2516,7 +2517,7 @@ def _person_id_from_profile(name: str, profile: dict[str, Any]) -> str:
 
 def _profile_directory_lines(profile: Any) -> tuple[str, ...]:
     if isinstance(profile, dict):
-        lines = profile.get("directory_profile_lines") or ()
+        lines = profile.get("directory_profile_lines")
     else:
-        lines = getattr(profile, "directory_profile_lines", ()) or ()
-    return tuple(str(line) for line in lines if str(line or "").strip())
+        lines = getattr(profile, "directory_profile_lines", ())
+    return normalize_directory_profile_lines(lines)

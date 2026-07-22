@@ -703,7 +703,11 @@ def test_build_scene_state_uses_tailwag_match_metadata(monkeypatch):
             "metadata": {
                 "interaction_count": 2,
                 "last_seen": "before",
-                "directory_profile_lines": ("title: Engineer",),
+                "directory_profile_lines": (
+                    "['Title: Robotics Software Engineer I Co-op', "
+                    "'Manager: Brian Waite', 'Tenure: ...', "
+                    "'Function: Administration']"
+                ),
             },
         }
 
@@ -722,7 +726,12 @@ def test_build_scene_state_uses_tailwag_match_metadata(monkeypatch):
     assert analysis.attention_target is not None
     assert analysis.attention_target.person_id == "person-1"
     assert persons[0].interaction_count == 2
-    assert persons[0].directory_profile_lines == ("title: Engineer",)
+    assert persons[0].directory_profile_lines == (
+        "Title: Robotics Software Engineer I Co-op",
+        "Manager: Brian Waite",
+        "Tenure: ...",
+        "Function: Administration",
+    )
     assert persons[0].recognition_status == "accepted"
     assert persons[0].recognition_reason == "matched"
     assert persons[0].recognition_threshold >= 0.0

@@ -4,8 +4,8 @@ manifest: cody
 
 resources:
   primary_robot: base
-  face_camera: realsense_002
-  scene_camera: realsense_002
+  face_camera: arducam_001
+  scene_camera: arducam_001
   interaction_display: screen_001
 
 display:

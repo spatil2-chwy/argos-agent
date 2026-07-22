@@ -23,6 +23,7 @@ from .models import (
     PersonMemoryContext,
     PersonProfile,
 )
+from .normalization import normalize_directory_profile_lines
 
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,9 @@ class TailwagHttpIdentityMemoryClient:
             email=str(payload.get("email") or ""),
             interaction_count=_safe_int(payload.get("interaction_count")),
             last_seen=str(payload.get("last_seen")) if payload.get("last_seen") is not None else None,
-            directory_profile_lines=tuple(payload.get("directory_profile_lines") or ()),
+            directory_profile_lines=normalize_directory_profile_lines(
+                payload.get("directory_profile_lines")
+            ),
             metadata=dict(payload.get("metadata") or payload),
         )
 
@@ -146,11 +149,9 @@ class TailwagHttpIdentityMemoryClient:
                 "memory.person_context",
                 {
                     "person_id": rendered_person_id,
-                    "limit": 10,
                     "semantic_scope": None,
                     "current_text": current_text,
                     "memory_limit": 12,
-                    "recent_episode_limit": 5,
                 },
             )
             payload = _plain(response)

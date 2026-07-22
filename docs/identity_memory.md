@@ -24,6 +24,15 @@ Argos reaches Tailwag through the generic HTTP provider transport and the
 `argos_src.identity_memory.tailwag_http` adapter. Everything else uses the
 `IdentityMemoryClient` protocol or the noop fallback.
 
+The normal memory backend is the AWS-hosted Tailwag service selected by the
+shipped runtime manifests. The Argos host needs outbound HTTPS connectivity to
+the Tailwag API Gateway and the bearer token from AWS Secrets Manager secret
+`aaggarwal1-tailwag/api-bearer-token` exposed as
+`TAILWAG_API_BEARER_TOKEN`. The token must remain outside the repository.
+Tailwag's Neo4j, OpenAI, Slack, Snowflake, embedding, and model
+configuration are owned by the hosted service and are not configured in Argos.
+Argos's own Realtime API credential remains a separate runtime prerequisite.
+
 The shipped profile section keeps only the normal operational knobs:
 
 ```yaml
