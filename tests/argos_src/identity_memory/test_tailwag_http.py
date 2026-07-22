@@ -265,9 +265,56 @@ def test_tailwag_person_context_uses_markdown_provider_contract():
     call = provider.calls[0][1]
     assert call["resource_id"] == "memory"
     assert call["person_id"] == "person-1"
+    assert call["robot_id"] == "cody"
     assert call["current_text"] == "robot demo"
     assert call["semantic_scope"] is None
     assert call["memory_limit"] == 12
+
+
+def test_tailwag_semantic_search_scopes_results_to_stable_robot_id():
+    class _SemanticProvider(_StrictProviderClient):
+        def request(self, *, resource_id, operation, args=None, timeout_ms=None):
+            if operation == "memory.semantic_search":
+                self.calls.append(
+                    (operation, {"resource_id": resource_id, **dict(args or {})})
+                )
+                return {"episodes": [], "memory_items": []}
+            return super().request(
+                resource_id=resource_id,
+                operation=operation,
+                args=args,
+                timeout_ms=timeout_ms,
+            )
+
+    provider = _SemanticProvider()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+        robot_id="puffle",
+        robot_display_name="Puffle",
+    )
+
+    result = client.search_semantic_memory(
+        text="robot demos",
+        person_id="person-1",
+        building_code="BOS3",
+        limit=3,
+    )
+
+    assert result == {"episodes": [], "memory_items": []}
+    assert provider.calls == [
+        (
+            "memory.semantic_search",
+            {
+                "resource_id": "memory",
+                "text": "robot demos",
+                "person_id": "person-1",
+                "robot_id": "puffle",
+                "building_code": "BOS3",
+                "limit": 3,
+            },
+        )
+    ]
 
 
 def test_tailwag_record_episode_defaults_to_no_memory_extraction():

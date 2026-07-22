@@ -159,6 +159,7 @@ class TailwagHttpIdentityMemoryClient:
                 "memory.person_context",
                 {
                     "person_id": rendered_person_id,
+                    "robot_id": self._robot_id,
                     "semantic_scope": None,
                     "current_text": current_text,
                     "memory_limit": 12,
@@ -441,6 +442,7 @@ class TailwagHttpIdentityMemoryClient:
             {
                 "text": rendered_text,
                 "person_id": rendered_person_id,
+                "robot_id": self._robot_id,
                 "building_code": building_code,
                 "limit": limit,
             },

@@ -74,11 +74,14 @@ auth:
 ```
 
 Argos calls Tailwag's `memory.person_context` operation for the resolved turn
-owner. The HTTP transport posts that operation to
+owner and includes the active manifest robot's stable `robot_id`. The HTTP transport posts that operation to
 `/argos/providers/memory/resources/memory/request/person_context`. Tailwag
 returns `context_markdown`, and Argos pastes that prompt-ready markdown into the
 `[PERSON SPEAKING TO YOU]` block after any Argos-owned `Directory` lines. Argos
-does not parse or rebuild the Tailwag memory section locally.
+does not parse or rebuild the Tailwag memory section locally. Tailwag uses the
+robot ID to include memories backed by robot-free sources such as Slack and by
+episodes involving this robot, while excluding memories backed only by other
+robots' interactions.
 
 ## Live Episode Robot Attribution
 
@@ -119,9 +122,10 @@ Profiles may expose Tailwag semantic search through the public tool ID
 - `limit`
 
 The LLM does not pass a `person_id`. Argos scopes the search to the current
-resolved turn owner from request context, and the tool returns an error when no
-recognized owner is available. Search itself is read-only from Argos' point of
-view; episode ingestion, extraction, archival, and repair remain Tailwag-owned.
+resolved turn owner from request context and the active manifest robot's stable
+ID, and the tool returns an error when no recognized owner is available. Search
+itself is read-only from Argos' point of view; episode ingestion, extraction,
+archival, and repair remain Tailwag-owned.
 
 ## Adaptive Biometric Updates
 
