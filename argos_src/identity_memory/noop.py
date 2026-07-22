@@ -81,6 +81,12 @@ class NoopIdentityMemoryClient:
     def has_voice_reference(self, person_id: str) -> bool:
         return False
 
+    def biometric_reference_exists(self, *, modality: str, person_id: str) -> bool:
+        return False
+
+    def has_face_reference(self, person_id: str) -> bool:
+        return False
+
     def resolve_turn_owner(self, **kwargs: Any) -> OwnerResolution:
         return OwnerResolution(
             audio_speaker_id=None,

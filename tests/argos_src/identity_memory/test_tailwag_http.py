@@ -22,6 +22,7 @@ class _StrictProviderClient:
                 "status": "accepted",
                 "reason": "matched",
                 "top_score": 0.91,
+                "threshold": 0.6,
             }
         if operation == "memory.biometrics_voice_search":
             return {
@@ -32,6 +33,7 @@ class _StrictProviderClient:
                 "status": "accepted",
                 "reason": "matched",
                 "top_score": 0.87,
+                "threshold": 0.5,
             }
         if operation in {
             "memory.biometrics_face_references",
@@ -45,6 +47,10 @@ class _StrictProviderClient:
                 "person_id": (args or {}).get("person_id", ""),
                 "reference_id": f"{modality}-ref-1",
             }
+        if operation == "memory.biometrics_face_references_exists":
+            return {"has_face_reference": False}
+        if operation == "memory.biometrics_voice_references_exists":
+            return {"has_voice_reference": True}
         if operation in {
             "memory.biometrics_face_observations",
             "memory.biometrics_voice_observations",
@@ -118,6 +124,24 @@ def test_tailwag_search_calls_match_http_provider_contract():
     assert voice_call["site_code"] == "BOS3"
 
 
+def test_tailwag_global_strict_search_omits_site_scope():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+        site_code="BOS3",
+    )
+
+    result = client.search_face(
+        embedding=(0.1, 0.2),
+        global_scope=True,
+        strict_response=True,
+    )
+
+    assert result.recognized is True
+    assert provider.calls[0][1]["site_code"] is None
+
+
 def test_tailwag_biometric_write_calls_match_http_provider_contract():
     provider = _StrictProviderClient()
     client = TailwagHttpIdentityMemoryClient(
@@ -158,6 +182,41 @@ def test_tailwag_biometric_write_calls_match_http_provider_contract():
     ]
 
 
+def test_tailwag_biometric_existence_calls_match_http_provider_contract():
+    provider = _StrictProviderClient()
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=provider,
+        resource_id="memory",
+    )
+
+    assert client.biometric_reference_exists(modality="face", person_id="person-1") is False
+    assert client.biometric_reference_exists(modality="voice", person_id="person-1") is True
+    assert provider.calls == [
+        (
+            "memory.biometrics_face_references_exists",
+            {"resource_id": "memory", "person_id": "person-1"},
+        ),
+        (
+            "memory.biometrics_voice_references_exists",
+            {"resource_id": "memory", "person_id": "person-1"},
+        ),
+    ]
+
+
+def test_tailwag_biometric_existence_check_fails_closed_on_malformed_response():
+    class _MalformedProviderClient:
+        def request(self, **kwargs):
+            return {}
+
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=_MalformedProviderClient(),
+        resource_id="memory",
+    )
+
+    with pytest.raises(RuntimeError, match="invalid face reference-existence response"):
+        client.biometric_reference_exists(modality="face", person_id="person-1")
+
+
 def test_tailwag_optional_profiles_preserve_http_null_results():
     provider = _StrictProviderClient()
     client = TailwagHttpIdentityMemoryClient(
@@ -192,6 +251,8 @@ def test_tailwag_person_profile_normalizes_directory_response_shapes(
                 return {
                     "person_id": "person-1",
                     "display_name": "Alex",
+                    "consent_status": "withdrawn",
+                    "status": "archived",
                     "directory_profile_lines": directory_profile_lines,
                 }
             return super().request(
@@ -210,6 +271,8 @@ def test_tailwag_person_profile_normalizes_directory_response_shapes(
     profile = client.person_profile("person-1")
 
     assert profile is not None
+    assert profile.consent_status == "withdrawn"
+    assert profile.status == "archived"
     assert profile.directory_profile_lines == (
         "Title: Robotics Software Engineer I Co-op",
         "Manager: Brian Waite",

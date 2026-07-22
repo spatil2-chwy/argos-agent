@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Live guided biometric enrollment into Tailwag.
+"""Capture biometric enrollment bundles locally and push them with approval.
 
 Run from the repo root:
 
     source setup_shell.sh
-    poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3
-    poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3 --commit
+    poetry run python -m scripts.labs.biometric_enrollment_lab capture "Jane Doe"
+    poetry run python -m scripts.labs.biometric_enrollment_lab list
+    poetry run python -m scripts.labs.biometric_enrollment_lab push
 
-The script is dry-run by default. Pass --commit to store one face reference and
-one voice reference through Tailwag. The first accepted sample enrolls the
-reference; the remaining accepted samples are offered as controlled enrollment
-updates so Tailwag aggregates toward its target sample count.
+Capture performs no Tailwag requests. It stores accepted raw media and one
+locally aggregated face and voice embedding. The push command verifies identity,
+checks which Tailwag references already exist, and uploads only missing
+modalities after typed operator approval.
 """
 
 from __future__ import annotations
@@ -33,14 +34,25 @@ if str(_REPO_ROOT) not in sys.path:
 
 from argos_src.identity_memory import TailwagHttpIdentityMemoryClient
 from argos_src.speaker_recognition.policy import SAMPLE_RATE, clip_stats, enrollment_rejection_reason
+from scripts.labs.biometric_enrollment_bundle import (
+    BUNDLE_MANIFEST_FILENAME,
+    atomic_write_json,
+    create_bundle,
+    finalize_bundle,
+    normalize_mean_embedding,
+)
+from scripts.labs.biometric_enrollment_commands import (
+    cleanup_local_bundle,
+    list_local_bundles,
+    normalize_cli_argv,
+    push_local_bundle,
+)
 from scripts.labs.enrollment_audio_collection import _capture_microphone_utterance_raw
 from scripts.labs.enrollment_collection_common import (
     DEFAULT_COLLECTION_ROOT,
     create_display_runtime_for_profile,
-    create_identity_memory_client_for_profile,
     json_ready,
     load_profile,
-    resolve_collection_session,
     write_session_manifest,
 )
 from scripts.labs.perception_lab_common import append_jsonl, write_json
@@ -81,26 +93,36 @@ VOICE_SUBMITTING_DETAIL = "Silence."
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect 5 live face and voice samples and optionally commit them to Tailwag."
+        description="Capture biometrics locally, then list, push, or clean completed bundles.",
+        usage="%(prog)s {capture PERSON_NAME|list|push|cleanup} [options]",
+        epilog=(
+            "A legacy name-only capture is still accepted. --commit was removed; "
+            "run capture first, then run push for an approved upload."
+        ),
     )
-    parser.add_argument("person_name", help="Official first and last name for the person.")
+    parser.add_argument(
+        "person_name",
+        nargs="?",
+        default="",
+        help="Official first and last name for a local capture.",
+    )
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--list", action="store_true", help="List local biometric bundles.")
+    action.add_argument("--push", action="store_true", help="Choose and push a ready bundle.")
+    action.add_argument(
+        "--cleanup", action="store_true", help="Choose and delete a completed bundle."
+    )
     parser.add_argument("--site-code", default="", help="Tailwag/Snowflake site code, e.g. BOS3.")
     parser.add_argument("--username", default="", help="Verified directory username, if known.")
-    parser.add_argument("--person-id", default="", help="Override the Tailwag person id.")
     parser.add_argument(
-        "--allow-unresolved",
-        action="store_true",
-        help="Allow a generated person id when directory resolution fails.",
-    )
-    parser.add_argument(
-        "--commit",
-        action="store_true",
-        help="Actually write biometric references to Tailwag. Default is dry-run.",
+        "--person-id",
+        default="",
+        help="Claimed existing Tailwag person id; push verifies its profile and name.",
     )
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Auto-accept operator prompts. Use only for controlled lab runs.",
+        help="Auto-start capture phases. This never approves a Tailwag push.",
     )
     parser.add_argument("--photos", type=int, default=5, help="Accepted photo samples required.")
     parser.add_argument("--voice-clips", type=int, default=5, help="Accepted voice clips required.")
@@ -113,7 +135,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_COLLECTION_ROOT),
         help="Root directory for collected artifacts. Default: data_collection.",
     )
-    parser.add_argument("--session-id", default="")
     parser.add_argument("--input-device", default="")
     parser.add_argument("--input-sample-rate", type=int, default=None)
     parser.add_argument("--input-block-size", type=int, default=None)
@@ -260,6 +281,21 @@ def _show_subtitle(display: Any | None, text: str, *, duration_ms: int = 15000) 
         logger.debug("Display subtitle failed", exc_info=True)
 
 
+def _discard_sample_artifacts(sample: dict[str, Any], *, session_dir: Path) -> None:
+    root = session_dir.resolve()
+    for raw_path in dict(sample.get("artifacts") or {}).values():
+        if not raw_path:
+            continue
+        path = Path(str(raw_path)).expanduser().resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            logger.warning("Refusing to delete sample artifact outside bundle: %s", path)
+            continue
+        if path.is_file():
+            path.unlink()
+
+
 def _voice_sample_title(sample_number: int, total: int) -> str:
     return f"Voice {sample_number}/{total}"
 
@@ -336,6 +372,11 @@ def _identity_from_args(
             payload["site_code"] = site_code
             payload["resolution"] = resolution_payload
             return payload
+        if not args.allow_unresolved:
+            raise RuntimeError(
+                "Directory resolution succeeded, but Tailwag did not return a "
+                "verified canonical profile."
+            )
         metadata = {**candidate, "username": candidate_username, "site_code": site_code}
         return {
             **metadata,
@@ -369,7 +410,7 @@ def _capture_face_sample(
     output_dir: Path,
     sample_id: str,
     person_id: str,
-    allow_cross_match: bool = False,
+    check_remote_match: bool = False,
 ) -> dict[str, Any]:
     from scripts.labs.face_lab_common import (
         describe_enrollment_face_quality,
@@ -435,13 +476,14 @@ def _capture_face_sample(
         payload["message"] = str(quality.get("guidance") or "")
         return payload
 
-    match, diagnostics = service._recognize_face_match_with_diagnostics(face)
-    payload["existing_match"] = diagnostics
-    matched_person_id = str((match or {}).get("person_id") or "").strip()
-    if matched_person_id and matched_person_id != person_id and not allow_cross_match:
-        payload["reason"] = "matched_different_person"
-        payload["message"] = f"Captured face matched {matched_person_id}, not {person_id}."
-        return payload
+    if check_remote_match:
+        match, diagnostics = service._recognize_face_match_with_diagnostics(face)
+        payload["existing_match"] = diagnostics
+        matched_person_id = str((match or {}).get("person_id") or "").strip()
+        if matched_person_id and matched_person_id != person_id:
+            payload["reason"] = "matched_different_person"
+            payload["message"] = f"Captured face matched {matched_person_id}, not {person_id}."
+            return payload
 
     payload["accepted"] = True
     payload["reason"] = "accepted"
@@ -517,6 +559,7 @@ def _collect_face_samples(
         else:
             reason = str(sample.get("reason") or "rejected")
             message = str(sample.get("message") or "")
+            _discard_sample_artifacts(sample, session_dir=session_dir)
             _show(display, "Photo not saved", message or reason)
             print(f"Rejected photo attempt {attempt}: {reason} {message}".strip())
 
@@ -608,7 +651,9 @@ def _capture_voice_sample(
             "agent_16k_wav_path": agent_path,
         },
     }
-    write_json(audio_dir / f"{sample_id}.json", json_ready(metadata))
+    metadata_path = audio_dir / f"{sample_id}.json"
+    metadata["artifacts"]["metadata_path"] = str(metadata_path)
+    write_json(metadata_path, json_ready(metadata))
     if rejection:
         return metadata
     embedding = speaker_service.backend.embed_query_clip(waveform, sample_rate=SAMPLE_RATE)
@@ -678,6 +723,7 @@ def _collect_voice_samples(
             _show(display, f"Saved voice {len(accepted)}/{target}", "Good recording.")
         else:
             reason = str(sample.get("reason") or "rejected")
+            _discard_sample_artifacts(sample, session_dir=session_dir)
             _show(display, "Voice not saved", reason)
             print(f"Rejected voice attempt {attempt}: {reason}")
 
@@ -686,103 +732,64 @@ def _collect_voice_samples(
     return accepted[:target]
 
 
-def _operator_enrollment_evidence(person_id: str) -> dict[str, Any]:
-    return {
-        "owner_id": person_id,
-        "owner_source": "audio_face_agree",
-        "primary_face_person_id": person_id,
-        "audio_speaker_id": person_id,
-        "face_margin": 1.0,
-        "voice_margin": 1.0,
-        "recognized_count": 1,
-        "unknown_count": 0,
-        "enrollment_mode": "operator_controlled_live",
-    }
-
-
-def _commit_modality(
-    *,
-    identity_memory: TailwagHttpIdentityMemoryClient,
-    modality: str,
-    person_id: str,
+def _embedding_consistency_summary(
     embeddings: list[Any],
-    metadata: dict[str, Any],
-) -> dict[str, Any]:
-    if not embeddings:
-        return {"modality": modality, "saved": False, "reason": "no_embeddings"}
-    first_metadata = {
-        **metadata,
-        "enrollment_mode": "operator_controlled_live",
-        "sample_index": 1,
-        "sample_count_requested": len(embeddings),
-    }
-    if modality == "face":
-        first = identity_memory.enroll_face_reference(
-            person_id=person_id,
-            embedding=embeddings[0],
-            metadata=first_metadata,
-            consent_status="consented",
-        )
-    else:
-        first = identity_memory.enroll_voice_reference(
-            person_id=person_id,
-            embedding=embeddings[0],
-            metadata=first_metadata,
-            consent_status="consented",
-        )
-    first_payload = _plain(first)
-    updates: list[dict[str, Any]] = []
-    if not bool(first_payload.get("saved")):
-        return {"modality": modality, "enrollment": first_payload, "updates": updates}
-
-    evidence = _operator_enrollment_evidence(person_id)
-    for index, embedding in enumerate(embeddings[1:], start=2):
-        update_metadata = {
-            **metadata,
-            "enrollment_mode": "operator_controlled_live",
-            "sample_index": index,
-            "sample_count_requested": len(embeddings),
-        }
-        if modality == "face":
-            result = identity_memory.observe_face_embedding(
-                person_id=person_id,
-                embedding=embedding,
-                evidence=evidence,
-                metadata=update_metadata,
-            )
-        else:
-            result = identity_memory.observe_voice_embedding(
-                person_id=person_id,
-                embedding=embedding,
-                evidence=evidence,
-                metadata=update_metadata,
-            )
-        updates.append(_plain(result))
-    return {"modality": modality, "enrollment": first_payload, "updates": updates}
-
-
-def _similarity_summary(service: Any, samples: list[dict[str, Any]]) -> dict[str, Any]:
-    embeddings = [sample.get("embedding") for sample in samples if sample.get("embedding") is not None]
-    if len(embeddings) < 2:
-        return {"count": len(embeddings), "pairwise_to_first": []}
-    values = [
-        round(float(service._embedding_similarity(embeddings[0], embedding)), 4)
-        for embedding in embeddings
+    *,
+    threshold: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    aggregate = normalize_mean_embedding(embeddings)
+    similarities: list[float] = []
+    normalized: list[np.ndarray] = []
+    for embedding in embeddings:
+        vector = np.asarray(embedding, dtype=np.float32)
+        norm = float(np.linalg.norm(vector))
+        if norm <= 0.0:
+            raise RuntimeError("Biometric sample has a zero-norm embedding.")
+        normalized.append(vector / norm)
+        similarities.append(round(float(np.dot(normalized[-1], aggregate)), 4))
+    pairwise_values = [
+        float(np.dot(normalized[left], normalized[right]))
+        for left in range(len(normalized))
+        for right in range(left + 1, len(normalized))
     ]
-    return {
+    minimum = min(pairwise_values, default=1.0)
+    pairwise_similarities = [round(value, 4) for value in pairwise_values]
+    if minimum < float(threshold):
+        raise RuntimeError(
+            f"Biometric samples were inconsistent: minimum pairwise similarity {minimum:.4f} "
+            f"is below {float(threshold):.4f}."
+        )
+    return aggregate, {
         "count": len(embeddings),
-        "pairwise_to_first": values,
-        "min_to_first": min(values),
+        "similarities_to_aggregate": similarities,
+        "min_similarity": round(minimum, 4),
+        "pairwise_similarities": pairwise_similarities,
+        "threshold": float(threshold),
     }
 
 
 def main() -> int:
     parser = _build_parser()
-    args = parser.parse_args()
-    from scripts.labs.face_lab_common import build_enrollment_policy, build_face_service
-
+    raw_argv = sys.argv[1:]
+    if "--commit" in raw_argv:
+        parser.error("--commit was removed; capture locally, then run the push command.")
+    args = parser.parse_args(normalize_cli_argv(raw_argv))
     configure_logging(bool(args.verbose))
-    identity_memory: TailwagHttpIdentityMemoryClient | None = None
+    if args.list:
+        return list_local_bundles(args)
+    if args.push:
+        return push_local_bundle(args)
+    if args.cleanup:
+        return cleanup_local_bundle(args)
+    if not str(args.person_name or "").strip():
+        parser.error("person_name is required for capture")
+
+    from scripts.labs.face_lab_common import build_enrollment_policy, build_face_service
+    if int(args.photos) < 5 or int(args.voice_clips) < 5:
+        parser.error(
+            "--photos and --voice-clips must each be at least 5 for identity consistency."
+        )
+
     display = None
     face_service = None
     face_config: dict[str, Any] = {}
@@ -793,32 +800,24 @@ def main() -> int:
         if not site_code:
             parser.error("--site-code is required when the profile does not set identity_memory.site_code")
 
-        session = resolve_collection_session(
-            output_root=args.output_root,
+        bundle = create_bundle(
+            args.output_root,
             person_name=args.person_name,
             person_id=args.person_id,
-            session_id=args.session_id,
+            metadata={
+                "username": str(args.username or "").strip().lower(),
+                "site_code": site_code,
+                "profile": profile.name,
+                "profile_arg": args.profile,
+            },
         )
-        session_dir = Path(session["session_dir"])
-        session_dir.mkdir(parents=True, exist_ok=True)
-
-        identity_memory = create_identity_memory_client_for_profile(
-            profile,
-            site_code=site_code,
-        )
-        person = _identity_from_args(args, identity_memory=identity_memory, site_code=site_code)
-        person_id = str(person.get("person_id") or "").strip()
-        if not person_id:
-            raise RuntimeError("Resolved person has no person_id.")
+        session_dir = bundle.path
+        person_id = str(args.person_id or f"local_{bundle.bundle_id}")
         metadata = {
-            **dict(person),
             "site_code": site_code,
-            "display_name": str(
-                person.get("display_name") or person.get("official_name") or args.person_name
-            ),
-            "name": str(
-                person.get("display_name") or person.get("official_name") or args.person_name
-            ),
+            "display_name": str(args.person_name).strip(),
+            "name": str(args.person_name).strip(),
+            "username": str(args.username or "").strip().lower(),
         }
 
         display = create_display_runtime_for_profile(
@@ -828,11 +827,9 @@ def main() -> int:
         )
         enrollment_policy = build_enrollment_policy(args)
         face_service, face_config = build_face_service(args, enrollment_policy=enrollment_policy)
-        face_service.identity_memory_client = identity_memory
         setattr(args, "session_dir", str(session_dir / "_speaker_lab_session"))
         speaker_config = build_lab_config(args)
         speaker_service = build_speaker_service(speaker_config)
-        speaker_service.identity_memory_client = identity_memory
         vad, vad_impl = build_vad(speaker_config.vad_threshold)
         depth_settings = face_config["depth_settings"]
         timeout_sec = (
@@ -841,14 +838,23 @@ def main() -> int:
             else float(args.capture_timeout_sec or 1.5)
         )
 
+        bundle.manifest["metadata"]["embedding_models"] = {
+            "face": "facenet_vggface2",
+            "voice": str(speaker_service.policy.backend),
+        }
+        atomic_write_json(session_dir / BUNDLE_MANIFEST_FILENAME, bundle.manifest)
         write_session_manifest(
             session_dir=session_dir,
             filename="biometric_enrollment_manifest.json",
             payload={
-                "collection_kind": "biometric_enrollment",
-                "dry_run": not bool(args.commit),
-                "person": {key: value for key, value in metadata.items() if key != "resolution"},
-                "identity_resolution": metadata.get("resolution"),
+                "collection_kind": "biometric_enrollment_bundle",
+                "local_only": True,
+                "bundle_id": bundle.bundle_id,
+                "claimed_person": {
+                    "name": str(args.person_name).strip(),
+                    "username": str(args.username or "").strip().lower(),
+                    "person_id": str(args.person_id or "").strip(),
+                },
                 "profile": profile.name,
                 "profile_arg": args.profile,
                 "site_code": site_code,
@@ -885,63 +891,35 @@ def main() -> int:
             display=display,
             session_dir=session_dir,
         )
+        face_embeddings = [sample["embedding"] for sample in face_samples]
+        voice_embeddings = [sample["embedding"] for sample in voice_samples]
+        _, face_consistency = _embedding_consistency_summary(
+            face_embeddings,
+            threshold=float(enrollment_policy.min_embedding_similarity),
+        )
+        _, voice_consistency = _embedding_consistency_summary(
+            voice_embeddings,
+            threshold=float(speaker_service.policy.query_match_threshold),
+        )
         summary = {
-            "person_id": person_id,
+            "bundle_id": bundle.bundle_id,
             "display_name": metadata["display_name"],
-            "session_dir": str(session_dir),
+            "bundle_dir": str(session_dir),
             "face_samples": len(face_samples),
             "voice_samples": len(voice_samples),
-            "face_similarity": _similarity_summary(face_service, face_samples),
-            "dry_run": not bool(args.commit),
+            "face_consistency": face_consistency,
+            "voice_consistency": voice_consistency,
+            "local_only": True,
         }
         write_json(session_dir / "biometric_enrollment_summary.json", json_ready(summary))
+        finalized = finalize_bundle(
+            bundle,
+            face_embeddings=face_embeddings,
+            voice_embeddings=voice_embeddings,
+        )
         print(json.dumps(json_ready(summary), indent=2, sort_keys=True))
-
-        if not args.commit:
-            _show(display, "Dry run complete", "No Tailwag writes were made.")
-            print("Dry run complete. Re-run with --commit to write references to Tailwag.")
-            return 0
-        save_message = (
-            "The face and voice samples are complete.\n\n"
-            "Accept to save one face reference and one voice reference to Tailwag."
-        )
-        if not _review_prompt(
-            display,
-            title="Save enrollment",
-            message=save_message,
-            accept_label="Save",
-            reject_label="Do not save",
-            assume_yes=bool(args.yes),
-        ):
-            _show(display, "Commit skipped", "No Tailwag writes were made.")
-            return 0
-
-        face_commit = _commit_modality(
-            identity_memory=identity_memory,
-            modality="face",
-            person_id=person_id,
-            embeddings=[sample["embedding"] for sample in face_samples],
-            metadata=metadata,
-        )
-        voice_commit = _commit_modality(
-            identity_memory=identity_memory,
-            modality="voice",
-            person_id=person_id,
-            embeddings=[sample["embedding"] for sample in voice_samples],
-            metadata=metadata,
-        )
-        commit_payload = {
-            "person_id": person_id,
-            "face": face_commit,
-            "voice": voice_commit,
-            "note": (
-                "This lab creates new active biometric references. Archive old bad references "
-                "with Tailwag tooling if duplicate same-person references hurt margins."
-            ),
-        }
-        write_json(session_dir / "biometric_enrollment_commit.json", json_ready(commit_payload))
-        print(json.dumps(json_ready(commit_payload), indent=2, sort_keys=True))
-        _show(display, "Enrollment saved", f"{metadata['display_name']} | {person_id}")
+        _show(display, "Capture saved locally", metadata["display_name"])
+        print(f"Capture ready for approved push: {finalized.path}")
         return 0
     except KeyboardInterrupt:
         print("Stopped.")
@@ -958,8 +936,6 @@ def main() -> int:
                 robot_client.shutdown()
             if display is not None:
                 display.shutdown()
-            if identity_memory is not None:
-                identity_memory.close()
 
 
 if __name__ == "__main__":

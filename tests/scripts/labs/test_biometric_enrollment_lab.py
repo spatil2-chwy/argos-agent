@@ -3,59 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from scripts.labs import biometric_enrollment_lab as lab
-
-
-class FakeIdentityMemory:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict]] = []
-
-    def enroll_face_reference(self, **kwargs):
-        self.calls.append(("enroll_face", kwargs))
-        return {
-            "saved": True,
-            "status": "saved",
-            "reason": "saved",
-            "person_id": kwargs["person_id"],
-            "reference_id": "face-ref",
-        }
-
-    def enroll_voice_reference(self, **kwargs):
-        self.calls.append(("enroll_voice", kwargs))
-        return {
-            "saved": True,
-            "status": "saved",
-            "reason": "saved",
-            "person_id": kwargs["person_id"],
-            "reference_id": "voice-ref",
-        }
-
-    def observe_face_embedding(self, **kwargs):
-        self.calls.append(("observe_face", kwargs))
-        return {
-            "accepted": True,
-            "status": "updated",
-            "reason": "updated",
-            "person_id": kwargs["person_id"],
-            "reference_id": "face-ref",
-            "modality": "face",
-            "sample_count": len([call for call in self.calls if call[0] == "observe_face"]) + 1,
-            "target_sample_count": 5,
-        }
-
-    def observe_voice_embedding(self, **kwargs):
-        self.calls.append(("observe_voice", kwargs))
-        return {
-            "accepted": True,
-            "status": "updated",
-            "reason": "updated",
-            "person_id": kwargs["person_id"],
-            "reference_id": "voice-ref",
-            "modality": "voice",
-            "sample_count": len([call for call in self.calls if call[0] == "observe_voice"]) + 1,
-            "target_sample_count": 5,
-        }
 
 
 class FakeDisplay:
@@ -171,59 +121,153 @@ def test_voice_capture_displays_prompt_as_message_and_recording_as_subtitle(
     assert all(lab.VOICE_PROMPT_GUIDANCE not in text for text, _ in display.subtitles)
 
 
-def test_commit_modality_enrolls_once_then_observes_remaining_face_samples() -> None:
-    fake = FakeIdentityMemory()
-    embeddings = [np.asarray([1.0, float(index)], dtype=np.float32) for index in range(5)]
-
-    result = lab._commit_modality(
-        identity_memory=fake,
-        modality="face",
-        person_id="person_jane",
-        embeddings=embeddings,
-        metadata={"display_name": "Jane Doe"},
-    )
-
-    assert [name for name, _ in fake.calls] == [
-        "enroll_face",
-        "observe_face",
-        "observe_face",
-        "observe_face",
-        "observe_face",
-    ]
-    assert result["enrollment"]["saved"] is True
-    assert len(result["updates"]) == 4
-    assert fake.calls[0][1]["consent_status"] == "consented"
-    assert fake.calls[1][1]["evidence"] == lab._operator_enrollment_evidence("person_jane")
-    assert fake.calls[1][1]["metadata"]["enrollment_mode"] == "operator_controlled_live"
-
-
-def test_commit_modality_enrolls_once_then_observes_remaining_voice_samples() -> None:
-    fake = FakeIdentityMemory()
-    embeddings = [np.asarray([1.0, float(index)], dtype=np.float32) for index in range(5)]
-
-    result = lab._commit_modality(
-        identity_memory=fake,
-        modality="voice",
-        person_id="person_jane",
-        embeddings=embeddings,
-        metadata={"display_name": "Jane Doe"},
-    )
-
-    assert [name for name, _ in fake.calls] == [
-        "enroll_voice",
-        "observe_voice",
-        "observe_voice",
-        "observe_voice",
-        "observe_voice",
-    ]
-    assert result["enrollment"]["saved"] is True
-    assert len(result["updates"]) == 4
-    assert fake.calls[0][1]["consent_status"] == "consented"
-    assert fake.calls[1][1]["evidence"] == lab._operator_enrollment_evidence("person_jane")
-    assert fake.calls[1][1]["evidence"]["audio_speaker_id"] == "person_jane"
-
-
 def test_slug_person_id_prefers_username_then_email_then_name() -> None:
     assert lab._slug_person_id("Jane Doe", {"username": "jdoe"}) == "person_jdoe"
     assert lab._slug_person_id("Jane Doe", {"employee_email": "jane@example.com"}) == "person_jane"
     assert lab._slug_person_id("Jane A. Doe", {}) == "person_jane_a_doe"
+
+def test_consistency_rejects_pairwise_different_identities() -> None:
+    with pytest.raises(RuntimeError, match="minimum pairwise similarity"):
+        lab._embedding_consistency_summary(
+            [
+                np.asarray([1.0, 0.0], dtype=np.float32),
+                np.asarray([0.0, 1.0], dtype=np.float32),
+            ],
+            threshold=0.6,
+        )
+
+
+def test_identity_resolution_requires_verified_canonical_profile() -> None:
+    class UnverifiedIdentity:
+        def resolve_identity(self, **kwargs):
+            return {
+                "success": True,
+                "data": {
+                    "candidate": {
+                        "username": "jdoe",
+                        "official_name": "Jane Doe",
+                    }
+                },
+            }
+
+        def get_verified_profile(self, **kwargs):
+            return None
+
+    args = SimpleNamespace(
+        person_name="Jane Doe",
+        username="",
+        person_id="",
+        allow_unresolved=False,
+    )
+    with pytest.raises(RuntimeError, match="verified canonical profile"):
+        lab._identity_from_args(
+            args,
+            identity_memory=UnverifiedIdentity(),
+            site_code="BOS3",
+        )
+
+
+def test_capture_rejects_too_few_samples_and_removed_commit(monkeypatch, capsys) -> None:
+    import sys
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "biometric_enrollment_lab",
+            "capture",
+            "Jane Doe",
+            "--photos",
+            "1",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        lab.main()
+    assert "must each be at least 5" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["biometric_enrollment_lab", "Jane Doe", "--commit"],
+    )
+    with pytest.raises(SystemExit):
+        lab.main()
+    assert "--commit was removed" in capsys.readouterr().err
+
+
+def test_capture_main_is_fully_local(monkeypatch, tmp_path) -> None:
+    from dataclasses import dataclass
+    import sys
+
+    import scripts.labs.face_lab_common as face_common
+    from scripts.labs import biometric_enrollment_commands as commands
+
+    @dataclass
+    class FakePolicy:
+        min_embedding_similarity: float = 0.6
+
+    class FakeFaceService:
+        def shutdown(self):
+            return None
+
+    class FakeSpeakerService:
+        policy = SimpleNamespace(backend="ecapa", query_match_threshold=0.5)
+
+        def shutdown(self):
+            return None
+
+    monkeypatch.setattr(
+        lab,
+        "load_profile",
+        lambda _selection: SimpleNamespace(
+            name="test",
+            identity_memory=SimpleNamespace(site_code="BOS3"),
+        ),
+    )
+    monkeypatch.setattr(lab, "create_display_runtime_for_profile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(face_common, "build_enrollment_policy", lambda _args: FakePolicy())
+    monkeypatch.setattr(
+        face_common,
+        "build_face_service",
+        lambda _args, *, enrollment_policy: (
+            FakeFaceService(),
+            {"depth_settings": None, "camera_resource_id": "camera", "robot_client": None},
+        ),
+    )
+    monkeypatch.setattr(lab, "build_lab_config", lambda _args: SimpleNamespace(vad_threshold=0.5))
+    monkeypatch.setattr(lab, "build_speaker_service", lambda _config: FakeSpeakerService())
+    monkeypatch.setattr(lab, "build_vad", lambda _threshold: (object(), "fake"))
+    monkeypatch.setattr(lab, "session_summary_payload", lambda *args, **kwargs: {})
+    monkeypatch.setattr(lab, "write_session_manifest", lambda **kwargs: None)
+    samples = [
+        {"embedding": np.asarray([1.0, 0.0], dtype=np.float32)},
+        {"embedding": np.asarray([0.9, 0.1], dtype=np.float32)},
+        {"embedding": np.asarray([1.0, 0.05], dtype=np.float32)},
+        {"embedding": np.asarray([0.95, 0.05], dtype=np.float32)},
+        {"embedding": np.asarray([1.0, 0.1], dtype=np.float32)},
+    ]
+    monkeypatch.setattr(lab, "_collect_face_samples", lambda **kwargs: list(samples))
+    monkeypatch.setattr(lab, "_collect_voice_samples", lambda **kwargs: list(samples))
+    monkeypatch.setattr(
+        commands,
+        "create_identity_memory_client_for_profile",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("capture must not construct a Tailwag client")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "biometric_enrollment_lab",
+            "capture",
+            "Jane Doe",
+            "--output-root",
+            str(tmp_path),
+            "--no-display",
+        ],
+    )
+
+    assert lab.main() == 0
+    bundles = lab.create_bundle.__module__
+    assert bundles == "scripts.labs.biometric_enrollment_bundle"

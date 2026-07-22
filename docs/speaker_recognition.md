@@ -248,6 +248,19 @@ When audio confidence is weak, exactly one usable recognized face in the frozen
 speech-start scene is what allows face ownership instead of dropping to
 `unknown`.
 
+## Offline Lab Enrollment
+
+The local-first biometric lab captures at least five accepted voice clips,
+computes their ECAPA embeddings locally, validates minimum pairwise similarity,
+and stores one normalized mean vector in a checksummed bundle. Capture does not
+construct a Tailwag client.
+
+During an approved push, Argos first asks whether the canonical person already
+has an active voice reference. If so, voice is skipped. Otherwise the single
+aggregate vector is sent through the normal voice enrollment endpoint. The lab
+does not submit its additional clips as adaptive observations and does not
+fabricate live face/voice agreement evidence.
+
 ## Managing Saved Voice References
 
 Inspect and manage durable voice references with Tailwag tooling from

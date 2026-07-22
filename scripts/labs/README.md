@@ -69,24 +69,57 @@ The audio script uses the selected profile's microphone/VAD settings, shows
 display when configured, waits for Enter before each clip, and saves both the
 input-rate WAV plus an agent-rate 16 kHz WAV for later experiments.
 
-Live Tailwag biometric enrollment:
+Local-first biometric enrollment:
 
 ```bash
-poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3
-poetry run python -m scripts.labs.biometric_enrollment_lab "Jane Doe" --site-code BOS3 --commit
+# Capture only: this workflow makes no Tailwag or identity-memory request.
+poetry run python -m scripts.labs.biometric_enrollment_lab capture "Jane Doe"
+
+# Review local capture state, upload state, timestamp, and bundle UUID.
+poetry run python -m scripts.labs.biometric_enrollment_lab list
+
+# Select one person, verify their Tailwag identity, and approve missing references.
+poetry run python -m scripts.labs.biometric_enrollment_lab push
+
+# Delete all local media, embeddings, and bundle state after both modalities complete.
+poetry run python -m scripts.labs.biometric_enrollment_lab cleanup
 ```
 
-This guided lab uses the interaction display for phase accept/reject prompts,
-instructions, countdowns, and recording state. It is dry-run by default. With
-`--commit`, the first accepted face and voice embedding creates a Tailwag
-reference, and the next accepted samples update that same reference toward
-Tailwag's target sample count. The selected profile must provide a
-`resources.identity_memory` manifest resource with `memory.identity`, and the
-Tailwag HTTP provider must be reachable through the selected manifest route with
-any required auth environment such as
-`TAILWAG_API_BEARER_TOKEN`. `--provider-transport` can override capture/display
-providers for lab smoke tests, but identity memory always uses the selected
-manifest's Tailwag provider route.
+The capture command uses the configured camera and interaction-display transports
+for phase prompts, countdowns, and recording. It makes no Tailwag/identity-memory
+calls and sends no captured media or embeddings to Tailwag or AWS. At least five
+accepted samples are quality-checked pairwise and combined locally into one
+normalized face vector and one normalized voice vector. Raw accepted media,
+aggregate vectors, provenance, and checksums are stored in a UUID-named bundle
+under `data_collection/.biometric_enrollment_bundles/`. Rejected sample
+artifacts are discarded. Camera/display provider transports may still use their
+configured local or network endpoints.
+
+`push` shows a local person list, resolves the selected person to a canonical,
+active Tailwag identity, checks whether active face and voice references already
+exist, and sends one aggregate vector only for each missing modality. Before any
+embedding is sent, the operator must confirm that the subject consented and type
+the verified canonical name; that action is recorded and the enrollment is sent
+as `consented`. Existing references are left unchanged. Push requires the
+selected profile's `resources.identity_memory` route, network connectivity,
+and `TAILWAG_API_BEARER_TOKEN`; `--provider-transport fake` is a capture/display
+setting and is not a push dry-run. Deploy the matching Tailwag face-existence
+endpoint before using push; an unavailable or malformed existence response fails
+closed without search or enrollment.
+
+Push journals each modality separately. All missing modalities are globally
+conflict-searched across Tailwag sites before the first write, but one
+enrollment may still succeed before a later request fails. A retry remains bound to
+the same canonical person and rechecks existence for unfinished modalities.
+
+`cleanup` only offers intact bundles whose face and voice states are uploaded
+or skipped. Confirmation deletes the complete local bundle with no retained
+local receipt. Push does not delete local data. Bundles contain unencrypted raw
+biometrics, so host access and retention are operator responsibilities.
+Interrupted/incomplete or corrupt bundles are intentionally not deleted by this
+command; `list` flags invalid paths for administrator review and exact-path
+removal. The legacy name-only capture remains accepted; `--commit` reports
+guidance to use `push`.
 
 ## Structured perception labs + eval
 

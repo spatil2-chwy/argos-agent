@@ -20,6 +20,8 @@ class PersonProfile:
     person_id: str
     display_name: str
     email: str = ""
+    consent_status: str = ""
+    status: str = ""
     interaction_count: int = 0
     last_seen: str | None = None
     directory_profile_lines: tuple[str, ...] = ()

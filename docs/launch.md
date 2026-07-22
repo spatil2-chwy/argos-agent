@@ -222,6 +222,28 @@ memory are owned by Tailwag. Use approved Tailwag-side administrative tooling
 when you need to inspect or delete a person completely; no Tailwag checkout or
 process is needed on the Argos host.
 
+For controlled lab collection, use the local-first biometric commands instead of
+the live conversational enrollment tool:
+
+```bash
+python3 -m scripts.labs.biometric_enrollment_lab capture "Jane Doe"
+python3 -m scripts.labs.biometric_enrollment_lab list
+python3 -m scripts.labs.biometric_enrollment_lab push
+python3 -m scripts.labs.biometric_enrollment_lab cleanup
+```
+
+`capture` makes no Tailwag/identity-memory request, although configured camera
+and display providers may use their own endpoints. `push` requires the matching
+Tailwag face-existence endpoint to be deployed first. It verifies an active
+person, checks existing face and voice references, and fails closed if either
+check is unavailable or malformed. Before embeddings are sent, the operator
+must confirm subject consent and type the canonical name. Push uploads only
+missing aggregate vectors, journals each modality independently, and never
+deletes local files. `--provider-transport fake` is not a push dry-run.
+`cleanup` permanently removes a selected intact, upload-complete local bundle;
+unencrypted incomplete or corrupt captures require administrator review.
+
+
 ## Camera Preview
 
 Use the external robot provider's camera preview/debug tool. Argos itself does

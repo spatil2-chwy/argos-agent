@@ -124,6 +124,8 @@ class TailwagHttpIdentityMemoryClient:
             person_id=str(payload.get("person_id") or person_id),
             display_name=str(payload.get("display_name") or payload.get("name") or person_id),
             email=str(payload.get("email") or ""),
+            consent_status=str(payload.get("consent_status") or ""),
+            status=str(payload.get("status") or ""),
             interaction_count=_safe_int(payload.get("interaction_count")),
             last_seen=str(payload.get("last_seen")) if payload.get("last_seen") is not None else None,
             directory_profile_lines=normalize_directory_profile_lines(
@@ -166,16 +168,25 @@ class TailwagHttpIdentityMemoryClient:
         del site_code, current_person_id
         return ()
 
-    def search_face(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
+    def search_face(
+        self,
+        *,
+        embedding: Any,
+        limit: int = 2,
+        global_scope: bool = False,
+        strict_response: bool = False,
+    ) -> BiometricSearchResult:
         try:
             result = self._request(
                 "memory.biometrics_face_search",
                 {
                     "embedding": _embedding_list(embedding),
                     "limit": limit,
-                    "site_code": self.site_code or None,
+                    "site_code": None if global_scope else (self.site_code or None),
                 },
             )
+            if strict_response:
+                _validate_biometric_search_payload(result)
             return _search_result(result)
         except Exception:
             logger.exception("Tailwag face search failed")
@@ -229,16 +240,25 @@ class TailwagHttpIdentityMemoryClient:
                 modality="face",
             )
 
-    def search_voice(self, *, embedding: Any, limit: int = 2) -> BiometricSearchResult:
+    def search_voice(
+        self,
+        *,
+        embedding: Any,
+        limit: int = 2,
+        global_scope: bool = False,
+        strict_response: bool = False,
+    ) -> BiometricSearchResult:
         try:
             result = self._request(
                 "memory.biometrics_voice_search",
                 {
                     "embedding": _embedding_list(embedding),
                     "limit": limit,
-                    "site_code": self.site_code or None,
+                    "site_code": None if global_scope else (self.site_code or None),
                 },
             )
+            if strict_response:
+                _validate_biometric_search_payload(result)
             return _search_result(result)
         except Exception:
             logger.exception("Tailwag voice search failed")
@@ -292,15 +312,46 @@ class TailwagHttpIdentityMemoryClient:
                 modality="voice",
             )
 
+    def biometric_reference_exists(self, *, modality: str, person_id: str) -> bool:
+        rendered_modality = str(modality or "").strip().casefold()
+        if rendered_modality not in {"face", "voice"}:
+            raise ValueError("modality must be 'face' or 'voice'")
+        operation = (
+            "memory.biometrics_face_references_exists"
+            if rendered_modality == "face"
+            else "memory.biometrics_voice_references_exists"
+        )
+        response_key = (
+            "has_face_reference" if rendered_modality == "face" else "has_voice_reference"
+        )
+        result = self._request(
+            operation,
+            {"person_id": str(person_id or "").strip()},
+        )
+        if response_key not in result or not isinstance(result[response_key], bool):
+            raise RuntimeError(
+                f"Tailwag returned an invalid {rendered_modality} reference-existence response"
+            )
+        return result[response_key]
+
     def has_voice_reference(self, person_id: str) -> bool:
         try:
-            result = self._request(
-                "memory.biometrics_voice_references_exists",
-                {"person_id": str(person_id or "").strip()},
+            return self.biometric_reference_exists(
+                modality="voice",
+                person_id=person_id,
             )
-            return bool(result.get("has_voice_reference"))
         except Exception:
             logger.exception("Tailwag voice reference check failed person_id=%s", person_id)
+            return False
+
+    def has_face_reference(self, person_id: str) -> bool:
+        try:
+            return self.biometric_reference_exists(
+                modality="face",
+                person_id=person_id,
+            )
+        except Exception:
+            logger.exception("Tailwag face reference check failed person_id=%s", person_id)
             return False
 
     def resolve_turn_owner(
@@ -539,6 +590,34 @@ class TailwagHttpIdentityMemoryClient:
 def _embedding_list(value: Any) -> list[float]:
     vector = np.asarray(value, dtype=np.float32).reshape(-1)
     return [float(item) for item in vector.tolist()]
+
+
+def _validate_biometric_search_payload(value: Any) -> None:
+    payload = _plain(value)
+    candidates = payload.get("candidates") if isinstance(payload, dict) else None
+    recognized = payload.get("recognized") if isinstance(payload, dict) else None
+    threshold = payload.get("threshold") if isinstance(payload, dict) else None
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    if (
+        not isinstance(recognized, bool)
+        or not isinstance(candidates, (list, tuple))
+        or isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not isinstance(reason, str)
+        or not reason.strip()
+    ):
+        raise ValueError("Malformed Tailwag biometric search response")
+    if recognized and not candidates:
+        raise ValueError("Recognized Tailwag biometric search response has no candidates")
+    for candidate in candidates:
+        item = _plain(candidate)
+        if (
+            not isinstance(item, dict)
+            or not str(item.get("person_id") or "").strip()
+            or isinstance(item.get("score"), bool)
+            or not isinstance(item.get("score"), (int, float))
+        ):
+            raise ValueError("Malformed Tailwag biometric search candidate")
 
 
 def _search_result(value: Any) -> BiometricSearchResult:

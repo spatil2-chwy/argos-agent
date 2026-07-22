@@ -91,6 +91,44 @@ resolved turn owner from request context, and the tool returns an error when no
 recognized owner is available. Search itself is read-only from Argos' point of
 view; episode ingestion, extraction, archival, and repair remain Tailwag-owned.
 
+## Local Biometric Capture Bundles
+
+The operator lab in `scripts/labs/biometric_enrollment_lab.py` is a narrow
+exception to the normal no-local-biometric-store rule: it stages explicitly
+captured enrollment evidence under
+`data_collection/.biometric_enrollment_bundles/<bundle_uuid>/` until a
+separate cleanup command deletes it. Push does not delete the bundle. These
+bundles are not read by the realtime runtime, identity resolution, prompt
+construction, or memory retrieval.
+
+Capture makes no Tailwag/identity-memory request. It stores accepted raw
+photos/WAVs, checksums, model provenance, accepted sample counts, and one
+normalized aggregate vector per modality. Configured camera and display
+provider transports can still use their configured endpoints. The bundle files
+are unencrypted; host access and retention are operator responsibilities.
+Interrupted/incomplete, corrupt, or tampered bundles are retained for
+administrator review and are not eligible for normal cleanup.
+
+Push requires a verified canonical directory identity; when a Person node
+already exists, it must explicitly be active. The bundle binds all retries to
+that identity and calls
+`memory.biometrics_face_references_exists` and
+`memory.biometrics_voice_references_exists`, and uploads only missing
+references. Before any embedding leaves the bundle, the operator must verify
+that the subject consented and type the canonical name; enrollment is then sent
+as `consented`. Existing references are never updated, and this workflow does
+not call adaptive observation operations. Deploy the matching Tailwag
+face-existence endpoint before enabling push; unavailable or malformed
+existence responses fail closed.
+
+All missing modalities are conflict-searched globally across sites before the
+first enrollment.
+Enrollment and local journaling remain per-modality, so one modality can be
+durable if a later enrollment fails; retry checks only unfinished modalities.
+The existence check and enrollment request are also separate client operations.
+A concurrent writer can therefore create a reference between them; this small
+race is an explicit operator-lab tradeoff.
+
 ## Adaptive Biometric Updates
 
 Initial face and voice enrollment still work the same way: Argos produces one

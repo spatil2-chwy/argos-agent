@@ -579,6 +579,20 @@ poetry run pytest \
   tests/argos_src/agent/test_agent_runtime.py
 ```
 
+## Offline Lab Enrollment
+
+The local-first biometric lab is separate from the conversational
+`enroll_visible_person` tool. It captures at least five quality-passing face
+embeddings without a Tailwag client, checks minimum pairwise similarity, and
+stores one normalized aggregate vector with accepted raw media and checksums.
+
+At approved push time, Argos resolves the canonical Tailwag person, checks for
+an active face reference, and skips face enrollment when one already exists. A
+missing face reference is conflict-searched globally across Tailwag sites after
+approval,
+then enrolled with the one aggregate vector. No lab sample is offered through
+the adaptive face-observation path.
+
 ## Useful Commands
 
 Run standalone registration diagnostics without saving:
