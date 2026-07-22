@@ -269,6 +269,9 @@ class AudioRuntime:
             return
         if not self._session_ready.is_set():
             return
+        with self._recording_lock:
+            if getattr(self, "_audio_turn_pending_registration", False):
+                return
 
         raw_chunk = indata.copy().tobytes()
         try:
@@ -303,6 +306,8 @@ class AudioRuntime:
             return
 
         with self._recording_lock:
+            if getattr(self, "_audio_turn_pending_registration", False):
+                return
             if not self._recording_active:
                 is_attention_present = getattr(
                     self._face_gate,
@@ -491,7 +496,9 @@ class AudioRuntime:
 
     def _finalize_recording_locked(self, *, now_s: float) -> None:
         self._recording_active = False
+        self._audio_turn_pending_registration = True
         self._set_capture_state(CaptureState.FINALIZING, trigger="speech_end")
+        req_id = f"rt-{uuid4().hex[:12]}"
         self._recording_started_at = 0.0
         primary_face_person_id = self._current_primary_face_person_id
         visible_face_person_ids = self._current_visible_face_person_ids
@@ -514,24 +521,38 @@ class AudioRuntime:
         speech_end_unix_s = now_s
         self._latency.emit(
             event="speech_end",
+            req_id=req_id,
             speech_end_unix_s=speech_end_unix_s,
             capture_vad_positive_blocks=capture_vad_positive_blocks,
             **self._exchange_log_fields(),
         )
-        threading.Thread(
-            target=self._commit_audio_turn,
-            args=(
-                primary_face_person_id,
-                visible_face_person_ids,
-                face_evidence_fields,
-                audio_pcm16,
-                capture_vad_positive_blocks,
-                speech_end_perf_s,
-                speech_end_unix_s,
-                raw_face_snapshot,
-            ),
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._commit_audio_turn,
+                args=(
+                    primary_face_person_id,
+                    visible_face_person_ids,
+                    face_evidence_fields,
+                    audio_pcm16,
+                    capture_vad_positive_blocks,
+                    speech_end_perf_s,
+                    speech_end_unix_s,
+                    raw_face_snapshot,
+                    req_id,
+                ),
+                daemon=True,
+            ).start()
+        except Exception:
+            self._audio_turn_pending_registration = False
+            self._set_capture_state(
+                CaptureState.ADMISSION_CLOSED,
+                trigger="audio_commit_worker_start_failed",
+                req_id=req_id,
+            )
+            self.logger.exception(
+                "Failed to start audio turn commit worker req_id=%s",
+                req_id,
+            )
 
     def _commit_audio_turn(
         self,
@@ -543,7 +564,51 @@ class AudioRuntime:
         speech_end_perf_s: float,
         speech_end_unix_s: float,
         raw_face_snapshot: RawFaceSnapshot | None = None,
+        req_id: str = "",
     ) -> None:
+        req_id = str(req_id or "").strip() or f"rt-{uuid4().hex[:12]}"
+        turn_registered = False
+        try:
+            # Claim engagement before any potentially slow commit, speaker, or
+            # Tailwag work. The pending-registration latch covers the short
+            # thread-scheduling handoff from the sounddevice callback.
+            self.engagement.on_human_input(req_id)
+            turn_registered = self._commit_audio_turn_impl(
+                primary_face_person_id,
+                visible_face_person_ids,
+                face_evidence_fields,
+                audio_pcm16,
+                capture_vad_positive_blocks,
+                speech_end_perf_s,
+                speech_end_unix_s,
+                raw_face_snapshot,
+                req_id,
+            )
+        except Exception:
+            self.logger.exception("Audio turn commit pipeline failed req_id=%s", req_id)
+        finally:
+            with self._recording_lock:
+                self._audio_turn_pending_registration = False
+        if not turn_registered:
+            self._set_capture_state(
+                CaptureState.ADMISSION_CLOSED,
+                trigger="audio_turn_registration_failed",
+                req_id=req_id,
+            )
+            self.engagement.on_agent_done(has_reply=False, req_id=req_id)
+
+    def _commit_audio_turn_impl(
+        self,
+        primary_face_person_id: Optional[str],
+        visible_face_person_ids: tuple[str, ...],
+        face_evidence_fields: dict[str, Any],
+        audio_pcm16: bytes,
+        capture_vad_positive_blocks: int,
+        speech_end_perf_s: float,
+        speech_end_unix_s: float,
+        raw_face_snapshot: RawFaceSnapshot | None,
+        req_id: str,
+    ) -> bool:
         self._set_capture_state(CaptureState.COMMITTING, trigger="audio_commit_start")
         try:
             self._audio_send_queue.join()
@@ -553,13 +618,13 @@ class AudioRuntime:
             self._set_capture_state(
                 CaptureState.ADMISSION_CLOSED,
                 trigger="audio_commit_failed",
+                req_id=req_id,
             )
-            return
+            return False
         display_mode = getattr(self, "_set_display_mode_async", None)
         if callable(display_mode):
             display_mode("thinking")
         transcript_perf_s = perf_now()
-        req_id = f"rt-{uuid4().hex[:12]}"
         exchange_fields = self._exchange_log_fields()
         self._latency.emit(event="audio_commit", req_id=req_id, **exchange_fields)
         self._set_capture_state(
@@ -731,10 +796,10 @@ class AudioRuntime:
             self._turns_by_req_id[turn.req_id] = turn
         self._supersede_unanswered_turn(turn)
         self._register_pending_audio_turn(turn)
-        self.engagement.on_human_input(req_id)
         self._last_external_input_s = time.time()
         self._set_turn_phase(turn, TURN_PHASE_QUEUED, trigger="enqueue_audio_turn")
         self._turn_queue.put(turn)
+        return True
 
     def _playback_callback(
         self,

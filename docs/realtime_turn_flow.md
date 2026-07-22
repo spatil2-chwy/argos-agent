@@ -192,10 +192,20 @@ and out of the `speech_end -> commit` path.
 When voice has been absent for `silence_grace_period`:
 
 - `_finalize_recording_locked()` ends the local capture
+- the runtime allocates the turn request id and marks the audio turn as pending
+  registration, immediately keeping microphone admission closed
+- the background commit worker moves engagement to `ENGAGED` before commit and
+  owner resolution
 - the optional interaction display shows the centered `Thinking...` message
 - `_commit_audio_turn()` waits for `_audio_send_queue` to drain
 - the runtime sends `input_audio_buffer.commit`
 - a new `QueuedTurn(kind="audio")` is created
+
+The pending-registration gate covers the short handoff to the background worker
+and remains closed until the local turn is registered. `ENGAGED` then keeps
+recording admission closed while speaker and Tailwag owner resolution run. This
+preserves the one-human-turn-at-a-time interaction model and keeps committed
+audio item order aligned with local turn registration order.
 
 OpenAI input transcription is attached to the committed audio item. It is used
 for observability, memory, and preference extraction, but it is not what opens,
@@ -223,13 +233,15 @@ human speech audio
 
 So the model can answer the human while still seeing the latest robot-side events.
 
-### Step 6: Engagement moves to `ENGAGED`
+### Step 6: Engagement is already `ENGAGED`
 
-For committed human audio turns the runtime calls:
+At the start of the background commit worker, before commit and owner resolution,
+the runtime calls:
 
 - `engagement.on_human_input(req_id)`
 
-This is the main handoff from speech capture into interaction state.
+This is the main handoff from speech capture into interaction state. The turn is
+then registered and queued without reopening recording admission.
 
 ### Step 7: Response worker runs the turn
 
