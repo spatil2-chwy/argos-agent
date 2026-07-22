@@ -88,6 +88,10 @@ def test_required_capabilities_for_common_tool_ids():
         robot_family="unitree_go2",
     ) == ()
     assert required_capability_ids_for_tool_id(
+        "navigation.navigate_to_location_blocking",
+        robot_family="unitree_go2",
+    ) == ("navigation.goal", "transform.lookup")
+    assert required_capability_ids_for_tool_id(
         "navigation.localize_current_location",
         robot_family="unitree_go2",
     ) == ("navigation.goal", "transform.lookup")
@@ -103,3 +107,7 @@ def test_required_capabilities_for_common_tool_ids():
         "navigation.save_current_location",
         robot_family="unitree_go2",
     ) == ("navigation.goal", "transform.lookup")
+    assert required_capability_ids_for_tool_id(
+        "dock.charging",
+        robot_family="unitree_go2",
+    ) == ("dock.final_alignment", "navigation.goal", "transform.lookup")

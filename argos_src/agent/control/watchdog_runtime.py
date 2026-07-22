@@ -11,14 +11,9 @@ from argos_src.agent.realtime_turns import (
     TURN_PHASE_PLAYING,
     TURN_PHASE_RESPONSE_REQUESTED,
     TURN_PHASE_WAITING_FIRST_AUDIO,
-    TURN_PHASE_WAITING_TOOLS,
 )
-from argos_src.nav_support.timeouts import NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC
-
 LONG_RUNNING_TOOL_TIMEOUTS_SEC = {
     "enroll_visible_person": 45.0,
-    "navigate_to_location_blocking": NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC,
-    "navigate_to_return_point_blocking": NAV_BLOCKING_TOOL_WATCHDOG_TIMEOUT_SEC,
 }
 
 
@@ -68,19 +63,28 @@ class TurnWatchdogRuntime:
                     )
                     host._terminate_turn(turn, TURN_PHASE_CANCELED, "response_timeout")
                     continue
-            if turn.phase == TURN_PHASE_WAITING_TOOLS and turn.pending_tool_calls > 0:
-                started_at = turn.phase_updated_at
-                effective_timeout_s = self._tool_timeout_s(
+            if turn.pending_tool_calls > 0:
+                active_call_id = str(
+                    getattr(turn, "active_tool_call_id", "") or ""
+                )
+                deadline_at = self._tool_deadline_at(
                     turn,
                     default_timeout_s=response_timeout_s,
                 )
-                if current_time - started_at >= effective_timeout_s:
+                if current_time >= deadline_at and self._claim_tool_timeout(
+                    turn,
+                    now=current_time,
+                    default_timeout_s=response_timeout_s,
+                    expected_call_id=active_call_id,
+                ):
                     host.logger.warning(
-                        "Realtime tool watchdog cancel req_id=%s pending_tool_calls=%s",
+                        "Realtime tool watchdog cancel req_id=%s call_id=%s tool=%s",
                         turn.req_id,
-                        turn.pending_tool_calls,
+                        turn.active_tool_call_id,
+                        turn.active_tool_name,
                     )
                     host._terminate_turn(turn, TURN_PHASE_CANCELED, "tool_timeout")
+                    self._cancel_active_tool(turn)
                     continue
             if (
                 turn.phase in {TURN_PHASE_PLAYING, TURN_PHASE_MODEL_DONE}
@@ -105,11 +109,55 @@ class TurnWatchdogRuntime:
                     host._force_complete_stalled_playback(turn, reason="stall_timeout")
 
     @staticmethod
-    def _tool_timeout_s(turn: Any, *, default_timeout_s: float) -> float:
-        timeout_s = float(default_timeout_s)
-        pending_names = getattr(turn, "pending_tool_names_by_call_id", {}) or {}
-        for tool_name in pending_names.values():
-            override_s = LONG_RUNNING_TOOL_TIMEOUTS_SEC.get(str(tool_name or "").strip())
-            if override_s is not None:
-                timeout_s = max(timeout_s, float(override_s))
-        return timeout_s
+    def _tool_deadline_at(turn: Any, *, default_timeout_s: float) -> float:
+        started_at = float(getattr(turn, "active_tool_started_at", 0.0) or 0.0)
+        explicit_deadline = float(
+            getattr(turn, "active_tool_deadline_at", 0.0) or 0.0
+        )
+        if started_at > 0.0:
+            if explicit_deadline > 0.0:
+                return explicit_deadline
+            tool_name = str(getattr(turn, "active_tool_name", "") or "").strip()
+            timeout_s = max(
+                float(default_timeout_s),
+                float(LONG_RUNNING_TOOL_TIMEOUTS_SEC.get(tool_name, 0.0)),
+            )
+            return started_at + timeout_s
+        progress_at = float(getattr(turn, "last_tool_progress_at", 0.0) or 0.0)
+        return max(progress_at, float(turn.phase_updated_at)) + float(default_timeout_s)
+
+    def _claim_tool_timeout(
+        self,
+        turn: Any,
+        *,
+        now: float,
+        default_timeout_s: float,
+        expected_call_id: str,
+    ) -> bool:
+        """Recheck the active call under the turn lock before timing it out."""
+        with self._host._turn_lock:
+            if self._host._is_turn_terminal(turn):
+                return False
+            if turn.pending_tool_calls <= 0:
+                return False
+            if str(getattr(turn, "active_tool_call_id", "") or "") != expected_call_id:
+                return False
+            return now >= self._tool_deadline_at(
+                turn,
+                default_timeout_s=default_timeout_s,
+            )
+
+    def _cancel_active_tool(self, turn: Any) -> None:
+        tool_name = str(getattr(turn, "active_tool_name", "") or "").strip()
+        tool = (getattr(self._host, "_tool_registry", {}) or {}).get(tool_name)
+        cancel = getattr(tool, "cancel_active_execution", None)
+        if not callable(cancel):
+            return
+        try:
+            cancel()
+        except Exception:
+            self._host.logger.exception(
+                "Tool watchdog cancellation failed req_id=%s tool=%s",
+                turn.req_id,
+                tool_name,
+            )

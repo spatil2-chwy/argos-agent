@@ -21,6 +21,7 @@ class _Host:
         self._turn_lock = threading.RLock()
         self._turns_by_req_id = {}
         self.realtime_profile = SimpleNamespace(silence_grace_period=0.0)
+        self._tool_registry = {}
         self.terminated = []
         self.force_completed = []
 
@@ -85,6 +86,9 @@ def test_watchdog_allows_long_running_enrollment_tool() -> None:
     turn.pending_tool_calls = 1
     turn.pending_call_ids.add("call-enroll")
     turn.pending_tool_names_by_call_id["call-enroll"] = "enroll_visible_person"
+    turn.active_tool_call_id = "call-enroll"
+    turn.active_tool_name = "enroll_visible_person"
+    turn.active_tool_started_at = 1.0
     host._turns_by_req_id[turn.req_id] = turn
 
     runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=20.0)
@@ -102,6 +106,9 @@ def test_watchdog_cancels_enrollment_after_extended_timeout() -> None:
     turn.pending_tool_calls = 1
     turn.pending_call_ids.add("call-enroll")
     turn.pending_tool_names_by_call_id["call-enroll"] = "enroll_visible_person"
+    turn.active_tool_call_id = "call-enroll"
+    turn.active_tool_name = "enroll_visible_person"
+    turn.active_tool_started_at = 1.0
     host._turns_by_req_id[turn.req_id] = turn
 
     runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=47.0)
@@ -118,9 +125,13 @@ def test_watchdog_allows_blocking_navigation_tool() -> None:
     turn.pending_tool_calls = 1
     turn.pending_call_ids.add("call-nav")
     turn.pending_tool_names_by_call_id["call-nav"] = "navigate_to_location_blocking"
+    turn.active_tool_call_id = "call-nav"
+    turn.active_tool_name = "navigate_to_location_blocking"
+    turn.active_tool_started_at = 1.0
+    turn.active_tool_deadline_at = 96.0
     host._turns_by_req_id[turn.req_id] = turn
 
-    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=60.0)
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=95.9)
 
     assert host.terminated == []
     assert turn.finalized is False
@@ -135,13 +146,17 @@ def test_watchdog_cancels_blocking_navigation_after_extended_timeout() -> None:
     turn.pending_tool_calls = 1
     turn.pending_call_ids.add("call-nav")
     turn.pending_tool_names_by_call_id["call-nav"] = "navigate_to_location_blocking"
+    turn.active_tool_call_id = "call-nav"
+    turn.active_tool_name = "navigate_to_location_blocking"
+    turn.active_tool_started_at = 1.0
+    turn.active_tool_deadline_at = 96.0
     host._turns_by_req_id[turn.req_id] = turn
 
-    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=301.0)
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=95.9)
 
     assert host.terminated == []
 
-    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=317.0)
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=96.0)
 
     assert host.terminated == [(turn.req_id, TURN_PHASE_CANCELED, "tool_timeout")]
 
@@ -157,9 +172,13 @@ def test_watchdog_allows_blocking_return_point_navigation_tool() -> None:
     turn.pending_tool_names_by_call_id["call-return"] = (
         "navigate_to_return_point_blocking"
     )
+    turn.active_tool_call_id = "call-return"
+    turn.active_tool_name = "navigate_to_return_point_blocking"
+    turn.active_tool_started_at = 1.0
+    turn.active_tool_deadline_at = 96.0
     host._turns_by_req_id[turn.req_id] = turn
 
-    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=60.0)
+    runtime.poll_once(response_timeout_s=12.0, playback_timeout_s=10.0, now=95.9)
 
     assert host.terminated == []
     assert turn.finalized is False
@@ -193,3 +212,27 @@ def test_watchdog_force_completes_stalled_playback_after_model_done() -> None:
     runtime.poll_once(response_timeout_s=2.0, playback_timeout_s=3.0, now=7.0)
 
     assert host.force_completed == [(turn.req_id, "stall_timeout")]
+
+
+def test_watchdog_cancels_the_active_tool_at_its_exact_deadline() -> None:
+    host = _Host()
+    canceled = []
+    host._tool_registry["blocking"] = SimpleNamespace(
+        cancel_active_execution=lambda: canceled.append("called")
+    )
+    runtime = TurnWatchdogRuntime(host)
+    turn = _turn()
+    turn.pending_tool_calls = 2
+    turn.active_tool_call_id = "call-active"
+    turn.active_tool_name = "blocking"
+    turn.active_tool_started_at = 10.0
+    turn.active_tool_deadline_at = 30.0
+    host._turns_by_req_id[turn.req_id] = turn
+
+    runtime.poll_once(response_timeout_s=2.0, playback_timeout_s=10.0, now=29.9)
+    assert host.terminated == []
+
+    runtime.poll_once(response_timeout_s=2.0, playback_timeout_s=10.0, now=30.0)
+
+    assert host.terminated == [(turn.req_id, TURN_PHASE_CANCELED, "tool_timeout")]
+    assert canceled == ["called"]

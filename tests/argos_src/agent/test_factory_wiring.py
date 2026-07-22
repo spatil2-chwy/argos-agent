@@ -22,6 +22,9 @@ class _FakeNavState:
     def get_active_goal(self):
         return self._active_goal
 
+    def has_active_dock_alignment(self):
+        return False
+
 
 class _FakeCoalescer:
     def __init__(self):

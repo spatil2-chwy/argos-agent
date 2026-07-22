@@ -34,7 +34,7 @@ resources:
       - battery.state
       - transform.lookup
       - navigation.goal
-      - dock.charging
+      - dock.final_alignment
       - presence.face.publish
       - voice_command.publish
 

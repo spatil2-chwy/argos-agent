@@ -147,8 +147,12 @@ class DockingClient(Protocol):
         *,
         approach_pose: dict[str, float],
         dock_timeout_sec: float = 60.0,
+        alignment_only: bool = False,
     ) -> dict[str, Any]:
-        """Run the provider's charging-dock sequence."""
+        """Run the provider's charging-dock sequence or final alignment stage."""
+
+    def cancel_charging_dock(self) -> dict[str, Any]:
+        """Stop final docking alignment and confirm terminal cancellation."""
 
 
 class PresenceClient(Protocol):

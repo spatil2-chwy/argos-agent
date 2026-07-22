@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import math
 import time
 from typing import Any, Optional
 
@@ -13,6 +15,7 @@ from argos_src.agent.realtime_turns import (
 )
 from argos_src.agent.runtime_context import parse_tool_output, summarize_tool_payload
 from argos_src.observability.observability import clear_request_context, set_request_context
+from argos_src.tools.execution import tool_execution_context
 
 TOOL_LOG_PREVIEW_LIMIT = 900
 
@@ -108,6 +111,7 @@ class ToolRuntime:
                     speech_end_unix_s=turn.speech_end_unix_s,
                     transcript_perf_s=turn.transcript_perf_s,
                 )
+                self._mark_tool_started(turn, pending)
                 try:
                     allowed_fn = getattr(host, "_is_tool_allowed_for_turn", None)
                     tool_allowed = not callable(allowed_fn) or bool(
@@ -122,11 +126,19 @@ class ToolRuntime:
                             }
                         )
                     else:
-                        result = self.invoke_tool(
-                            tool,
-                            arguments,
-                            call_id=pending.call_id,
-                        )
+                        with tool_execution_context(
+                            set_timeout=lambda timeout_sec: self._set_active_tool_timeout(
+                                turn,
+                                pending.call_id,
+                                timeout_sec,
+                            ),
+                            side_effect_guard=self._side_effect_start_guard(turn),
+                        ):
+                            result = self.invoke_tool(
+                                tool,
+                                arguments,
+                                call_id=pending.call_id,
+                            )
                 except Exception as exc:
                     host.logger.exception(
                         "Tool execution failed req_id=%s tool=%s",
@@ -135,9 +147,13 @@ class ToolRuntime:
                     )
                     result = json.dumps({"success": False, "error": str(exc)})
                 finally:
+                    self._clear_active_tool(turn, pending.call_id)
                     clear_request_context()
 
         content, artifact = self.split_tool_result(result)
+        with host._turn_lock:
+            if host._is_turn_terminal(turn):
+                return
         if tool_allowed:
             self.maybe_handle_side_effects(pending.tool_name, content)
         posture, summary = summarize_tool_payload(pending.tool_name, content)
@@ -201,6 +217,50 @@ class ToolRuntime:
         if host._is_turn_terminal(turn):
             return
         self.maybe_request_followup(turn, pending.source_response_id)
+
+    def _mark_tool_started(
+        self,
+        turn: QueuedTurn,
+        pending: PendingToolCall,
+    ) -> None:
+        now = time.time()
+        with self._host._turn_lock:
+            turn.active_tool_call_id = pending.call_id
+            turn.active_tool_name = pending.tool_name
+            turn.active_tool_started_at = now
+            turn.active_tool_deadline_at = 0.0
+            turn.last_tool_progress_at = now
+
+    def _set_active_tool_timeout(
+        self,
+        turn: QueuedTurn,
+        call_id: str,
+        timeout_sec: float,
+    ) -> None:
+        timeout_sec = float(timeout_sec)
+        if not math.isfinite(timeout_sec) or timeout_sec <= 0.0:
+            raise ValueError("Tool execution timeout must be finite and positive.")
+        with self._host._turn_lock:
+            if turn.active_tool_call_id == call_id:
+                turn.active_tool_deadline_at = turn.active_tool_started_at + timeout_sec
+
+    def _clear_active_tool(self, turn: QueuedTurn, call_id: str) -> None:
+        with self._host._turn_lock:
+            if turn.active_tool_call_id != call_id:
+                return
+            turn.active_tool_call_id = ""
+            turn.active_tool_name = ""
+            turn.active_tool_started_at = 0.0
+            turn.active_tool_deadline_at = 0.0
+            turn.last_tool_progress_at = time.time()
+
+    def _side_effect_start_guard(self, turn: QueuedTurn):
+        @contextmanager
+        def guard():
+            with self._host._turn_lock:
+                yield not self._host._is_turn_terminal(turn)
+
+        return guard
 
     def maybe_request_followup(
         self,

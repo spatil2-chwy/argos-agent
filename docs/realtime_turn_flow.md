@@ -432,6 +432,21 @@ has turn watchdogs so one stuck response does not hold the runtime forever:
 enrollment can block on the display accept/reject review before returning a tool
 result.
 
+The watchdog tracks the one tool call currently executing on the serial tool
+worker. Default tools start with the normal response timeout, enrollment keeps
+its fixed review allowance, and blocking navigation registers an absolute
+per-call deadline derived from its exact provider budget: `30 + 10 seconds per
+map-frame meter`, plus five seconds of provider-response grace and ten seconds
+of watchdog grace. Charging derives one deadline covering that approach plus a
+fixed 60-second final-alignment stage. Queued calls do not inherit the active
+call's explicit deadline; each receives a fresh budget when it starts, so one
+long navigation cannot extend an unrelated tool or consume the next tool's
+allowance. A navigation watchdog
+expiry also requests provider cancellation before the active goal can be
+considered cleared. Final dock alignment has its own provider cancellation
+operation and remains motion-active locally until cancellation is explicitly
+confirmed.
+
 These watchdogs are local recovery paths, not Realtime API features.
 
 ## Navigation and Patrol Interaction

@@ -102,7 +102,7 @@ resource provides the required capabilities.
 | Public tool ID | Runtime tool | Required capability | Notes |
 |---|---|---|---|
 | `navigation.navigate_to_location` | `navigate_to_location` | `navigation.goal` | Starts an interruptible named-location goal and returns before arrival. |
-| `navigation.navigate_to_location_blocking` | `navigate_to_location_blocking` | `navigation.goal` | Waits for final navigation result. |
+| `navigation.navigate_to_location_blocking` | `navigate_to_location_blocking` | `navigation.goal`, `transform.lookup` | Waits for final navigation result. |
 | `navigation.navigate_relative` | `navigate_relative` | `navigation.goal`, `transform.lookup` | Builds a map-frame goal from current transform. |
 | `navigation.follow_waypoints` | `follow_waypoints` | `navigation.goal` | Starts an interruptible waypoint route. |
 | `navigation.cancel` | `cancel_navigation` | `navigation.goal` | Cancels active navigation and may save a resumable mission. |
@@ -111,7 +111,43 @@ resource provides the required capabilities.
 | `navigation.mark_return_point` | `mark_return_point` | `navigation.goal`, `transform.lookup` | Stores a temporary task return point without persisting it. |
 | `navigation.navigate_to_return_point_blocking` | `navigate_to_return_point_blocking` | `navigation.goal`, `transform.lookup` | Returns to a temporary return point and waits for arrival. |
 | `navigation.save_current_location` | `save_current_location` | `navigation.goal`, `transform.lookup` | Persists the current pose as a named saved location. |
-| `dock.charging` | `charging_dock` | `dock.charging` | Uses saved `charge_dock` approach pose and provider docking. |
+| `dock.charging` | `charging_dock` | `dock.final_alignment`, `navigation.goal`, `transform.lookup` | Navigates to saved `charge_dock`, then runs fixed-time final alignment. |
+
+Blocking navigation computes its provider completion budget from the Euclidean
+map-frame distance between the robot's current transform and the target pose:
+
+```text
+navigation_timeout_sec = 30 + 10 * straight_line_distance_m
+provider_wait_sec = navigation_timeout_sec + 5
+tool_watchdog_sec = provider_wait_sec + 10
+```
+
+The 30-second base covers planning, initial rotation, acceleration, and short
+replanning delays. Ten seconds per meter is intentionally conservative for
+indoor navigation. There is no separate minimum or operational maximum: the
+same distance-derived number is sent to the provider and used to derive the
+outer deadlines. Values that are non-finite or exceed the platform's supported
+wait range are rejected before motion starts. A missing or stale current transform
+also fails closed because Argos cannot derive a trustworthy distance.
+
+Only an explicit provider outcome of `succeeded` counts as arrival. Explicit
+`aborted` and `canceled` outcomes are terminal failures. Missing or unknown
+outcomes trigger a best-effort `navigation.cancel`; if terminal cancellation
+cannot be confirmed, Argos retains the active goal as `cancel_unconfirmed` so
+patrol and conflicting navigation remain suppressed.
+
+`charging_dock` is a two-stage operation. It uses the same dynamic blocking
+navigation path for the saved `charge_dock` approach, even when low battery
+blocks general navigation. After explicit arrival it calls
+`dock.charging_sequence` with `alignment_only=true` and a fixed 60-second final
+alignment budget. Providers must advertise the versioned
+`dock.final_alignment` capability and implement both alignment-only execution
+and `dock.cancel_charging_sequence`; a legacy `dock.charging` provider cannot
+enable this tool. The docking provider must stop alignment motion before the
+fixed deadline or a confirmed cancel returns. The total model-tool deadline is
+derived from the approach budget, both five-second provider response graces,
+the 60-second alignment budget, and one ten-second watchdog grace. Ambiguous
+alignment failures keep patrol paused.
 
 `save_current_location` persists map resources. Treat it as an operator-controlled
 action because overwriting names such as `charge_dock` changes future navigation

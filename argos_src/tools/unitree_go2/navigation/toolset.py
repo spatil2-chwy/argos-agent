@@ -14,15 +14,25 @@ from argos_src.runtime.battery_state import (
 )
 from argos_src.nav_support.locations import (
     CHARGE_DOCK_LOCATION_NAME,
+    CHARGING_DOCK_NAVIGATION_POLICY,
     FOCUSED_NAVIGATION_POLICY,
     INTERRUPTIBLE_NAVIGATION_POLICY,
     LocationStore,
     NavigationPolicy,
     NavigationState,
 )
-from argos_src.nav_support.timeouts import NAV_BLOCKING_RESULT_TIMEOUT_SEC
+from argos_src.nav_support.timeouts import (
+    DOCK_ALIGNMENT_TIMEOUT_SEC,
+    charging_tool_timeout_sec,
+    estimate_navigation_timeout_sec,
+    navigation_tool_timeout_sec,
+)
 from argos_src.tools.base import BaseTool
 from argos_src.tools.common.tool_response import build_tool_response, tool_response_json
+from argos_src.tools.execution import (
+    guard_tool_side_effect_start,
+    set_tool_execution_timeout,
+)
 
 MAX_RELATIVE_TF_AGE_SEC = 3.0
 LOCALIZE_NEAR_DISTANCE_M = 3.0
@@ -30,6 +40,10 @@ LOCALIZE_APPROXIMATE_DISTANCE_M = 4.0
 MAP_FRAME = "map"
 ROBOT_FRAME = "base_link"
 NavEventSink = Callable[[dict[str, Any]], None]
+UNCONFIRMED_NAVIGATION_CANCEL_MSG = (
+    "Previous robot-motion cancellation is unconfirmed. "
+    "Retry cancel_navigation before starting another navigation goal."
+)
 
 
 def _nav_tool_json(
@@ -106,6 +120,85 @@ def _transform_pose(transform: Any) -> tuple[float, float, float, float]:
     return x, y, _yaw_from_quaternion(rotation or (0.0, 0.0, 0.0, 1.0)), stamp_s
 
 
+def _validate_pose(*, x: float, y: float, theta: float, label: str) -> None:
+    if not all(math.isfinite(float(value)) for value in (x, y, theta)):
+        raise ValueError(f"{label} pose must contain finite x, y, and theta values.")
+
+
+def _resolve_navigation_timeout_sec(
+    *,
+    robot_client: Any,
+    x: float,
+    y: float,
+    theta: float,
+    timeout_sec: float | None = None,
+) -> float:
+    _validate_pose(x=x, y=y, theta=theta, label="Target")
+    if timeout_sec is not None:
+        rendered_timeout_sec = float(timeout_sec)
+        navigation_tool_timeout_sec(rendered_timeout_sec)
+        return rendered_timeout_sec
+    current_x, current_y, current_yaw, stamp_s = _transform_pose(
+        robot_client.get_transform(MAP_FRAME, ROBOT_FRAME)
+    )
+    _validate_pose(
+        x=current_x,
+        y=current_y,
+        theta=current_yaw,
+        label="Current",
+    )
+    if stamp_s > 0.0 and time.time() - stamp_s > MAX_RELATIVE_TF_AGE_SEC:
+        raise ValueError("Current pose is stale.")
+    distance_m = math.hypot(float(x) - current_x, float(y) - current_y)
+    return estimate_navigation_timeout_sec(distance_m)
+
+
+def _cancel_active_navigation(robot_client: Any, state: NavigationState) -> bool:
+    active_goal = state.get_active_goal()
+    if not active_goal:
+        return True
+    goal_id = str(active_goal.get("goal_id", "") or "")
+    if not goal_id:
+        return False
+    canceled = _cancel_provider_goal_best_effort(robot_client, goal_id)
+    if canceled:
+        state.clear_goal_if_active(goal_id)
+    else:
+        state.mark_active_goal_cancel_unconfirmed(goal_id)
+    return canceled
+
+
+def _cancel_active_dock_alignment(robot_client: Any, state: NavigationState) -> bool:
+    if not state.has_active_dock_alignment():
+        return True
+    try:
+        result = robot_client.cancel_charging_dock()
+    except Exception:
+        result = None
+    canceled = bool(isinstance(result, dict) and result.get("canceled") is True)
+    if canceled:
+        state.clear_dock_alignment()
+    return canceled
+
+
+def _cancel_ambiguous_navigation_result(
+    *,
+    robot_client: Any,
+    state: NavigationState,
+    goal_id: str,
+    result: dict[str, Any],
+    reason: str,
+) -> tuple[bool, str]:
+    if _cancel_provider_goal_best_effort(robot_client, goal_id):
+        state.clear_goal_if_active(goal_id)
+        return False, _result_error(result, f"{reason} and was canceled.")
+    state.mark_active_goal_cancel_unconfirmed(goal_id)
+    return False, _result_error(
+        result,
+        f"{reason} and cancellation could not be confirmed.",
+    )
+
+
 def _accepted(result: dict[str, Any]) -> bool:
     if "accepted" in result:
         return bool(result.get("accepted"))
@@ -151,6 +244,18 @@ def _begin_provider_goal(
     )
 
 
+def _cancel_provider_goal_best_effort(robot_client: Any, goal_id: str) -> bool:
+    try:
+        result = robot_client.cancel_navigation(goal_id=goal_id)
+    except Exception:
+        return False
+    return bool(isinstance(result, dict) and result.get("canceled", False))
+
+
+def _unconfirmed_navigation_blocks_start(state: NavigationState) -> bool:
+    return state.has_unconfirmed_active_goal() or state.has_active_dock_alignment()
+
+
 def start_navigation_to_saved_location(
     *,
     robot_client: Any,
@@ -160,6 +265,13 @@ def start_navigation_to_saved_location(
     tool_name: str = "navigate_to_location",
     policy: NavigationPolicy = INTERRUPTIBLE_NAVIGATION_POLICY,
 ) -> dict[str, Any]:
+    if _unconfirmed_navigation_blocks_start(state):
+        return build_tool_response(
+            success=False,
+            status="blocked",
+            message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+            location_name=location_name,
+        )
     blocked = _battery_blocks_nav(battery)
     if blocked and location_name != CHARGE_DOCK_LOCATION_NAME:
         return build_tool_response(
@@ -245,7 +357,11 @@ def process_navigation_event(
         if goal_id and not state.mark_waypoint_reported(goal_id, zero_based):
             return
     if event_type == "goal_result" and goal_id:
-        state.clear_goal_if_active(goal_id)
+        outcome = str(routed_event.get("outcome", "") or "").lower()
+        if outcome in {"succeeded", "aborted", "canceled"}:
+            state.clear_goal_if_active(goal_id)
+        else:
+            state.mark_active_goal_cancel_unconfirmed(goal_id)
     if on_nav_event is not None:
         try:
             on_nav_event(routed_event)
@@ -260,25 +376,43 @@ def navigate_to_pose_blocking(
     x: float,
     y: float,
     theta: float,
-    timeout_sec: float = NAV_BLOCKING_RESULT_TIMEOUT_SEC,
+    timeout_sec: float | None = None,
+    watchdog_timeout_fn: Callable[[float], float] = navigation_tool_timeout_sec,
     battery: Optional[BatteryStateCache] = None,
     skip_low_battery_check: bool = False,
     tool_name: str = "navigation_blocking",
     target_label: str = "custom_pose",
     policy: NavigationPolicy = FOCUSED_NAVIGATION_POLICY,
 ) -> tuple[bool, str]:
+    if _unconfirmed_navigation_blocks_start(state):
+        return False, UNCONFIRMED_NAVIGATION_CANCEL_MSG
     if not skip_low_battery_check and _battery_blocks_nav(battery):
         return False, LOW_BATTERY_NAVIGATION_MSG
 
-    goal_id = state.new_goal_id()
-    _begin_provider_goal(
-        robot_client=robot_client,
-        state=state,
-        goal_id=goal_id,
-        tool_name=tool_name,
-        target_label=target_label,
-        policy=policy,
-    )
+    try:
+        resolved_timeout_sec = _resolve_navigation_timeout_sec(
+            robot_client=robot_client,
+            x=x,
+            y=y,
+            theta=theta,
+            timeout_sec=timeout_sec,
+        )
+        set_tool_execution_timeout(watchdog_timeout_fn(resolved_timeout_sec))
+    except Exception as exc:
+        return False, f"Could not calculate a safe navigation timeout: {exc}"
+
+    with guard_tool_side_effect_start() as side_effect_allowed:
+        if not side_effect_allowed:
+            return False, "Navigation was canceled before motion started."
+        goal_id = state.new_goal_id()
+        _begin_provider_goal(
+            robot_client=robot_client,
+            state=state,
+            goal_id=goal_id,
+            tool_name=tool_name,
+            target_label=target_label,
+            policy=policy,
+        )
     try:
         result = robot_client.navigate_to_pose(
             goal_id=goal_id,
@@ -288,17 +422,42 @@ def navigate_to_pose_blocking(
             target_label=target_label,
             tool_name=tool_name,
             blocking=True,
-            timeout_sec=timeout_sec,
+            timeout_sec=resolved_timeout_sec,
             policy=_policy_payload(policy),
         )
     except Exception as exc:
-        state.clear_goal_if_active(goal_id)
-        return False, str(exc)
-    state.clear_goal_if_active(goal_id)
+        cancel_confirmed = _cancel_provider_goal_best_effort(robot_client, goal_id)
+        if cancel_confirmed:
+            state.clear_goal_if_active(goal_id)
+            return False, str(exc)
+        state.mark_active_goal_cancel_unconfirmed(goal_id)
+        return False, f"{exc}. Navigation cancellation could not be confirmed."
     outcome = str(result.get("outcome", "") or "").lower()
-    if _accepted(result) and outcome in {"", "succeeded", "success"}:
+    accepted = result.get("accepted")
+    if accepted is False:
+        state.clear_goal_if_active(goal_id)
+        return False, _result_error(result, "Navigation provider rejected the goal.")
+    if accepted is not True:
+        return _cancel_ambiguous_navigation_result(
+            robot_client=robot_client,
+            state=state,
+            goal_id=goal_id,
+            result=result,
+            reason="Navigation returned no explicit acceptance",
+        )
+    if outcome == "succeeded":
+        state.clear_goal_if_active(goal_id)
         return True, ""
-    return False, _result_error(result, "Navigation failed.")
+    if outcome in {"aborted", "canceled"}:
+        state.clear_goal_if_active(goal_id)
+        return False, _result_error(result, f"Navigation {outcome}.")
+    return _cancel_ambiguous_navigation_result(
+        robot_client=robot_client,
+        state=state,
+        goal_id=goal_id,
+        result=result,
+        reason="Navigation returned no explicit terminal outcome",
+    )
 
 
 class NavigateToLocationInput(BaseModel):
@@ -417,6 +576,12 @@ class NavigateRelativeTool(BaseTool):
         left_m: float = 0.0,
         delta_theta_rad: float = 0.0,
     ) -> str:
+        if _unconfirmed_navigation_blocks_start(self.state):
+            return _nav_tool_json(
+                success=False,
+                status="blocked",
+                message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+            )
         blocked = _battery_blocks_nav(self.battery)
         if blocked:
             return _nav_tool_json(
@@ -527,6 +692,13 @@ class FollowWaypointsTool(BaseTool):
         arbitrary_types_allowed = True
 
     def _run(self, location_names: List[str]) -> str:
+        if _unconfirmed_navigation_blocks_start(self.state):
+            return _nav_tool_json(
+                success=False,
+                status="blocked",
+                message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+                location_names=location_names,
+            )
         if not location_names:
             return _nav_tool_json(success=False, status="error", message="No waypoints given.")
         blocked = _battery_blocks_nav(self.battery)
@@ -646,18 +818,31 @@ class CancelNavigationTool(BaseTool):
         active = self.state.get_active_goal()
         goal_id = str((active or {}).get("goal_id", "") or "")
         if not goal_id:
+            if self.state.has_active_dock_alignment():
+                if _cancel_active_dock_alignment(self.robot_client, self.state):
+                    return _nav_tool_json(
+                        success=True,
+                        status="canceled",
+                        message="Charging alignment canceled.",
+                    )
+                return _nav_tool_json(
+                    success=False,
+                    status="error",
+                    message="Charging alignment cancellation could not be confirmed.",
+                )
             return _nav_tool_json(
                 success=False,
                 status="error",
                 message="No navigation in progress.",
             )
-        try:
-            self.robot_client.cancel_navigation(goal_id=goal_id)
-            self.state.clear_goal_if_active(goal_id)
+        if _cancel_active_navigation(self.robot_client, self.state):
             self.state.take_last_goal_handle()
             return _nav_tool_json(success=True, status="canceled", message="Navigation canceled.")
-        except Exception as exc:
-            return _nav_tool_json(success=False, status="error", message=f"Cancel failed: {exc}.")
+        return _nav_tool_json(
+            success=False,
+            status="error",
+            message="Cancel failed: provider cancellation could not be confirmed.",
+        )
 
 
 class StopPatrolTool(BaseTool):
@@ -676,16 +861,35 @@ class StopPatrolTool(BaseTool):
             active = self.state.get_active_goal()
             goal_id = str((active or {}).get("goal_id", "") or "")
             if goal_id:
-                try:
-                    self.robot_client.cancel_navigation(goal_id=goal_id)
-                except Exception:
-                    pass
-                self.state.clear_goal_if_active(goal_id)
-                self.state.take_last_goal_handle()
+                if _cancel_active_navigation(self.robot_client, self.state):
+                    self.state.take_last_goal_handle()
+                    return _nav_tool_json(
+                        success=True,
+                        status="completed",
+                        message="Patrol stopped and active navigation cancelled.",
+                    )
                 return _nav_tool_json(
-                    success=True,
-                    status="completed",
-                    message="Patrol stopped and active navigation cancelled.",
+                    success=False,
+                    status="error",
+                    message=(
+                        "Patrol stopped, but active navigation cancellation "
+                        "could not be confirmed."
+                    ),
+                )
+            if self.state.has_active_dock_alignment():
+                if _cancel_active_dock_alignment(self.robot_client, self.state):
+                    return _nav_tool_json(
+                        success=True,
+                        status="completed",
+                        message="Patrol stopped and charging alignment canceled.",
+                    )
+                return _nav_tool_json(
+                    success=False,
+                    status="error",
+                    message=(
+                        "Patrol stopped, but charging alignment cancellation "
+                        "could not be confirmed."
+                    ),
                 )
         return _nav_tool_json(success=True, status="completed", message="Patrol stopped.")
 
@@ -815,13 +1019,23 @@ class NavigateToReturnPointBlockingTool(BaseTool):
     robot_client: Any = Field(exclude=True)
     state: NavigationState = Field(exclude=True)
     battery: Optional[BatteryStateCache] = Field(default=None, exclude=True)
-    timeout_sec: float = Field(default=NAV_BLOCKING_RESULT_TIMEOUT_SEC, exclude=True)
+    timeout_sec: float | None = Field(default=None, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
 
+    def cancel_active_execution(self) -> bool:
+        return _cancel_active_navigation(self.robot_client, self.state)
+
     def _run(self, label: str = "assignment_start") -> str:
         rendered_label = str(label or "").strip() or "assignment_start"
+        if _unconfirmed_navigation_blocks_start(self.state):
+            return _nav_tool_json(
+                success=False,
+                status="blocked",
+                message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+                label=rendered_label,
+            )
         coords = self.state.get_return_point(rendered_label)
         if coords is None:
             return _nav_tool_json(
@@ -915,12 +1129,22 @@ class NavigateToLocationBlockingTool(BaseTool):
     robot_client: Any = Field(exclude=True)
     state: NavigationState = Field(exclude=True)
     battery: Optional[BatteryStateCache] = Field(default=None, exclude=True)
-    timeout_sec: float = Field(default=NAV_BLOCKING_RESULT_TIMEOUT_SEC, exclude=True)
+    timeout_sec: float | None = Field(default=None, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
 
+    def cancel_active_execution(self) -> bool:
+        return _cancel_active_navigation(self.robot_client, self.state)
+
     def _run(self, location_name: str) -> str:
+        if _unconfirmed_navigation_blocks_start(self.state):
+            return _nav_tool_json(
+                success=False,
+                status="blocked",
+                message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+                location_name=location_name,
+            )
         blocked = _battery_blocks_nav(self.battery)
         if blocked and location_name != CHARGE_DOCK_LOCATION_NAME:
             return _nav_tool_json(
@@ -975,10 +1199,14 @@ class ChargingDockTool(BaseTool):
     robot_client: Any = Field(exclude=True)
     nav_state: NavigationState = Field(exclude=True)
     battery: Optional[BatteryStateCache] = Field(default=None, exclude=True)
-    dock_timeout_sec: float = Field(default=60.0, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
+
+    def cancel_active_execution(self) -> bool:
+        if self.nav_state.has_active_dock_alignment():
+            return _cancel_active_dock_alignment(self.robot_client, self.nav_state)
+        return _cancel_active_navigation(self.robot_client, self.nav_state)
 
     def _restore_patrol_after_failure(self, paused_patrol: Optional[dict[str, Any]]) -> None:
         if paused_patrol is None:
@@ -990,6 +1218,13 @@ class ChargingDockTool(BaseTool):
 
     def _run(self, data: Optional[str] = None) -> str:
         del data
+        if _unconfirmed_navigation_blocks_start(self.nav_state):
+            return tool_response_json(
+                success=False,
+                status="blocked",
+                message=UNCONFIRMED_NAVIGATION_CANCEL_MSG,
+                robot_state_after="unknown",
+            )
         coords = self.nav_state.location_store.get(CHARGE_DOCK_LOCATION_NAME)
         if coords is None:
             return tool_response_json(
@@ -1003,6 +1238,37 @@ class ChargingDockTool(BaseTool):
                 robot_state_after="unknown",
             )
         paused_patrol = self.nav_state.pause_patrol()
+        ok, detail = navigate_to_pose_blocking(
+            robot_client=self.robot_client,
+            state=self.nav_state,
+            x=coords["x"],
+            y=coords["y"],
+            theta=coords["theta"],
+            battery=self.battery,
+            skip_low_battery_check=True,
+            tool_name=self.name,
+            target_label=CHARGE_DOCK_LOCATION_NAME,
+            policy=CHARGING_DOCK_NAVIGATION_POLICY,
+            watchdog_timeout_fn=charging_tool_timeout_sec,
+        )
+        if not ok:
+            if not _unconfirmed_navigation_blocks_start(self.nav_state):
+                self._restore_patrol_after_failure(paused_patrol)
+            return tool_response_json(
+                success=False,
+                status="error",
+                message=f"Charging approach navigation failed: {detail}",
+                robot_state_after="unknown",
+            )
+        with guard_tool_side_effect_start() as side_effect_allowed:
+            if not side_effect_allowed:
+                return tool_response_json(
+                    success=False,
+                    status="canceled",
+                    message="Charging was canceled before final alignment started.",
+                    robot_state_after="unknown",
+                )
+            self.nav_state.begin_dock_alignment()
         try:
             result = self.robot_client.dock_for_charging(
                 approach_pose={
@@ -1011,29 +1277,47 @@ class ChargingDockTool(BaseTool):
                     "theta": float(coords["theta"]),
                     "frame_id": "map",
                 },
-                dock_timeout_sec=self.dock_timeout_sec,
+                dock_timeout_sec=DOCK_ALIGNMENT_TIMEOUT_SEC,
+                alignment_only=True,
             )
         except Exception as exc:
-            self._restore_patrol_after_failure(paused_patrol)
+            cancel_confirmed = _cancel_active_dock_alignment(
+                self.robot_client,
+                self.nav_state,
+            )
             return tool_response_json(
                 success=False,
                 status="error",
-                message=str(exc),
+                message=(
+                    str(exc)
+                    if cancel_confirmed
+                    else f"{exc}. Charging alignment cancellation could not be confirmed."
+                ),
                 robot_state_after="unknown",
             )
-        success = bool(result.get("success", result.get("ok", True)))
-        if not success:
-            self._restore_patrol_after_failure(paused_patrol)
+        if result.get("success") is not True:
+            cancel_confirmed = _cancel_active_dock_alignment(
+                self.robot_client,
+                self.nav_state,
+            )
             return tool_response_json(
                 success=False,
                 status="error",
-                message=_result_error(result, "Charging dock sequence failed."),
+                message=(
+                    _result_error(result, "Charging dock sequence failed.")
+                    if cancel_confirmed
+                    else (
+                        "Charging dock sequence failed and alignment cancellation "
+                        "could not be confirmed."
+                    )
+                ),
                 robot_state_after="unknown",
             )
+        self.nav_state.clear_dock_alignment()
         verification = str(result.get("charging_verification", "unknown") or "unknown")
         message = str(result.get("message", "") or "").strip()
         if not message:
-            message = "Successfully navigated to the charging approach and completed docking."
+            message = "Reached the charging approach and completed final dock alignment."
         return tool_response_json(
             success=True,
             status="completed",

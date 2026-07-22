@@ -49,6 +49,12 @@ def decide_idle_patrol_resume(
             state=RobotArbitrationState.PATROL_SUPPRESSED,
             reason="active_navigation_goal",
         )
+    if nav_state.has_active_dock_alignment():
+        return RobotArbitrationDecision(
+            allowed=False,
+            state=RobotArbitrationState.PATROL_SUPPRESSED,
+            reason="active_dock_alignment",
+        )
     if battery_cache is not None:
         if battery_cache.should_block_general_navigation():
             return RobotArbitrationDecision(

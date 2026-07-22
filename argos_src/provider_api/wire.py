@@ -24,6 +24,7 @@ OP_FOLLOW_WAYPOINTS = "navigation.follow_waypoints"
 OP_CANCEL_NAVIGATION = "navigation.cancel"
 OP_NAVIGATION_EVENT = "navigation.event"
 OP_CHARGING_DOCK = "dock.charging_sequence"
+OP_CANCEL_CHARGING_DOCK = "dock.cancel_charging_sequence"
 OP_SPOT_COMMAND = "spot.command"
 OP_DISPLAY_COMMAND = "display.command"
 OP_DISPLAY_AWAIT_RESPONSE = "display.await_response"
@@ -125,6 +126,7 @@ __all__ = [
     "OP_CAMERA_LATEST_RGBD",
     "OP_FACE_PRESENCE",
     "OP_CANCEL_NAVIGATION",
+    "OP_CANCEL_CHARGING_DOCK",
     "OP_CHARGING_DOCK",
     "OP_DISPLAY_AWAIT_RESPONSE",
     "OP_DISPLAY_COMMAND",

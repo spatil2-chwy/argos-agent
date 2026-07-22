@@ -247,6 +247,7 @@ def required_capability_ids_for_tool_id(
         return ()
     if raw_name.startswith("navigation."):
         if runtime_name in {
+            "navigate_to_location_blocking",
             "navigate_relative",
             "localize_current_location",
             "mark_return_point",
@@ -256,7 +257,7 @@ def required_capability_ids_for_tool_id(
             return ("navigation.goal", "transform.lookup")
         return ("navigation.goal",)
     if raw_name.startswith("dock."):
-        return ("dock.charging",)
+        return ("dock.final_alignment", "navigation.goal", "transform.lookup")
     if raw_name.startswith("posture."):
         return ("posture.command",)
     if raw_name.startswith("embodiment."):

@@ -42,6 +42,7 @@ tools:
     - navigation.follow_waypoints
     - navigation.cancel
     - navigation.stop_patrol
+    - dock.charging
 
 identity_memory:
   enabled: true

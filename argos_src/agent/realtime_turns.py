@@ -110,6 +110,11 @@ class QueuedTurn:
     function_call_item_ids: set[str] = field(default_factory=set)
     pending_call_ids: set[str] = field(default_factory=set)
     pending_tool_names_by_call_id: dict[str, str] = field(default_factory=dict)
+    active_tool_call_id: str = ""
+    active_tool_name: str = ""
+    active_tool_started_at: float = 0.0
+    active_tool_deadline_at: float = 0.0
+    last_tool_progress_at: float = 0.0
     response_outputs: dict[str, "ResponseOutputState"] = field(default_factory=dict)
     inference_owner_key: str = ""
     inference_scope_id: str = ""

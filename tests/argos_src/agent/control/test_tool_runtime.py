@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,10 @@ import numpy as np
 from argos_src.agent.control.tool_runtime import ToolRuntime
 from argos_src.agent.realtime_turns import PendingToolCall, QueuedTurn, ResponseOutputState
 from argos_src.tools.unitree_go2.vision.capture_scene import get_capture_scene_tool
+from argos_src.tools.execution import (
+    guard_tool_side_effect_start,
+    set_tool_execution_timeout,
+)
 
 
 class _Latency:
@@ -28,6 +33,7 @@ class _Tool:
 class _Host:
     def __init__(self) -> None:
         self.logger = SimpleNamespace(exception=lambda *_args, **_kwargs: None)
+        self._turn_lock = threading.RLock()
         self._turns_by_req_id = {}
         self._tool_registry = {"fake_tool": _Tool()}
         self._tool_latency = _Latency()
@@ -216,6 +222,104 @@ def test_tool_followup_waits_for_response_done_even_when_tool_finishes_first() -
     assert runtime.maybe_request_followup(turn, "resp-1") is True
     assert runtime.maybe_request_followup(turn, "resp-1") is False
     assert host.followups == [turn.req_id]
+
+
+def test_tool_runtime_arms_and_clears_per_call_deadline() -> None:
+    host = _Host()
+    turn = _turn()
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-plan"}
+    host._turns_by_req_id[turn.req_id] = turn
+    observed = {}
+
+    class _TimedTool:
+        name = "timed_tool"
+
+        def invoke(self, arguments):
+            set_tool_execution_timeout(95.0)
+            observed["arguments"] = arguments
+            observed["call_id"] = turn.active_tool_call_id
+            observed["budget"] = (
+                turn.active_tool_deadline_at - turn.active_tool_started_at
+            )
+            return {"success": True}
+
+    host._tool_registry["timed_tool"] = _TimedTool()
+    ToolRuntime(host).execute(
+        PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-plan",
+            tool_name="timed_tool",
+            arguments_json='{"distance": 5}',
+        )
+    )
+
+    assert observed == {
+        "arguments": {"distance": 5},
+        "call_id": "call-plan",
+        "budget": 95.0,
+    }
+    assert turn.active_tool_call_id == ""
+    assert turn.active_tool_deadline_at == 0.0
+
+
+def test_tool_runtime_discards_result_when_tool_finalizes_turn() -> None:
+    host = _Host()
+    turn = _turn()
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-late"}
+    host._turns_by_req_id[turn.req_id] = turn
+
+    class _LateTool:
+        name = "late_tool"
+
+        def invoke(self, _arguments):
+            turn.finalized = True
+            return {"success": True}
+
+    host._tool_registry["late_tool"] = _LateTool()
+    ToolRuntime(host).execute(
+        PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-late",
+            tool_name="late_tool",
+            arguments_json="{}",
+        )
+    )
+
+    assert host.registered_items == []
+    assert host.followups == []
+
+
+def test_tool_side_effect_guard_rejects_motion_after_timeout_claim() -> None:
+    host = _Host()
+    turn = _turn()
+    turn.pending_tool_calls = 1
+    turn.pending_call_ids = {"call-race"}
+    host._turns_by_req_id[turn.req_id] = turn
+    side_effects = []
+
+    class _RaceTool:
+        name = "race_tool"
+
+        def invoke(self, _arguments):
+            turn.finalized = True
+            with guard_tool_side_effect_start() as allowed:
+                if allowed:
+                    side_effects.append("started")
+            return {"success": True}
+
+    host._tool_registry["race_tool"] = _RaceTool()
+    ToolRuntime(host).execute(
+        PendingToolCall(
+            turn_req_id=turn.req_id,
+            call_id="call-race",
+            tool_name="race_tool",
+            arguments_json="{}",
+        )
+    )
+
+    assert side_effects == []
 
 
 def test_unknown_tool_returns_error_and_does_not_deadlock_chain() -> None:

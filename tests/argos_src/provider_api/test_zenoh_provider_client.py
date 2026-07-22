@@ -15,8 +15,11 @@ from argos_src.provider_api.namespaces import provider_event_key
 from argos_src.provider_api.transports.zenoh import ZenohProviderClient
 from argos_src.provider_api.wire import (
     OP_BATTERY_EVENT,
+    OP_CHARGING_DOCK,
+    OP_CANCEL_CHARGING_DOCK,
     OP_GO2_ACTION,
     OP_MOVE_VELOCITY,
+    OP_NAVIGATE_TO_POSE,
     OP_PUBLISH_VELOCITY,
     OP_STOP_MOTION,
     build_event,
@@ -201,6 +204,77 @@ def test_motion_calls_use_capability_contract():
     assert move_request["args"]["angular_z"] == 0.1
     assert publish_request["op"] == OP_PUBLISH_VELOCITY
     assert publish_request["args"]["angular_z"] == -0.25
+
+
+def test_blocking_navigation_uses_completion_budget_for_provider_request():
+    session = _FakeZenohSession()
+    session.responses[OP_NAVIGATE_TO_POSE] = {
+        "accepted": True,
+        "outcome": "succeeded",
+    }
+    client = _client(session)
+
+    client.navigate_to_pose(
+        goal_id="goal-1",
+        x=1.0,
+        y=2.0,
+        theta=0.5,
+        blocking=True,
+        timeout_sec=80.0,
+    )
+
+    request = _last_request(session)
+    assert request["args"]["timeout_sec"] == 80.0
+    assert request["timeout_ms"] == 85_000
+
+
+def test_nonblocking_navigation_keeps_short_provider_request_timeout():
+    session = _FakeZenohSession()
+    session.responses[OP_NAVIGATE_TO_POSE] = {"accepted": True}
+    client = _client(session)
+
+    client.navigate_to_pose(
+        goal_id="goal-1",
+        x=1.0,
+        y=2.0,
+        theta=0.5,
+        blocking=False,
+        timeout_sec=80.0,
+    )
+
+    request = _last_request(session)
+    assert request["timeout_ms"] == 3_000
+
+
+def test_charging_alignment_uses_fixed_budget_plus_provider_grace():
+    session = _FakeZenohSession()
+    session.responses[OP_CHARGING_DOCK] = {"success": True}
+    client = _client(session)
+
+    client.dock_for_charging(
+        approach_pose={"x": 1.0, "y": 2.0, "theta": 0.5, "frame_id": "map"},
+        dock_timeout_sec=60.0,
+        alignment_only=True,
+    )
+
+    request = _last_request(session)
+    assert request["op"] == OP_CHARGING_DOCK
+    assert request["args"]["alignment_only"] is True
+    assert request["args"]["dock_timeout_sec"] == 60.0
+    assert request["timeout_ms"] == 65_000
+
+
+def test_charging_alignment_cancel_uses_explicit_provider_operation():
+    session = _FakeZenohSession()
+    session.responses[OP_CANCEL_CHARGING_DOCK] = {"canceled": True}
+    client = _client(session)
+
+    result = client.cancel_charging_dock()
+
+    request = _last_request(session)
+    assert result == {"canceled": True}
+    assert request["op"] == OP_CANCEL_CHARGING_DOCK
+    assert request["args"] == {}
 
 
 def test_zero_velocity_uses_motion_stop_capability():

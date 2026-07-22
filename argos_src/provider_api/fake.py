@@ -24,6 +24,7 @@ class FakeProviderClient:
         self.navigation_goals: list[dict[str, Any]] = []
         self.spot_commands: list[dict[str, Any]] = []
         self.dock_requests: list[dict[str, Any]] = []
+        self.dock_cancel_requests = 0
         self.voice_commands: list[str] = []
         self.face_presence_snapshots: list[dict[str, Any]] = []
         self._battery: BatterySnapshot | None = None
@@ -203,13 +204,13 @@ class FakeProviderClient:
         timeout_sec: float | None = None,
         policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        del timeout_sec
         goal = {
             "goal_id": str(goal_id),
             "pose": {"x": float(x), "y": float(y), "theta": float(theta)},
             "target_label": str(target_label or ""),
             "tool_name": str(tool_name or "navigation"),
             "blocking": bool(blocking),
+            "timeout_sec": None if timeout_sec is None else float(timeout_sec),
             "policy": dict(policy or {}),
         }
         with self._lock:
@@ -273,10 +274,12 @@ class FakeProviderClient:
         *,
         approach_pose: dict[str, float],
         dock_timeout_sec: float = 60.0,
+        alignment_only: bool = False,
     ) -> dict[str, Any]:
         request = {
             "approach_pose": dict(approach_pose or {}),
             "dock_timeout_sec": float(dock_timeout_sec),
+            "alignment_only": bool(alignment_only),
         }
         with self._lock:
             self.dock_requests.append(request)
@@ -285,6 +288,11 @@ class FakeProviderClient:
             "message": "Docked.",
             "charging_verification": "unknown",
         }
+
+    def cancel_charging_dock(self) -> dict[str, Any]:
+        with self._lock:
+            self.dock_cancel_requests += 1
+        return {"canceled": True}
 
     def perform_spot_command(
         self,

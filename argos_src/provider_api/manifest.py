@@ -24,6 +24,7 @@ ALLOWED_CAPABILITY_IDS = frozenset(
         "battery.state",
         "navigation.goal",
         "dock.charging",
+        "dock.final_alignment",
         "display.command",
         "display.interaction",
         "display.image",

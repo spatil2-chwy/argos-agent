@@ -167,6 +167,7 @@ class NavigationState:
         self._last_goal_handle: Any = None
         self._handle_lock = threading.Lock()
         self._active_goal: Optional[dict[str, Any]] = None
+        self._dock_alignment_active = False
         self._goal_lock = threading.Lock()
         self._goal_counter = 0
         self._goal_result_delivery: dict[str, str] = {}
@@ -290,6 +291,41 @@ class NavigationState:
             self._notify_active_goal_changed()
         return cleared
 
+    def mark_active_goal_cancel_unconfirmed(self, goal_id: str) -> bool:
+        """Keep an uncertain provider goal active and block replacement goals."""
+        marked = False
+        with self._goal_lock:
+            if self._active_goal and self._active_goal.get("goal_id") == goal_id:
+                self._active_goal["cancel_unconfirmed"] = True
+                marked = True
+        if marked:
+            self._notify_active_goal_changed()
+        return marked
+
+    def has_unconfirmed_active_goal(self) -> bool:
+        with self._goal_lock:
+            return bool(
+                self._active_goal and self._active_goal.get("cancel_unconfirmed", False)
+            )
+
+    def begin_dock_alignment(self) -> None:
+        with self._goal_lock:
+            self._dock_alignment_active = True
+        self._notify_active_goal_changed()
+
+    def clear_dock_alignment(self) -> None:
+        changed = False
+        with self._goal_lock:
+            if self._dock_alignment_active:
+                self._dock_alignment_active = False
+                changed = True
+        if changed:
+            self._notify_active_goal_changed()
+
+    def has_active_dock_alignment(self) -> bool:
+        with self._goal_lock:
+            return self._dock_alignment_active
+
     def get_active_goal(self) -> Optional[dict[str, Any]]:
         with self._goal_lock:
             if self._active_goal is None:
@@ -318,7 +354,11 @@ class NavigationState:
     def get_active_policy(self) -> Optional[NavigationPolicy]:
         with self._goal_lock:
             if self._active_goal is None:
-                return None
+                return (
+                    CHARGING_DOCK_NAVIGATION_POLICY
+                    if self._dock_alignment_active
+                    else None
+                )
             policy = self._active_goal.get("policy")
             if isinstance(policy, NavigationPolicy):
                 return policy

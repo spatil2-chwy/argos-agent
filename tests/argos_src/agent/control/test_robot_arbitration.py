@@ -12,6 +12,7 @@ class _NavState:
     def __init__(self) -> None:
         self.patrol = {"enabled": True, "awaiting_target": "kitchen"}
         self.active_goal = None
+        self.dock_alignment_active = False
         self.face_attention_allowed = True
 
     def get_patrol(self):
@@ -19,6 +20,9 @@ class _NavState:
 
     def get_active_goal(self):
         return self.active_goal
+
+    def has_active_dock_alignment(self):
+        return self.dock_alignment_active
 
     def allows_proactive_face_attention(self):
         return self.face_attention_allowed
@@ -46,6 +50,21 @@ def test_idle_patrol_resume_policy_allows_targeted_patrol() -> None:
     assert decision.allowed is True
     assert decision.state == "patrol_allowed"
     assert decision.fields == {"target_label": "kitchen"}
+
+
+def test_idle_patrol_resume_policy_blocks_active_dock_alignment() -> None:
+    nav_state = _NavState()
+    nav_state.dock_alignment_active = True
+
+    decision = decide_idle_patrol_resume(
+        nav_state=nav_state,
+        coalescer=object(),
+        battery_cache=SimpleNamespace(should_block_general_navigation=lambda: False),
+    )
+
+    assert decision.allowed is False
+    assert decision.state == "patrol_suppressed"
+    assert decision.reason == "active_dock_alignment"
 
 
 def test_proactive_face_attention_policy_blocks_recording_before_greeting() -> None:

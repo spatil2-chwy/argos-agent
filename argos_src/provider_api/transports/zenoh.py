@@ -10,12 +10,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import threading
 from typing import Any, Callable
 
 import numpy as np
 
+from argos_src.provider_api.deadlines import PROVIDER_RESPONSE_GRACE_SEC
 from argos_src.provider_api.manifest import ProviderManifest
 from argos_src.provider_api.namespaces import (
     normalize_provider_prefix,
@@ -34,6 +36,7 @@ from argos_src.provider_api.models import (
 from argos_src.provider_api.wire import (
     OP_BATTERY_EVENT,
     OP_BATTERY_SNAPSHOT,
+    OP_CANCEL_CHARGING_DOCK,
     OP_CANCEL_NAVIGATION,
     OP_CAMERA_INTRINSICS,
     OP_CAMERA_LATEST_IMAGE,
@@ -405,7 +408,12 @@ class ZenohProviderClient:
                 "policy": dict(policy or {}),
             },
             timeout_ms=(
-                max(_seconds_to_ms(float(timeout_sec)), self.timeout_ms)
+                max(
+                    _seconds_to_ms(
+                        float(timeout_sec) + PROVIDER_RESPONSE_GRACE_SEC
+                    ),
+                    self.timeout_ms,
+                )
                 if blocking and timeout_sec is not None
                 else self.timeout_ms
             ),
@@ -454,15 +462,23 @@ class ZenohProviderClient:
         *,
         approach_pose: dict[str, float],
         dock_timeout_sec: float = 60.0,
+        alignment_only: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             OP_CHARGING_DOCK,
             {
                 "approach_pose": dict(approach_pose or {}),
                 "dock_timeout_sec": float(dock_timeout_sec),
+                "alignment_only": bool(alignment_only),
             },
-            timeout_ms=max(_seconds_to_ms(float(dock_timeout_sec) + 60.0), self.timeout_ms),
+            timeout_ms=max(
+                _seconds_to_ms(float(dock_timeout_sec) + PROVIDER_RESPONSE_GRACE_SEC),
+                self.timeout_ms,
+            ),
         )
+
+    def cancel_charging_dock(self) -> dict[str, Any]:
+        return self._request(OP_CANCEL_CHARGING_DOCK, {})
 
     def perform_spot_command(
         self,
@@ -666,7 +682,13 @@ def _parse_endpoints(raw: str) -> tuple[str, ...]:
 
 
 def _seconds_to_ms(seconds: float) -> int:
-    return max(1, int(float(seconds) * 1000.0))
+    rendered_seconds = float(seconds)
+    if not math.isfinite(rendered_seconds) or rendered_seconds <= 0.0:
+        raise ValueError("Provider timeout must be a finite positive number.")
+    rendered_ms = rendered_seconds * 1000.0
+    if not math.isfinite(rendered_ms) or rendered_seconds > threading.TIMEOUT_MAX:
+        raise ValueError("Provider timeout is unsupported on this platform.")
+    return max(1, int(rendered_ms))
 
 
 def _undeclare(handle: Any) -> None:
