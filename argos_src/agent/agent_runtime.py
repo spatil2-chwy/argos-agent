@@ -349,6 +349,7 @@ class RealtimeRobotAgent:
 
         self._recording_lock = threading.RLock()
         self._recording_active = False
+        self._audio_turn_pending_registration = False
         self._recording_started_at = 0.0
         self._last_voice_at = 0.0
         self._current_primary_face_person_id: Optional[str] = None
@@ -975,6 +976,7 @@ class RealtimeRobotAgent:
         speech_end_unix_s: float,
         face_evidence_fields: dict[str, Any] | None = None,
         raw_face_snapshot: Any = None,
+        req_id: str = "",
     ) -> None:
         self._audio_controller()._commit_audio_turn(
             primary_face_person_id,
@@ -985,6 +987,7 @@ class RealtimeRobotAgent:
             speech_end_perf_s,
             speech_end_unix_s,
             raw_face_snapshot,
+            req_id,
         )
 
     def _maybe_submit_adaptive_face_observation(
@@ -1721,9 +1724,12 @@ class RealtimeRobotAgent:
         return max(0.0, time.time() - self._last_external_input_s)
 
     def is_recording_active(self) -> bool:
-        """Return True while local speech capture is actively buffering audio."""
+        """Return True while audio is recording or awaiting turn registration."""
         with self._recording_lock:
-            return bool(self._recording_active)
+            return bool(
+                self._recording_active
+                or getattr(self, "_audio_turn_pending_registration", False)
+            )
 
     # ------------------------------------------------------------------
     # Setup

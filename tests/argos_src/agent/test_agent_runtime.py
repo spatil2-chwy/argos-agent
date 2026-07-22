@@ -1158,6 +1158,135 @@ def test_recording_gesture_does_not_block_audio_finalize():
     assert any(evt.get("event") == "speech_end" for evt in agent._latency.events)
 
 
+def test_speech_end_claims_engagement_before_speaker_resolution_finishes():
+    import numpy as np
+
+    resolution_started = threading.Event()
+    release_resolution = threading.Event()
+
+    class _StatefulEngagement(_FakeEngagement):
+        def __init__(self):
+            super().__init__()
+            self.state = "alert"
+
+        def on_human_input(self, req_id):
+            super().on_human_input(req_id)
+            self.state = "engaged"
+
+    class _BlockingSpeakerService(_FakeSpeakerService):
+        def resolve_turn_owner(self, **kwargs):
+            resolution_started.set()
+            release_resolution.wait(timeout=2.0)
+            return super().resolve_turn_owner(**kwargs)
+
+    agent = _make_agent()
+    agent.engagement = _StatefulEngagement()
+    agent.speaker_service = _BlockingSpeakerService()
+    agent.gesture_runtime = None
+    agent._current_primary_face_person_id = "person-1"
+    agent._current_visible_face_person_ids = ("person-1",)
+    agent._current_turn_audio_chunks = [b"\x01\x02"]
+    agent._session_ready = threading.Event()
+    agent._session_ready.set()
+    req_id = ""
+
+    try:
+        agent._finalize_recording_locked(now_s=11.0)
+
+        assert resolution_started.wait(timeout=1.0)
+        assert agent.engagement.state == "engaged"
+        assert len(agent.engagement.human_inputs) == 1
+        req_id = agent.engagement.human_inputs[0]
+        assert req_id.startswith("rt-")
+        speech_end = next(
+            event for event in agent._latency.events if event.get("event") == "speech_end"
+        )
+        assert speech_end["req_id"] == req_id
+        assert req_id not in agent._turns_by_req_id
+        assert agent._audio_turn_pending_registration is True
+        assert agent.is_recording_active() is True
+
+        sent_count = len(agent._sent_events)
+        agent._capture_callback(
+            np.zeros((1600, 1), dtype=np.int16),
+            1600,
+            None,
+            None,
+        )
+        assert agent._recording_active is False
+        assert len(agent._sent_events) == sent_count
+    finally:
+        release_resolution.set()
+
+    deadline = time.time() + 1.0
+    while req_id not in agent._turns_by_req_id and time.time() < deadline:
+        time.sleep(0.01)
+    assert req_id in agent._turns_by_req_id
+    assert agent.engagement.human_inputs == [req_id]
+    assert agent._audio_turn_pending_registration is False
+
+
+def test_audio_commit_failure_releases_early_engagement_claim():
+    agent = _make_agent()
+    agent._send_event = lambda _event: (_ for _ in ()).throw(RuntimeError("commit failed"))
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-1",
+        visible_face_person_ids=("person-1",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+        req_id="rt-commit-failed",
+    )
+
+    assert agent._capture_state == "admission_closed"
+    assert agent._audio_turn_pending_registration is False
+    assert agent.engagement.human_inputs == ["rt-commit-failed"]
+    assert agent.engagement.done == [("rt-commit-failed", False)]
+
+
+def test_audio_commit_worker_start_failure_releases_pending_registration(monkeypatch):
+    agent = _make_agent()
+    agent.gesture_runtime = None
+
+    def fail_start(_thread):
+        raise RuntimeError("thread start failed")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+
+    agent._finalize_recording_locked(now_s=11.0)
+
+    assert agent._audio_turn_pending_registration is False
+    assert agent._capture_state == "admission_closed"
+    assert agent.engagement.human_inputs == []
+
+
+def test_owner_resolution_failure_releases_pending_registration_and_engagement():
+    agent = _make_agent()
+    agent._audio_turn_pending_registration = True
+    agent._face_owner_resolution = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("owner resolution failed")
+    )
+
+    agent._commit_audio_turn(
+        primary_face_person_id="person-1",
+        visible_face_person_ids=("person-1",),
+        audio_pcm16=b"\x01\x02",
+        capture_vad_positive_blocks=1,
+        speech_end_perf_s=1.0,
+        speech_end_unix_s=2.0,
+        req_id="rt-owner-failed",
+    )
+
+    assert {event["type"] for event in agent._sent_events} == {
+        "input_audio_buffer.commit"
+    }
+    assert agent._audio_turn_pending_registration is False
+    assert agent.engagement.human_inputs == ["rt-owner-failed"]
+    assert agent.engagement.done == [("rt-owner-failed", False)]
+
+
 def test_audio_face_uses_only_strict_primary_face_id():
     agent = _make_agent()
     agent.speaker_service = _FakeSpeakerService(
