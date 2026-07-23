@@ -97,7 +97,10 @@ The runtime currently builds these blocks:
 `[PERSON SPEAKING TO YOU]` may include Tailwag's prompt-ready
 `context_markdown` for the resolved turn owner. Argos keeps verified
 identity/work lines under `Directory`, then pastes the Tailwag memory block
-directly. The current Tailwag block is headed `[PERSON MEMORY]` and may include
+directly. Argos includes its stable manifest robot ID in that lookup, so the
+block contains robot-free memories and memories involving this robot, but not
+memories supported only by another robot's interactions. The current Tailwag
+block is headed `[PERSON MEMORY]` and may include
 subsections such as `Preferences`, `Pets`, `Facts`, `Potential Follow-Ups`, and
 `Recent Episodes`.
 

@@ -86,10 +86,12 @@ camera + optional depth
 
 Tailwag is the semantic memory writer and person-context source. Argos sends the
 full active conversation episode to Tailwag from speaker-owned realtime turn
-text. Prompt views keep Argos-owned `Directory` lines and paste Tailwag's
-`context_markdown` block, currently headed `[PERSON MEMORY]`, into the resolved
-speaker context. See `identity_memory.md` for the Tailwag-backed provider
-contract.
+text, with one host Robot identity derived from the selected manifest. The
+Robot travels on the existing episode-record request; there is no additional
+realtime provider call. Prompt views keep Argos-owned `Directory` lines and
+paste Tailwag's `context_markdown` block, currently headed `[PERSON MEMORY]`,
+into the resolved speaker context. See `identity_memory.md` for the
+Tailwag-backed provider contract.
 
 Important distinctions:
 
@@ -239,4 +241,4 @@ as subtitles.
 - Use `speaker_recognition.md` for voice enrollment, audio ownership, strict face ownership, and voice-reference management.
 - Use `interaction_display.md` for the Puffle browser display resource and enrollment review UI.
 - Use `face_recognition.md` for face detection, identity assignment, proactive alerts, and preference extraction.
-- Use `identity_memory.md` for Tailwag-backed person profiles, biometric references, episodes, semantic search, Slack ingestion, and reset boundaries.
+- Use `identity_memory.md` for Tailwag-backed person profiles, biometric references, Robot episode provenance, episodes, semantic search, Slack ingestion, and reset boundaries.

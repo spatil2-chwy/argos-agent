@@ -178,7 +178,7 @@ The supported live launcher does not currently expose `--input-device` or `--out
 
 If you need to change audio devices, edit the retained profile:
 
-[static_interaction.yaml](/home/spatil2/argos-agent/config/profiles/static_interaction.yaml)
+[static_interaction.yaml](../config/profiles/static_interaction.yaml)
 
 The relevant fields are:
 
@@ -300,7 +300,7 @@ The current runtime emits realtime-oriented events such as:
 - `response_create`
 - `first_audio_latency_s`
 
-See [observability.md](/home/spatil2/argos-agent/docs/observability.md) for details.
+See [observability.md](observability.md) for details.
 
 Two important runtime notes:
 

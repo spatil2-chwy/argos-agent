@@ -241,6 +241,8 @@ def create_identity_memory_client_for_profile(
     return TailwagHttpIdentityMemoryClient(
         provider_client=client,
         resource_id=resource.id,
+        robot_id=profile.robot.id,
+        robot_display_name=profile.robot.display_name,
         site_code=str(site_code or profile.identity_memory.site_code or "").strip(),
         place_room_id=profile.identity_memory.place_room_id,
         retention_class=profile.identity_memory.retention_class,
