@@ -232,12 +232,17 @@ python3 -m scripts.labs.biometric_enrollment_lab push
 python3 -m scripts.labs.biometric_enrollment_lab cleanup
 ```
 
+Follow the complete safety, capture, push, retry, verification, and retention
+procedure in [biometric_enrollment_lab.md](biometric_enrollment_lab.md).
+
 `capture` makes no Tailwag/identity-memory request, although configured camera
-and display providers may use their own endpoints. `push` requires the matching
-Tailwag face-existence endpoint to be deployed first. It verifies an active
-person, checks existing face and voice references, and fails closed if either
-check is unavailable or malformed. Before embeddings are sent, the operator
-must confirm subject consent and type the canonical name. Push uploads only
+and display providers may use their own endpoints. `push` requires a selected
+identity-memory resource with both `memory.identity` and `memory.biometrics`,
+and the matching Tailwag face-existence endpoint must be deployed first. It
+resolves exactly one employee-directory record from the captured email prefix,
+verifies the official name, validates an existing Person when present, checks existing face and voice references, and fails closed if
+either check is unavailable or malformed. Before embeddings are sent,
+the operator must confirm subject consent and type the canonical name. Push uploads only
 missing aggregate vectors, journals each modality independently, and never
 deletes local files. `--provider-transport fake` is not a push dry-run.
 `cleanup` permanently removes a selected intact, upload-complete local bundle;

@@ -220,7 +220,7 @@ class TailwagHttpIdentityMemoryClient:
                 "consent_status": consent_status,
             },
         )
-        return _enrollment_result(result)
+        return _enrollment_result(result, expected_person_id=person_id)
 
     def observe_face_embedding(
         self,
@@ -292,7 +292,7 @@ class TailwagHttpIdentityMemoryClient:
                 "consent_status": consent_status,
             },
         )
-        return _enrollment_result(result)
+        return _enrollment_result(result, expected_person_id=person_id)
 
     def observe_voice_embedding(
         self,
@@ -623,6 +623,7 @@ def _validate_biometric_search_payload(value: Any) -> None:
         or not isinstance(candidates, (list, tuple))
         or isinstance(threshold, bool)
         or not isinstance(threshold, (int, float))
+        or not np.isfinite(float(threshold))
         or not isinstance(reason, str)
         or not reason.strip()
     ):
@@ -636,6 +637,7 @@ def _validate_biometric_search_payload(value: Any) -> None:
             or not str(item.get("person_id") or "").strip()
             or isinstance(item.get("score"), bool)
             or not isinstance(item.get("score"), (int, float))
+            or not np.isfinite(float(item["score"]))
         ):
             raise ValueError("Malformed Tailwag biometric search candidate")
 
@@ -665,14 +667,43 @@ def _candidate(value: Any) -> BiometricCandidate:
     )
 
 
-def _enrollment_result(value: Any) -> BiometricEnrollmentResult:
+def _enrollment_result(
+    value: Any,
+    *,
+    expected_person_id: str = "",
+) -> BiometricEnrollmentResult:
     payload = _plain(value)
+    if not isinstance(payload, dict) or not isinstance(payload.get("saved"), bool):
+        raise ValueError("Malformed Tailwag biometric enrollment response")
+    for field_name in ("status", "reason", "person_id", "reference_id"):
+        if not isinstance(payload.get(field_name), str):
+            raise ValueError("Malformed Tailwag biometric enrollment response")
+    saved = payload["saved"]
+    status = payload["status"].strip()
+    reason = payload["reason"].strip()
+    person_id = payload["person_id"].strip()
+    reference_id = payload["reference_id"].strip()
+    rendered_expected = str(expected_person_id or "").strip()
+    if rendered_expected and person_id != rendered_expected:
+        raise ValueError(
+            f"Tailwag biometric enrollment returned person {person_id or 'missing'}, "
+            f"expected {rendered_expected}"
+        )
+    if saved and (
+        status != "saved"
+        or reason != "saved"
+        or not person_id
+        or not reference_id
+    ):
+        raise ValueError("Malformed Tailwag biometric enrollment success response")
+    if not saved and (status != "rejected" or not reason or not person_id):
+        raise ValueError("Malformed Tailwag biometric enrollment rejection response")
     return BiometricEnrollmentResult(
-        saved=bool(payload.get("saved")),
-        status=str(payload.get("status") or ""),
-        reason=str(payload.get("reason") or ""),
-        person_id=str(payload.get("person_id") or ""),
-        reference_id=str(payload.get("reference_id") or ""),
+        saved=saved,
+        status=status,
+        reason=reason,
+        person_id=person_id,
+        reference_id=reference_id,
     )
 
 

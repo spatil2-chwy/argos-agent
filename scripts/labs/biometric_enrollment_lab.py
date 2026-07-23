@@ -21,7 +21,6 @@ from dataclasses import asdict, is_dataclass
 import json
 import logging
 from pathlib import Path
-import re
 import sys
 import time
 from typing import Any
@@ -96,7 +95,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Capture biometrics locally, then list, push, or clean completed bundles.",
         usage="%(prog)s {capture PERSON_NAME|list|push|cleanup} [options]",
         epilog=(
-            "A legacy name-only capture is still accepted. --commit was removed; "
+            "Capture requires the employee email prefix via --username. "
+            "--commit was removed; "
             "run capture first, then run push for an approved upload."
         ),
     )
@@ -113,7 +113,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cleanup", action="store_true", help="Choose and delete a completed bundle."
     )
     parser.add_argument("--site-code", default="", help="Tailwag/Snowflake site code, e.g. BOS3.")
-    parser.add_argument("--username", default="", help="Verified directory username, if known.")
+    parser.add_argument(
+        "--username",
+        default="",
+        help="Employee email prefix/directory username; required for capture.",
+    )
     parser.add_argument(
         "--person-id",
         default="",
@@ -203,22 +207,6 @@ def _plain(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     return value
-
-
-def _slug_person_id(name: str, metadata: dict[str, Any] | None = None) -> str:
-    metadata = dict(metadata or {})
-    username = str(metadata.get("username") or "").strip().lower()
-    if username:
-        return f"person_{username}"
-    email = str(metadata.get("employee_email") or metadata.get("email") or "").strip().lower()
-    if email and "@" in email:
-        return f"person_{email.split('@', 1)[0]}"
-    slug = "_".join(
-        part
-        for part in re.sub(r"[^a-zA-Z0-9]+", " ", str(name or "").casefold()).split()
-        if part
-    )
-    return f"person_{slug}" if slug else "person_unknown"
 
 
 def _split_name(name: str) -> tuple[str, str]:
@@ -345,11 +333,10 @@ def _identity_from_args(
             payload["site_code"] = site_code
             payload["resolution"] = {"status": "verified_profile"}
             return payload
-        if not args.allow_unresolved:
-            raise RuntimeError(
-                f"Could not verify username={username!r} with official_name={person_name!r}. "
-                "Use --person-id or --allow-unresolved only if this is intentional."
-            )
+        raise RuntimeError(
+            f"Could not verify username={username!r} with official_name={person_name!r}. "
+            "Check the employee email prefix and official name."
+        )
 
     first_name, last_name = _split_name(person_name)
     resolution = identity_memory.resolve_identity(
@@ -372,34 +359,15 @@ def _identity_from_args(
             payload["site_code"] = site_code
             payload["resolution"] = resolution_payload
             return payload
-        if not args.allow_unresolved:
-            raise RuntimeError(
-                "Directory resolution succeeded, but Tailwag did not return a "
-                "verified canonical profile."
-            )
-        metadata = {**candidate, "username": candidate_username, "site_code": site_code}
-        return {
-            **metadata,
-            "person_id": _slug_person_id(candidate_name, metadata),
-            "official_name": candidate_name,
-            "display_name": candidate_name,
-            "resolution": resolution_payload,
-        }
-
-    if not args.allow_unresolved:
         raise RuntimeError(
-            "Directory resolution did not produce a single verified person: "
-            f"{json.dumps(resolution_payload, sort_keys=True, default=str)}. "
-            "Use --person-id or --allow-unresolved only if this is intentional."
+            "Directory resolution succeeded, but Tailwag did not return a "
+            "verified canonical profile from the employee directory."
         )
-    metadata = {"username": username, "site_code": site_code}
-    return {
-        **metadata,
-        "person_id": _slug_person_id(person_name, metadata),
-        "official_name": person_name,
-        "display_name": person_name,
-        "resolution": resolution_payload,
-    }
+
+    raise RuntimeError(
+        "Directory resolution did not produce a single verified employee: "
+        f"{json.dumps(resolution_payload, sort_keys=True, default=str)}."
+    )
 
 
 def _capture_face_sample(
@@ -788,6 +756,10 @@ def main() -> int:
     if int(args.photos) < 5 or int(args.voice_clips) < 5:
         parser.error(
             "--photos and --voice-clips must each be at least 5 for identity consistency."
+        )
+    if not str(args.username or "").strip():
+        parser.error(
+            "--username is required for capture; pass the employee email prefix."
         )
 
     display = None

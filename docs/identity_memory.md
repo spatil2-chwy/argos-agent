@@ -146,7 +146,12 @@ Interrupted/incomplete, corrupt, or tampered bundles are retained for
 administrator review and are not eligible for normal cleanup.
 
 Push requires a verified canonical directory identity; when a Person node
-already exists, it must explicitly be active. The bundle binds all retries to
+already exists, it must explicitly be active. A pre-existing Person node or
+operator-supplied Person ID is not required. Capture stores the required email
+prefix in `username`; push resolves exactly one employee-directory record for
+that prefix and verifies the official name. Tailwag reuses a linked or unique
+email-matched Person, or creates the Person during first biometric enrollment.
+The bundle binds all retries to
 that identity and calls
 `memory.biometrics_face_references_exists` and
 `memory.biometrics_voice_references_exists`, and uploads only missing

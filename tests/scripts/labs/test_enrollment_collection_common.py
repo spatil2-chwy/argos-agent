@@ -82,7 +82,10 @@ def _identity_memory_profile(
     )
 
 
-def _memory_manifest(*, capability: str = "memory.identity") -> ProviderManifest:
+def _memory_manifest(
+    *,
+    capabilities: tuple[str, ...] = ("memory.identity", "memory.biometrics"),
+) -> ProviderManifest:
     return ProviderManifest(
         id="lab",
         display_name="Lab",
@@ -100,7 +103,7 @@ def _memory_manifest(*, capability: str = "memory.identity") -> ProviderManifest
                 id="memory",
                 kind="memory",
                 provider="memory-provider",
-                capabilities=(capability,),
+                capabilities=capabilities,
             ),
         ),
     )
@@ -145,9 +148,20 @@ def test_create_identity_memory_client_for_profile_uses_manifest_resource(monkey
 
 
 def test_create_identity_memory_client_for_profile_rejects_non_memory_resource():
-    profile = _identity_memory_profile(manifest=_memory_manifest(capability="camera.rgb"))
+    profile = _identity_memory_profile(
+        manifest=_memory_manifest(capabilities=("camera.rgb",))
+    )
 
     with pytest.raises(ValueError, match="memory.identity"):
+        create_identity_memory_client_for_profile(profile)
+
+
+def test_create_identity_memory_client_for_profile_requires_biometrics_capability():
+    profile = _identity_memory_profile(
+        manifest=_memory_manifest(capabilities=("memory.identity",))
+    )
+
+    with pytest.raises(ValueError, match="memory.biometrics"):
         create_identity_memory_client_for_profile(profile)
 
 

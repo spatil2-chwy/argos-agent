@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from argos_src.agent.preference_types import PreferenceSegment, PreferenceSegmentTurn
+from argos_src.identity_memory.protocol import IdentityMemoryClient
 from argos_src.identity_memory.tailwag_http import TailwagHttpIdentityMemoryClient
 
 
@@ -147,22 +150,157 @@ def test_tailwag_search_calls_match_http_provider_contract():
     assert voice_call["site_code"] == "BOS3"
 
 
-def test_tailwag_global_strict_search_omits_site_scope():
+@pytest.mark.parametrize(
+    ("method_name", "embedding", "operation"),
+    [
+        ("search_face", (0.1, 0.2), "memory.biometrics_face_search"),
+        ("search_voice", (0.3, 0.4), "memory.biometrics_voice_search"),
+    ],
+)
+def test_tailwag_global_strict_search_omits_site_scope(
+    method_name, embedding, operation
+):
     provider = _StrictProviderClient()
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
         site_code="BOS3",
     )
 
-    result = client.search_face(
-        embedding=(0.1, 0.2),
+    result = getattr(client, method_name)(
+        embedding=embedding,
         global_scope=True,
         strict_response=True,
     )
 
     assert result.recognized is True
+    assert provider.calls[0][0] == operation
     assert provider.calls[0][1]["site_code"] is None
+
+
+@pytest.mark.parametrize("method_name", ["search_face", "search_voice"])
+def test_identity_memory_search_protocol_matches_tailwag_client_options(method_name):
+    protocol_signature = inspect.signature(
+        getattr(IdentityMemoryClient, method_name)
+    )
+    client_signature = inspect.signature(
+        getattr(TailwagHttpIdentityMemoryClient, method_name)
+    )
+
+    assert protocol_signature == client_signature
+
+
+@pytest.mark.parametrize(
+    ("method_name", "payload"),
+    [
+        (
+            "search_face",
+            {
+                "recognized": False,
+                "reason": "below_threshold",
+                "threshold": float("nan"),
+                "candidates": [{"person_id": "person-1", "score": 0.5}],
+            },
+        ),
+        (
+            "search_voice",
+            {
+                "recognized": True,
+                "reason": "matched",
+                "threshold": 0.5,
+                "candidates": [{"person_id": "person-1", "score": float("inf")}],
+            },
+        ),
+    ],
+)
+def test_tailwag_strict_search_fails_closed_on_nonfinite_payload(method_name, payload):
+    class _NonfiniteProvider:
+        def request(self, **kwargs):
+            return payload
+
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=_NonfiniteProvider(),
+        resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
+    )
+
+    result = getattr(client, method_name)(embedding=(0.1, 0.2), strict_response=True)
+
+    assert result.recognized is False
+    assert result.reason == "tailwag_unavailable"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "saved": "false",
+            "status": "saved",
+            "reason": "saved",
+            "person_id": "person-1",
+            "reference_id": "face-ref",
+        },
+        {
+            "saved": True,
+            "status": "saved",
+            "reason": "saved",
+            "person_id": "person-1",
+            "reference_id": "",
+        },
+        {
+            "saved": True,
+            "status": "saved",
+            "reason": "saved",
+            "person_id": "person-other",
+            "reference_id": "face-ref",
+        },
+    ],
+)
+def test_tailwag_enrollment_response_validation_fails_closed(payload):
+    class PayloadProvider:
+        def request(self, **kwargs):
+            return payload
+
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=PayloadProvider(),
+        resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
+    )
+
+    with pytest.raises(ValueError, match="Tailwag biometric enrollment"):
+        client.enroll_face_reference(
+            person_id="person-1", embedding=(0.1, 0.2)
+        )
+
+
+def test_tailwag_enrollment_response_preserves_valid_rejection():
+    class RejectionProvider:
+        def request(self, **kwargs):
+            return {
+                "saved": False,
+                "status": "rejected",
+                "reason": "write_failed",
+                "person_id": "person-1",
+                "reference_id": "",
+            }
+
+    client = TailwagHttpIdentityMemoryClient(
+        provider_client=RejectionProvider(),
+        resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
+    )
+
+    result = client.enroll_face_reference(
+        person_id="person-1", embedding=(0.1, 0.2)
+    )
+
+    assert result.saved is False
+    assert result.reason == "write_failed"
 
 
 def test_tailwag_biometric_write_calls_match_http_provider_contract():
@@ -212,6 +350,8 @@ def test_tailwag_biometric_existence_calls_match_http_provider_contract():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=provider,
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     assert client.biometric_reference_exists(modality="face", person_id="person-1") is False
@@ -236,6 +376,8 @@ def test_tailwag_biometric_existence_check_fails_closed_on_malformed_response():
     client = TailwagHttpIdentityMemoryClient(
         provider_client=_MalformedProviderClient(),
         resource_id="memory",
+        robot_id="cody",
+        robot_display_name="Cody",
     )
 
     with pytest.raises(RuntimeError, match="invalid face reference-existence response"):

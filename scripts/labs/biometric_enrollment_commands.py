@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import math
 import time
 from typing import Any, Callable
 
@@ -87,7 +88,6 @@ def _bundle_identity_args(bundle: BiometricEnrollmentBundle) -> argparse.Namespa
         person_name=str(person.get("name") or "").strip(),
         username=str(metadata.get("username") or "").strip(),
         person_id="",
-        allow_unresolved=False,
     )
 
 
@@ -101,6 +101,41 @@ def _plain(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_plain(item) for item in value]
     return value
+
+
+def _validated_enrollment_payload(
+    value: Any,
+    *,
+    modality: str,
+    person_id: str,
+) -> dict[str, Any]:
+    payload = _plain(value)
+    if not isinstance(payload, dict) or payload.get("saved") is not True:
+        reason = (
+            str(payload.get("reason") or "unknown reason")
+            if isinstance(payload, dict)
+            else "malformed response"
+        )
+        raise RuntimeError(f"Tailwag rejected {modality} enrollment: {reason}")
+    returned_person_id = payload.get("person_id")
+    reference_id = payload.get("reference_id")
+    if payload.get("status") != "saved" or payload.get("reason") != "saved":
+        raise RuntimeError(f"Tailwag returned a malformed {modality} enrollment success.")
+    if (
+        not isinstance(returned_person_id, str)
+        or returned_person_id.strip() != person_id
+    ):
+        rendered_returned = (
+            returned_person_id.strip()
+            if isinstance(returned_person_id, str)
+            else ""
+        )
+        raise RuntimeError(
+            f"Tailwag returned enrollment for {rendered_returned or 'no person'}."
+        )
+    if not isinstance(reference_id, str) or not reference_id.strip():
+        raise RuntimeError(f"Tailwag returned a malformed {modality} enrollment success.")
+    return payload
 
 
 def _validate_enrollable_profile(payload: dict[str, Any], *, person_id: str) -> None:
@@ -217,6 +252,7 @@ def _ensure_no_cross_person_match(
         or not isinstance(raw_candidates, (list, tuple))
         or isinstance(threshold, bool)
         or not isinstance(threshold, (int, float))
+        or not math.isfinite(float(threshold))
     ):
         raise RuntimeError(f"Tailwag {modality} conflict search was malformed.")
     if recognized and not raw_candidates:
@@ -231,6 +267,7 @@ def _ensure_no_cross_person_match(
             not matched_person_id
             or isinstance(score, bool)
             or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
         ):
             raise RuntimeError(f"Tailwag {modality} conflict candidate was malformed.")
         if matched_person_id != person_id and float(score) >= float(threshold):
@@ -358,6 +395,7 @@ def push_local_bundle(
                     "bundle_id": verified.bundle_id,
                     "display_name": canonical_name,
                     "official_name": str(person.get("official_name") or canonical_name),
+                    "employee_email": str(person.get("employee_email") or ""),
                     "username": str(person.get("username") or ""),
                     "site_code": site_code,
                     "operator_approved_by": approved_by,
@@ -381,19 +419,9 @@ def push_local_bundle(
                         consent_status="consented",
                     )
                 )
-                result_payload = _plain(result)
-                if not bool(result_payload.get("saved")):
-                    raise RuntimeError(
-                        f"Tailwag rejected {modality} enrollment: "
-                        f"{result_payload.get('reason') or 'unknown reason'}"
-                    )
-                returned_person_id = str(
-                    result_payload.get("person_id") or ""
-                ).strip()
-                if returned_person_id != person_id:
-                    raise RuntimeError(
-                        f"Tailwag returned enrollment for {returned_person_id or 'no person'}."
-                    )
+                result_payload = _validated_enrollment_payload(
+                    result, modality=modality, person_id=person_id
+                )
                 verified = update_upload_state(
                     verified,
                     modality,

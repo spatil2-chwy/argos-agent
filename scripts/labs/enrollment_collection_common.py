@@ -223,6 +223,11 @@ def create_identity_memory_client_for_profile(
         raise ValueError(
             "resources.identity_memory must select a manifest resource with memory.identity."
         )
+    if not resource.has_capability("memory.biometrics"):
+        raise ValueError(
+            "resources.identity_memory must select a manifest resource with "
+            "memory.biometrics."
+        )
     provider = manifest.provider_by_id(resource.provider)
     if provider is None:
         raise ValueError(

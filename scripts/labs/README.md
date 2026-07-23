@@ -85,6 +85,13 @@ poetry run python -m scripts.labs.biometric_enrollment_lab push
 poetry run python -m scripts.labs.biometric_enrollment_lab cleanup
 ```
 
+Use the complete operator procedure in
+[`docs/biometric_enrollment_lab.md`](../../docs/biometric_enrollment_lab.md).
+
+The operator does not need a Tailwag Person ID. Capture requires the employee
+email prefix through `--username jdoe`; push resolves exactly one directory
+record for that prefix and verifies the captured official name.
+
 The capture command uses the configured camera and interaction-display transports
 for phase prompts, countdowns, and recording. It makes no Tailwag/identity-memory
 calls and sends no captured media or embeddings to Tailwag or AWS. At least five
@@ -95,14 +102,16 @@ under `data_collection/.biometric_enrollment_bundles/`. Rejected sample
 artifacts are discarded. Camera/display provider transports may still use their
 configured local or network endpoints.
 
-`push` shows a local person list, resolves the selected person to a canonical,
-active Tailwag identity, checks whether active face and voice references already
-exist, and sends one aggregate vector only for each missing modality. Before any
+`push` shows a local person list and resolves the stored email prefix to exactly
+one verified employee-directory identity. If a Person already exists, it must be
+active. Push checks whether active face and voice references already exist and
+sends one aggregate vector only for each missing modality. Before any
 embedding is sent, the operator must confirm that the subject consented and type
 the verified canonical name; that action is recorded and the enrollment is sent
 as `consented`. Existing references are left unchanged. Push requires the
-selected profile's `resources.identity_memory` route, network connectivity,
-and `TAILWAG_API_BEARER_TOKEN`; `--provider-transport fake` is a capture/display
+selected profile's `resources.identity_memory` route to expose both
+`memory.identity` and `memory.biometrics`, plus network connectivity and
+`TAILWAG_API_BEARER_TOKEN`; `--provider-transport fake` is a capture/display
 setting and is not a push dry-run. Deploy the matching Tailwag face-existence
 endpoint before using push; an unavailable or malformed existence response fails
 closed without search or enrollment.
@@ -117,9 +126,10 @@ or skipped. Confirmation deletes the complete local bundle with no retained
 local receipt. Push does not delete local data. Bundles contain unencrypted raw
 biometrics, so host access and retention are operator responsibilities.
 Interrupted/incomplete or corrupt bundles are intentionally not deleted by this
-command; `list` flags invalid paths for administrator review and exact-path
-removal. The legacy name-only capture remains accepted; `--commit` reports
-guidance to use `push`.
+command. `list` shows valid incomplete bundles as `capture=collecting` and flags
+invalid paths for administrator review and approved exact-path removal.
+Capture requires the employee email prefix through `--username`; `--commit`
+reports guidance to use `push`.
 
 ## Structured perception labs + eval
 

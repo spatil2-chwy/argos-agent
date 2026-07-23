@@ -121,11 +121,6 @@ def test_voice_capture_displays_prompt_as_message_and_recording_as_subtitle(
     assert all(lab.VOICE_PROMPT_GUIDANCE not in text for text, _ in display.subtitles)
 
 
-def test_slug_person_id_prefers_username_then_email_then_name() -> None:
-    assert lab._slug_person_id("Jane Doe", {"username": "jdoe"}) == "person_jdoe"
-    assert lab._slug_person_id("Jane Doe", {"employee_email": "jane@example.com"}) == "person_jane"
-    assert lab._slug_person_id("Jane A. Doe", {}) == "person_jane_a_doe"
-
 def test_consistency_rejects_pairwise_different_identities() -> None:
     with pytest.raises(RuntimeError, match="minimum pairwise similarity"):
         lab._embedding_consistency_summary(
@@ -157,7 +152,6 @@ def test_identity_resolution_requires_verified_canonical_profile() -> None:
         person_name="Jane Doe",
         username="",
         person_id="",
-        allow_unresolved=False,
     )
     with pytest.raises(RuntimeError, match="verified canonical profile"):
         lab._identity_from_args(
@@ -193,6 +187,21 @@ def test_capture_rejects_too_few_samples_and_removed_commit(monkeypatch, capsys)
     with pytest.raises(SystemExit):
         lab.main()
     assert "--commit was removed" in capsys.readouterr().err
+
+
+def test_capture_requires_employee_email_prefix(monkeypatch, capsys) -> None:
+    import sys
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["biometric_enrollment_lab", "capture", "Jane Doe"],
+    )
+
+    with pytest.raises(SystemExit):
+        lab.main()
+
+    assert "--username is required for capture" in capsys.readouterr().err
 
 
 def test_capture_main_is_fully_local(monkeypatch, tmp_path) -> None:
@@ -262,6 +271,8 @@ def test_capture_main_is_fully_local(monkeypatch, tmp_path) -> None:
             "biometric_enrollment_lab",
             "capture",
             "Jane Doe",
+            "--username",
+            "jdoe",
             "--output-root",
             str(tmp_path),
             "--no-display",

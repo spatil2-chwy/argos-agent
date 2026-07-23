@@ -122,6 +122,7 @@ def _install_push_fakes(monkeypatch, fake):
             "person_id": "person_jdoe",
             "display_name": "Jane Doe",
             "official_name": "Jane Doe",
+            "employee_email": "jdoe@example.com",
             "username": "jdoe",
             "site_code": site_code,
         },
@@ -163,6 +164,7 @@ def test_push_uploads_only_missing_modality_after_typed_approval(monkeypatch, tm
     assert enrollment["person_id"] == "person_jdoe"
     assert enrollment["consent_status"] == "consented"
     assert enrollment["metadata"]["bundle_id"] == bundle.bundle_id
+    assert enrollment["metadata"]["employee_email"] == "jdoe@example.com"
     assert "sample_count" not in enrollment["metadata"]
     assert fake.closed is True
 
@@ -386,6 +388,26 @@ def test_verified_directory_person_can_be_first_enrollment(tmp_path):
             "strongly matches person_other",
         ),
         (
+            {
+                "recognized": False,
+                "reason": "below_threshold",
+                "threshold": float("nan"),
+                "candidates": [{"person_id": "person_other", "score": 0.95}],
+            },
+            "conflict search was malformed",
+        ),
+        (
+            {
+                "recognized": True,
+                "reason": "matched",
+                "threshold": 0.6,
+                "candidates": [
+                    {"person_id": "person_other", "score": float("inf")}
+                ],
+            },
+            "conflict candidate was malformed",
+        ),
+        (
             {"recognized": False, "reason": "no_match", "candidates": []},
             "conflict search was malformed",
         ),
@@ -429,6 +451,50 @@ def test_push_rejects_mismatched_enrollment_person(monkeypatch, tmp_path):
     answers = iter(["1", "Jane Doe"])
 
     with pytest.raises(RuntimeError, match="person_other"):
+        commands.push_local_bundle(
+            _args(tmp_path), input_fn=lambda _prompt: next(answers)
+        )
+
+    loaded = load_bundle(bundle.path, output_root=tmp_path)
+    assert loaded.modality_states["face"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "saved": "false",
+            "status": "saved",
+            "reason": "saved",
+            "person_id": "person_jdoe",
+            "reference_id": "face-ref",
+        },
+        {
+            "saved": True,
+            "status": "saved",
+            "reason": "saved",
+            "person_id": "person_jdoe",
+            "reference_id": "",
+        },
+        {
+            "saved": True,
+            "status": "rejected",
+            "reason": "write_failed",
+            "person_id": "person_jdoe",
+            "reference_id": "face-ref",
+        },
+    ],
+)
+def test_push_does_not_journal_malformed_enrollment_success(
+    monkeypatch, tmp_path, payload
+):
+    bundle = _ready_bundle(tmp_path)
+    fake = FakeIdentityMemory(face_exists=False, voice_exists=True)
+    _install_push_fakes(monkeypatch, fake)
+    fake.enroll_face_reference = lambda **kwargs: payload
+    answers = iter(["1", "Jane Doe"])
+
+    with pytest.raises(RuntimeError):
         commands.push_local_bundle(
             _args(tmp_path), input_fn=lambda _prompt: next(answers)
         )
