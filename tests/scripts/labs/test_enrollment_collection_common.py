@@ -69,6 +69,7 @@ def _identity_memory_profile(
 ):
     return SimpleNamespace(
         manifest=manifest,
+        robot=SimpleNamespace(id="lab-robot", display_name="Lab Robot"),
         resources=SimpleNamespace(identity_memory=resource_id),
         identity_memory=SimpleNamespace(
             enabled=True,
@@ -129,6 +130,8 @@ def test_create_identity_memory_client_for_profile_uses_manifest_resource(monkey
     assert client.retention_class == "priority"
     assert client.extract_live_turn_memory is True
     assert getattr(client, "_resource_id") == "memory"
+    assert getattr(client, "_robot_id") == "lab-robot"
+    assert getattr(client, "_robot_display_name") == "Lab Robot"
     assert calls == [
         {
             "transport": "http",

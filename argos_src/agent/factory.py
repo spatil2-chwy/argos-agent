@@ -340,6 +340,8 @@ def create_agent(
             identity_memory_client = TailwagHttpIdentityMemoryClient(
                 provider_client=memory_provider_client,
                 resource_id=memory_resource_id,
+                robot_id=scenario_profile.robot.id,
+                robot_display_name=scenario_profile.robot.display_name,
                 site_code=scenario_profile.identity_memory.site_code,
                 place_room_id=scenario_profile.identity_memory.place_room_id,
                 retention_class=scenario_profile.identity_memory.retention_class,
